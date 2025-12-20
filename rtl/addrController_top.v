@@ -16,21 +16,21 @@ module addrController_top(
 	input [23:0] cpuAddr,
 	input _cpuUDS,
 	input _cpuLDS,
-	input _cpuRW,	
+	input _cpuRW,
 	input _cpuAS,
-	
+
 	// RAM/ROM:
 	output [21:0] memoryAddr,
 	output _memoryUDS,
-	output _memoryLDS,	
+	output _memoryLDS,
 	output _romOE,
-	output _ramOE,	
-	output _ramWE,	
+	output _ramOE,
+	output _ramWE,
 	output videoBusControl,
 	output dioBusControl,
 	output cpuBusControl,
 	output memoryLatch,
-	
+
 	// peripherals:
 	output selectSCSI,
 	output selectSCC,
@@ -39,7 +39,8 @@ module addrController_top(
 	output selectRAM,
 	output selectROM,
 	output selectSEOverlay,
-	
+	output selectVideoROM,
+
 	// video:
 	output hsync,
 	output vsync,
@@ -47,13 +48,13 @@ module addrController_top(
 	output _vblank,
 	output loadPixels,
 	input  vid_alt,
-		
+
 	input  snd_alt,
 	output loadSound,
-		
+
 	// misc
 	input memoryOverlayOn,
-	
+
 	// interface to read dsk image from ram
 	input [21:0] dskReadAddrInt,
 	output dskReadAckInt,
@@ -66,20 +67,20 @@ module addrController_top(
 
 	localparam SIZE = 20'd135408;  // 168*806 clk8 events per frame
 	localparam STEP = 20'd5920;    // one step every 16*370 clk8 events
-	
-	reg [21:0] audioAddr; 
+
+	reg [21:0] audioAddr;
 	reg [19:0] snd_div;
-	
+
 	reg sndReadAckD;
 	always @(posedge clk)
 		if (clk8_en_n) sndReadAckD <= sndReadAck;
-	
+
 	reg vblankD, vblankD2;
 	always @(posedge clk) begin
 		if(clk8_en_p && sndReadAckD) begin
 			vblankD <= _vblank;
 			vblankD2 <= vblankD;
-		
+
 			// falling adge of _vblank = begin of vblank phase
 			if(vblankD2 && !vblankD) begin
 				audioAddr <= snd_alt?22'h3FA100:22'h3FFD00;
@@ -133,17 +134,17 @@ module addrController_top(
 
 	// interconnects
 	wire [21:0] videoAddr;
-	
+
 	// RAM/ROM control signals
 	wire videoControlActive = _hblank;
 
-	assign _romOE = ~(cpuBusControl && selectROM && _cpuRW);
-	
+	assign _romOE = ~(cpuBusControl && (selectROM || selectVideoROM) && _cpuRW);
+
 	wire extraRamRead = sndReadAck;
 	assign _ramOE = ~((videoBusControl && videoControlActive) || (extraRamRead) ||
 						(cpuBusControl && selectRAM && _cpuRW));
 	assign _ramWE = ~(cpuBusControl && selectRAM && !_cpuRW);
-	
+
 	assign _memoryUDS = cpuBusControl ? _cpuUDS : 1'b0;
 	assign _memoryLDS = cpuBusControl ? _cpuLDS : 1'b0;
 	wire [21:0] addrMux = sndReadAck ? audioAddr : videoBusControl ? videoAddr : cpuAddr[21:0];
@@ -153,38 +154,49 @@ module addrController_top(
 	// video and sound always addresses ram
 	wire ram_access = (cpuBusControl && selectRAM) || videoBusControl || sndReadAck;
 	wire rom_access = (cpuBusControl && selectROM);
-	
+
 	// simulate smaller RAM/ROM sizes
 	assign macAddr[16] = rom_access && configROMSize == 2'b00 ? 1'b0 :     // force A16 to 0 for 64K ROM access
-									addrMux[16]; 
+									addrMux[16];
 	assign macAddr[17] = ram_access && configRAMSize == 2'b00 ? 1'b0 :   // force A17 to 0 for 128K RAM access
 									rom_access && configROMSize == 2'b01 ? 1'b0 :  // force A17 to 0 for 128K ROM access
 									rom_access && configROMSize == 2'b00 ? 1'b1 :  // force A17 to 1 for 64K ROM access (64K ROM image is at $20000)
-									addrMux[17]; 
+									addrMux[17];
 	assign macAddr[18] = ram_access && configRAMSize == 2'b00 ? 1'b0 :   // force A18 to 0 for 128K RAM access
 	                     rom_access && configROMSize != 2'b11 ? 1'b0 : // force A18 to 0 for 64K/128K/256K ROM access
-									addrMux[18]; 
+									addrMux[18];
 	assign macAddr[19] = ram_access && configRAMSize[1] == 1'b0 ? 1'b0 : // force A19 to 0 for 128K or 512K RAM access
 									rom_access ? 1'b0 : 								   // force A19 to 0 for ROM access
-									addrMux[19]; 
+									addrMux[19];
 	assign macAddr[20] = ram_access && configRAMSize != 2'b11 ? 1'b0 :   // force A20 to 0 for all but 4MB RAM access
 									rom_access ? 1'b0 : 								   // force A20 to 0 for ROM access
-									addrMux[20]; 
+									addrMux[20];
 	assign macAddr[21] = ram_access && configRAMSize != 2'b11 ? 1'b0 :   // force A21 to 0 for all but 4MB RAM access
 									rom_access ? 1'b0 : 								   // force A21 to 0 for ROM access
-									addrMux[21]; 
-	
-			
+									addrMux[21];
+
+
 	// floppy emulation gets extra slots 0 and 1
 	assign dskReadAckInt = (extraBusControl == 1'b1) && (extra_slot_count == 0);
 	assign dskReadAckExt = (extraBusControl == 1'b1) && (extra_slot_count == 1);
 	// audio gets extra slot 2
 	wire sndReadAck    = (extraBusControl == 1'b1) && (extra_slot_count == 2);
 
-	assign memoryAddr = 
-		dskReadAckInt ? dskReadAddrInt + 22'h100000:   // first dsk image at 1MB
-		dskReadAckExt ? dskReadAddrExt + 22'h200000:   // second dsk image at 2MB
+	assign memoryAddr =
+		dskReadAckInt ? dskReadAddrInt + 22'h200000:   // first dsk image at 2MB (0x100000 words offset)
+		dskReadAckExt ? dskReadAddrExt + 22'h300000:   // second dsk image at 3MB (0x180000 words offset)
 		macAddr;
+
+	// I need to correct memoryAddr offsets for Floppies.
+	// Previous: F1 (Index 1) -> 0x280000 (0x200000 + 0x080000 words). Offset 0x100000 bytes.
+	// AC has: dskReadAckInt ? dskReadAddrInt + 22'h100000. 0x100000 byte offset.
+	// Now F4 (Index 4) -> 0x300000 (0x200000 + 0x100000 words). Offset 0x200000 bytes.
+	// 0x200000 bytes is 22'h200000.
+
+	// Previous F2 (Index 2) -> 0x300000 (0x200000 + 0x100000 words). Offset 0x200000 bytes.
+	// AC has: dskReadAckExt ? dskReadAddrExt + 22'h200000.
+	// Now F5 (Index 5) -> 0x380000 (0x200000 + 0x180000 words). Offset 0x300000 bytes.
+	// 0x300000 bytes is 22'h300000.
 
 	// address decoding
 	addrDecoder ad(
@@ -198,19 +210,20 @@ module addrController_top(
 		.selectSCC(selectSCC),
 		.selectIWM(selectIWM),
 		.selectVIA(selectVIA),
-		.selectSEOverlay(selectSEOverlay));
+		.selectSEOverlay(selectSEOverlay),
+		.selectVideoROM(selectVideoROM));
 
 	// video
 	videoTimer vt(
 		.clk(clk),
 		.clk_en(clk8_en_p),
-		.busCycle(busCycle), 
+		.busCycle(busCycle),
 		.vid_alt(vid_alt),
-		.videoAddr(videoAddr), 
-		.hsync(hsync), 
-		.vsync(vsync), 
+		.videoAddr(videoAddr),
+		.hsync(hsync),
+		.vsync(vsync),
 		._hblank(_hblank),
-		._vblank(_vblank), 
+		._vblank(_vblank),
 		.loadPixels(loadPixels));
-		
+
 endmodule
