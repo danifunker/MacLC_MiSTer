@@ -16,6 +16,9 @@ set_global_assignment -name VHDL_FILE rtl/via6522.vhd
 set_global_assignment -name VERILOG_FILE rtl/addrDecoder.v
 set_global_assignment -name VERILOG_FILE rtl/addrController_top.v
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/dataController_top.sv
+set_global_assignment -name VERILOG_FILE rtl/rtc.v 
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/ariel_ramdac.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/maclc_v8_video.sv
 set_global_assignment -name VERILOG_FILE rtl/videoTimer.v
 set_global_assignment -name VERILOG_FILE rtl/videoShifter.v
 set_global_assignment -name VERILOG_FILE rtl/rtc.v 
