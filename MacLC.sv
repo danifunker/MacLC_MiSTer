@@ -787,8 +787,8 @@ always @(posedge clk_sys) begin
 	if(ioctl_write) begin
 		dio_data <= {ioctl_data[7:0], ioctl_data[15:8]};
 		case(dio_index)
-			2: dio_a <= {3'b001, dio_addr[17:0]};
-			3: dio_a <= {3'b010, dio_addr[17:0]};
+			2: dio_a <= {3'b010, dio_addr[17:0]};
+			3: dio_a <= {3'b011, dio_addr[17:0]};
 			4: dio_a <= {3'b100, dio_addr[17:0]};
 			5: dio_a <= {3'b110, dio_addr[17:0]};
 			default: dio_a <= {3'b000, dio_addr[17:0]};
@@ -808,7 +808,7 @@ wire download_cycle = dio_download && dioBusControl;
 ////////////////////////// SDRAM /////////////////////////////////
 
 wire [24:0] sdram_addr = download_cycle ? {4'b0001, dio_a[20:0] } : 
-                         ~_romOE        ? (selectVideoROM ? {4'b0001, 1'b0, 1'b1, 5'b00000, 1'b1, memoryAddr[13:1]} : {4'b0001, 2'b00, status_mod, memoryAddr[18:1]}) :
+                         ~_romOE        ? (selectVideoROM ? {4'b0001, 1'b0, 1'b1, 1'b1, 4'b0000, 1'b1, memoryAddr[13:1]} : {4'b0001, 1'b0, status_mod, 1'b0, memoryAddr[18:1]}) :
                                           {3'b000, (dskReadAckInt || dskReadAckExt), memoryAddr[21:1]};
 
 wire [15:0] sdram_din  = download_cycle ? dio_data              : memoryDataOut;
