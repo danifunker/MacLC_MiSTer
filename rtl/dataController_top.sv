@@ -7,7 +7,9 @@ module dataController_top(
 	input E_falling,
 	
 	// system control:
-	input machineType, // 0 - Mac Plus, 1 - Mac SE
+	input machineType, // 0 - Mac Plus, 1 - Mac LC
+	input maclc_mode,  // 0 = Mac Plus mode, 1 = Mac LC mode
+
 	input _systemReset,
 
 	// 68000 CPU control:
@@ -32,6 +34,14 @@ module dataController_top(
 	input selectSEOverlay,
 	input _cpuVMA,
 	
+	// V8 Video peripheral selects
+	input selectAriel,
+	input selectVRAM,
+
+	// V8 Video data buses
+	input [15:0] ariel_data_in,
+	input [31:0] vram_data_in,
+
 	// RAM/ROM:
 	input videoBusControl,	
 	input cpuBusControl,	
@@ -114,7 +124,8 @@ module dataController_top(
 	reg [7:0] audio_latch;
 	always @(posedge clk32) begin
 		if(clk8_en_p && loadSoundD) begin
-			if(snd_ena) audio_latch <= 8'h7f; // when disabled, drive output high
+			if(snd_ena) audio_latch <= 8'h7f;
+ // when disabled, drive output high
 			else  	 	audio_latch <= memoryDataIn[15:8] - 8'd128;
 		end
 	end
@@ -159,11 +170,14 @@ module dataController_top(
 	always @(posedge clk32) if (cpuBusControl && memoryLatch) cpu_data <= memoryDataIn;
 
 	// CPU-side data output mux
-	assign cpuDataOut = selectIWM ? iwmDataOut :
-							  selectVIA ? viaDataOut :
-							  selectSCC ? { sccDataOut, 8'hEF } :
-							  selectSCSI ? { scsiDataOut, 8'hEF } :
-							  (cpuBusControl && memoryLatch) ? memoryDataIn : cpu_data;
+assign cpuDataOut = selectIWM ? iwmDataOut :
+                    selectVIA ? viaDataOut :
+                    selectSCC ? { sccDataOut, 8'hEF } :
+                    selectSCSI ? { scsiDataOut, 8'hEF } :
+                    // V8 video peripherals
+                    selectAriel ? ariel_data_in :
+                    selectVRAM ? vram_data_in[15:0] :
+                    (cpuBusControl && memoryLatch) ? memoryDataIn : cpu_data;
 	
 	// Memory-side
 	assign memoryDataOut = cpuDataIn;
