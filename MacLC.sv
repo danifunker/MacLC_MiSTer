@@ -219,7 +219,7 @@ localparam CONF_STR = {
 	"O78,Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	"OBC,Scale,Normal,V-Integer,Narrower HV-Integer,Wider HV-Integer;",
 	"-;",
-	"O9,Model,LC;",
+	"O9,Model,Plus,LC;",
 	"O5,Speed,16MHz;",
 	"ODE,CPU,68020;",
 	"O4,Memory,4MB;",
