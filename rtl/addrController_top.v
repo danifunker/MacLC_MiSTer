@@ -1,16 +1,17 @@
 module addrController_top(
 	// clocks:
 	input clk,
-	output clk8,						// 8.125 MHz CPU clock
+	output clk8,
 	output clk8_en_p,
 	output clk8_en_n,
 	output clk16_en_p,
 	output clk16_en_n,
 
 	// system config:
-	input turbo,               // 0 = normal, 1 = faster
-	input [1:0] configROMSize,  // 0 = 64K ROM, 1 = 128K ROM, 2 = 256K ROM
-	input [1:0] configRAMSize,	// 0 = 128K, 1 = 512K, 2 = 1MB, 3 = 4MB RAM
+	input turbo,
+	input [1:0] configROMSize,
+	input [1:0] configRAMSize,
+	input machineType,
 
 	// 68000 CPU memory interface:
 	input [23:0] cpuAddr,
@@ -47,6 +48,7 @@ module addrController_top(
 	output _vblank,
 	output loadPixels,
 	input  vid_alt,
+	input  [21:0] v8_video_addr,
 		
 	input  snd_alt,
 	output loadSound,
@@ -61,11 +63,10 @@ module addrController_top(
 	output dskReadAckExt
 );
 
-	// -------------- audio engine (may be moved into seperate module) ---------------
 	assign loadSound = sndReadAck;
 
-	localparam SIZE = 20'd135408;  // 168*806 clk8 events per frame
-	localparam STEP = 20'd5920;    // one step every 16*370 clk8 events
+	localparam SIZE = 20'd135408;
+	localparam STEP = 20'd5920;
 	
 	reg [21:0] audioAddr; 
 	reg [19:0] snd_div;
@@ -80,7 +81,6 @@ module addrController_top(
 			vblankD <= _vblank;
 			vblankD2 <= vblankD;
 		
-			// falling adge of _vblank = begin of vblank phase
 			if(vblankD2 && !vblankD) begin
 				audioAddr <= snd_alt?22'h3FA100:22'h3FFD00;
 				snd_div <= 20'd0;
@@ -96,7 +96,6 @@ module addrController_top(
 
 	assign dioBusControl = extraBusControl;
 
-	// interleaved RAM access for CPU and video
 	reg [1:0] busCycle;
 	reg [1:0] busPhase;
 	reg [1:0] extra_slot_count;
@@ -117,24 +116,17 @@ module addrController_top(
 	always @(posedge clk)
 		if (clk8_en_n) extra_slot_advance <= (busCycle == 2'b11);
 
-	// allocate memory slots in the extra cycle
 	always @(posedge clk) begin
 		if(clk8_en_p && extra_slot_advance) begin
 			extra_slot_count <= extra_slot_count + 2'd1;
 		end
 	end
 
-	// video controls memory bus during the first clock of the four-clock cycle
 	assign videoBusControl = (busCycle == 2'b00);
-	// cpu controls memory bus during the second and fourth clock of the four-clock cycle
 	assign cpuBusControl = (busCycle == 2'b01) || (busCycle == 2'b11);
-	// IWM/audio gets 3rd cycle
 	wire extraBusControl = (busCycle == 2'b10);
 
-	// interconnects
 	wire [21:0] videoAddr;
-	
-	// RAM/ROM control signals
 	wire videoControlActive = _hblank;
 
 	assign _romOE = ~(cpuBusControl && selectROM && _cpuRW);
@@ -150,43 +142,31 @@ module addrController_top(
 	wire [21:0] macAddr;
 	assign macAddr[15:0] = addrMux[15:0];
 
-	// video and sound always addresses ram
 	wire ram_access = (cpuBusControl && selectRAM) || videoBusControl || sndReadAck;
 	wire rom_access = (cpuBusControl && selectROM);
 	
-	// simulate smaller RAM/ROM sizes
-	assign macAddr[16] = rom_access && configROMSize == 2'b00 ? 1'b0 :     // force A16 to 0 for 64K ROM access
-									addrMux[16]; 
-	assign macAddr[17] = ram_access && configRAMSize == 2'b00 ? 1'b0 :   // force A17 to 0 for 128K RAM access
-									rom_access && configROMSize == 2'b01 ? 1'b0 :  // force A17 to 0 for 128K ROM access
-									rom_access && configROMSize == 2'b00 ? 1'b1 :  // force A17 to 1 for 64K ROM access (64K ROM image is at $20000)
-									addrMux[17]; 
-	assign macAddr[18] = ram_access && configRAMSize == 2'b00 ? 1'b0 :   // force A18 to 0 for 128K RAM access
-	                     rom_access && configROMSize != 2'b11 ? 1'b0 : // force A18 to 0 for 64K/128K/256K ROM access
-									addrMux[18]; 
-	assign macAddr[19] = ram_access && configRAMSize[1] == 1'b0 ? 1'b0 : // force A19 to 0 for 128K or 512K RAM access
-									rom_access ? 1'b0 : 								   // force A19 to 0 for ROM access
-									addrMux[19]; 
-	assign macAddr[20] = ram_access && configRAMSize != 2'b11 ? 1'b0 :   // force A20 to 0 for all but 4MB RAM access
-									rom_access ? 1'b0 : 								   // force A20 to 0 for ROM access
-									addrMux[20]; 
-	assign macAddr[21] = ram_access && configRAMSize != 2'b11 ? 1'b0 :   // force A21 to 0 for all but 4MB RAM access
-									rom_access ? 1'b0 : 								   // force A21 to 0 for ROM access
-									addrMux[21]; 
+	assign macAddr[16] = rom_access && configROMSize == 2'b00 ? 1'b0 : addrMux[16]; 
+	assign macAddr[17] = ram_access && configRAMSize == 2'b00 ? 1'b0 :
+	                     rom_access && configROMSize == 2'b01 ? 1'b0 :
+	                     rom_access && configROMSize == 2'b00 ? 1'b1 : addrMux[17]; 
+	assign macAddr[18] = ram_access && configRAMSize == 2'b00 ? 1'b0 :
+	                     rom_access && configROMSize != 2'b11 ? 1'b0 : addrMux[18]; 
+	assign macAddr[19] = ram_access && configRAMSize[1] == 1'b0 ? 1'b0 :
+	                     rom_access ? 1'b0 : addrMux[19]; 
+	assign macAddr[20] = ram_access && configRAMSize != 2'b11 ? 1'b0 :
+	                     rom_access ? 1'b0 : addrMux[20]; 
+	assign macAddr[21] = ram_access && configRAMSize != 2'b11 ? 1'b0 :
+	                     rom_access ? 1'b0 : addrMux[21]; 
 	
-			
-	// floppy emulation gets extra slots 0 and 1
 	assign dskReadAckInt = (extraBusControl == 1'b1) && (extra_slot_count == 0);
 	assign dskReadAckExt = (extraBusControl == 1'b1) && (extra_slot_count == 1);
-	// audio gets extra slot 2
 	wire sndReadAck    = (extraBusControl == 1'b1) && (extra_slot_count == 2);
 
 	assign memoryAddr = 
-		dskReadAckInt ? dskReadAddrInt + 22'h100000:   // first dsk image at 1MB
-		dskReadAckExt ? dskReadAddrExt + 22'h200000:   // second dsk image at 2MB
+		dskReadAckInt ? dskReadAddrInt + 22'h100000:
+		dskReadAckExt ? dskReadAddrExt + 22'h200000:
 		macAddr;
 
-	// address decoding
 	addrDecoder ad(
 		.configROMSize(configROMSize),
 		.address(cpuAddr),
@@ -200,17 +180,20 @@ module addrController_top(
 		.selectVIA(selectVIA),
 		.selectSEOverlay(selectSEOverlay));
 
-	// video
+	wire [21:0] plus_video_addr;
+
 	videoTimer vt(
 		.clk(clk),
 		.clk_en(clk8_en_p),
 		.busCycle(busCycle), 
 		.vid_alt(vid_alt),
-		.videoAddr(videoAddr), 
+		.videoAddr(plus_video_addr), 
 		.hsync(hsync), 
 		.vsync(vsync), 
 		._hblank(_hblank),
 		._vblank(_vblank), 
 		.loadPixels(loadPixels));
+
+	assign videoAddr = machineType ? v8_video_addr : plus_video_addr;
 		
 endmodule
