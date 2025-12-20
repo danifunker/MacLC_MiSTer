@@ -220,16 +220,16 @@ localparam CONF_STR = {
 	"OBC,Scale,Normal,V-Integer,Narrower HV-Integer,Wider HV-Integer;",
 	"-;",
 	"O9,Model,Plus,LC;",
-	"O5,Speed,16MHz;",
-	"ODE,CPU,68020;",
+	"OF,VRAM Size,256KB,512KB;",
+	"OGH,Video Mode,1bpp,2bpp,4bpp,8bpp,16bpp;",
+	"O1011,Monitor,13\" RGB,12\" RGB,15\" Portrait;",
+	"-;",
+	"O5,Speed,Normal,16MHz;",
+	"ODE,CPU,68000,68020;",
 	"O4,Memory,4MB;",
 	"-;",
-	//"OA,Serial,Off,On;",
-	//"-;",
 	"R0,Reset & Apply CPU+Memory;",
-	"v,0;", // [optional] config version 0-99. 
-	        // If CONF_STR options are changed in incompatible way, then change version number too,
-			// so all options will get default values on first start.
+	"v,0;",
 	"V,v",`BUILD_DATE
 };
 
@@ -342,14 +342,21 @@ hps_io #(.CONF_STR(CONF_STR), .VDNUM(SCSI_DEVS), .WIDE(1)) hps_io
 assign CLK_VIDEO = clk_sys;
 assign CE_PIXEL  = 1;
 
-assign VGA_R  = {8{pixelOut}};
-assign VGA_G  = {8{pixelOut}};
-assign VGA_B  = {8{pixelOut}};
-assign VGA_DE = _vblank & _hblank;
-assign VGA_VS = vsync;
-assign VGA_HS = hsync;
-assign VGA_F1 = 0;
-assign VGA_SL = 0;
+// assign VGA_R  = {8{pixelOut}};
+// assign VGA_G  = {8{pixelOut}};
+// assign VGA_B  = {8{pixelOut}};
+// assign VGA_DE = _vblank & _hblank;
+// assign VGA_VS = vsync;
+// assign VGA_HS = hsync;
+// assign VGA_F1 = 0;
+// assign VGA_SL = 0;
+
+assign VGA_R  = maclc_mode ? v8_vga_r : {8{pixelOut}};
+assign VGA_G  = maclc_mode ? v8_vga_g : {8{pixelOut}};
+assign VGA_B  = maclc_mode ? v8_vga_b : {8{pixelOut}};
+assign VGA_DE = maclc_mode ? v8_de : (_vblank & _hblank);
+assign VGA_VS = maclc_mode ? v8_vsync : vsync;
+assign VGA_HS = maclc_mode ? v8_hsync : hsync;
 
 wire [10:0] audio;
 assign AUDIO_L = {audio[10:0], 5'b00000};
@@ -382,6 +389,21 @@ wire serialOut;
 wire serialIn;
 wire serialCTS;
 wire serialRTS;
+
+// V8 Video system wires
+wire [17:0] v8_vram_addr;
+wire [31:0] v8_vram_din, v8_vram_dout;
+wire [3:0] v8_vram_be;
+wire v8_vram_we, v8_vram_req;
+wire v8_hsync, v8_vsync, v8_hblank, v8_vblank, v8_de;
+wire [7:0] v8_vga_r, v8_vga_g, v8_vga_b;
+wire [7:0] ariel_pixel_addr;
+wire [23:0] ariel_palette_data;
+wire [7:0] ariel_reg_dout;
+wire ariel_req, ariel_we;
+wire selectAriel, selectVRAM;
+
+wire maclc_mode = status_mod; // 0=Plus mode, 1=LC mode
 
 /*
 assign serialIn = ~status[10] ? 0 : UART_RXD;
@@ -629,8 +651,66 @@ addrController_top ac0
 	.dskReadAckExt(dskReadAckExt)
 );
 
+assign selectAriel = maclc_mode && (cpuAddr[23:13] == 11'h292); // 0x524xxx
+assign selectVRAM  = maclc_mode && (cpuAddr[23:18] == 6'b010101); // 0x54xxxx-0x57xxxx
+
 wire [1:0] diskEject;
 wire [1:0] diskMotor, diskAct;
+
+wire v8_vram_512kb = status[15];       // VRAM size: 0=256KB, 1=512KB
+wire [2:0] v8_video_mode = status[17:16] == 2'b00 ? 3'd0 :  // 1bpp
+                           status[17:16] == 2'b01 ? 3'd1 :  // 2bpp  
+                           status[17:16] == 2'b10 ? 3'd2 :  // 4bpp
+                           status[17:16] == 2'b11 ? 3'd3 :  // 8bpp
+                           status[18] ? 3'd4 : 3'd0;         // 16bpp
+
+wire [3:0] v8_monitor_id = status[11:10] == 2'b00 ? 4'h6 :  // 13" RGB (640x480, default)
+                           status[11:10] == 2'b01 ? 4'h2 :  // 12" RGB (512x384)
+                                                     4'h1;   // 15" Portrait (640x870)
+ariel_ramdac ariel(
+	.clk_sys(clk_sys),
+	.reset(~n_reset),
+	.reg_addr(cpuAddr[10:0]),
+	.data_in(cpuDataOut[7:0]),
+	.data_out(ariel_reg_dout),
+	.we(selectAriel && !_cpuRW && cpuBusControl),
+	.req(selectAriel && cpuBusControl),
+	.pixel_index(ariel_pixel_addr),
+	.rgb_out(ariel_palette_data)
+);
+
+maclc_v8_video v8_video(
+	.clk_sys(clk_sys),
+	.clk8_en_p(clk8_en_p),
+	.reset(~n_reset),
+	
+	// CPU VRAM access (word-aligned)
+	.vram_addr(cpuAddr[18:1]),  // Word address
+	.vram_din(cpuDataOut),
+	.vram_dout(v8_vram_dout),
+	.vram_be({!_cpuUDS, !_cpuUDS, !_cpuLDS, !_cpuLDS}),
+	.vram_we(selectVRAM && !_cpuRW && cpuBusControl),
+	.vram_req(selectVRAM && cpuBusControl),
+	
+	// Configuration
+	.vram_512kb(v8_vram_512kb),
+	.video_mode(v8_video_mode),
+	.monitor_id(v8_monitor_id),
+	
+	// Video output
+	.hsync(v8_hsync),
+	.vsync(v8_vsync),
+	.hblank(v8_hblank),
+	.vblank(v8_vblank),
+	.vga_r(v8_vga_r),
+	.vga_g(v8_vga_g),
+	.vga_b(v8_vga_b),
+	.de(v8_de),
+	
+	// Palette interface
+	.palette_addr(ariel_pixel_addr),
+	.palette_data(ariel_palette_data)
+);
 
 dataController_top #(SCSI_DEVS) dc0
 (
@@ -662,7 +742,12 @@ dataController_top #(SCSI_DEVS) dc0
 	.memoryDataOut(memoryDataOut),
 	.memoryDataIn(sdram_do),
 	.memoryLatch(memoryLatch),
-
+	.maclc_mode(maclc_mode),
+	.selectAriel(selectAriel),
+	.selectVRAM(selectVRAM),
+	.ariel_data_in({ariel_reg_dout, ariel_reg_dout}),
+	.vram_data_in(v8_vram_dout),
+	
 	// peripherals
 	.ps2_key(ps2_key), 
 	.capslock(capslock),
@@ -785,7 +870,9 @@ always @(posedge clk_sys) begin
 	
 	if(ioctl_write) begin
 		dio_data <= {ioctl_data[7:0], ioctl_data[15:8]};
-		dio_a <= dio_index[1:0] ? {dio_index[1:0], dio_addr[18:0]} : {dio_index[6], dio_addr[17:0]};
+		dio_a <= dio_index[1:0] ? {dio_index[1:0], dio_addr[18:0]} : 
+         status_mod ? {dio_index[6], dio_addr[18:0]} :  // LC: 512KB ROM
+                      {dio_index[6], dio_addr[17:0]};   // Plus: 128KB ROM
 		ioctl_wait <= 1;
 	end
 
@@ -803,7 +890,7 @@ wire download_cycle = dio_download && dioBusControl;
 wire [24:0] sdram_addr = download_cycle ? {4'b0001, dio_a[20:0] } : 
                          ~_romOE        ? {4'b0001, 2'b00, status_mod, memoryAddr[18:1]} :
                                           {3'b000, (dskReadAckInt || dskReadAckExt), memoryAddr[21:1]};
-
+										  
 wire [15:0] sdram_din  = download_cycle ? dio_data              : memoryDataOut;
 wire  [1:0] sdram_ds   = download_cycle ? 2'b11                 : { !_memoryUDS, !_memoryLDS };
 wire        sdram_we   = download_cycle ? dio_write             : !_ramWE;
