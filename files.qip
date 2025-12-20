@@ -19,4 +19,4 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/dataController_top.sv
 set_global_assignment -name VERILOG_FILE rtl/videoTimer.v
 set_global_assignment -name VERILOG_FILE rtl/videoShifter.v
 set_global_assignment -name VERILOG_FILE rtl/rtc.v 
-set_global_assignment -name SYSTEMVERILOG_FILE MacPlus.sv
+set_global_assignment -name SYSTEMVERILOG_FILE MacLC.sv

@@ -1,8 +1,8 @@
 //============================================================================
-//  Macintosh Plus
+//  Macintosh LC
 //
-//  Port to MiSTer
-//  Copyright (C) 2017-2019 Sorgelig
+//  Based on MacPlus core by Sorgelig
+//  Copyright (C) 2025-2026 Dani Sarfati
 //
 //  This program is free software; you can redistribute it and/or modify it
 //  under the terms of the GNU General Public License as published by the Free
@@ -208,7 +208,7 @@ video_freak video_freak
 
 `include "build_id.v" 
 localparam CONF_STR = {
-	"MACPLUS;UART115200;",
+	"MACLC;UART115200;",
 	"-;",
 	"F1,DSK,Mount Pri Floppy;",
 	"F2,DSK,Mount Sec Floppy;",
@@ -219,10 +219,10 @@ localparam CONF_STR = {
 	"O78,Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	"OBC,Scale,Normal,V-Integer,Narrower HV-Integer,Wider HV-Integer;",
 	"-;",
-	"O9,Model,Plus,SE;",
-	"O5,Speed,8MHz,16MHz;",
-	"ODE,CPU,68000,68010,68020;",
-	"O4,Memory,1MB,4MB;",
+	"O9,Model,LC;",
+	"O5,Speed,16MHz;",
+	"ODE,CPU,68020;",
+	"O4,Memory,4MB;",
 	"-;",
 	//"OA,Serial,Off,On;",
 	//"-;",
@@ -232,8 +232,6 @@ localparam CONF_STR = {
 			// so all options will get default values on first start.
 	"V,v",`BUILD_DATE
 };
-
-wire status_turbo = status[5];
 
 ////////////////////   CLOCKS   ///////////////////
 
@@ -248,10 +246,11 @@ pll pll
 	.locked(pll_locked)
 );
 
-reg       status_mem;
-reg [1:0] status_cpu;
+reg       status_mem = 1'b1;
+reg [1:0] status_cpu = 2'b10;
 reg       status_mod;
 reg       n_reset = 0;
+wire      status_turbo = 1'b1;
 always @(posedge clk_sys) begin
 	reg [15:0] rst_cnt;
 
@@ -374,7 +373,7 @@ assign AUDIO_MIX = 0;
 // set the real-world inputs to sane defaults
 localparam 	  configROMSize = 1'b1;  // 128K ROM
 
-wire [1:0] configRAMSize = status_mem?2'b11:2'b10; // 1MB/4MB
+wire [1:0] configRAMSize = status_mem?2'b11; // 1MB/4MB
 			  
 //
 // Serial Ports
@@ -835,6 +834,7 @@ sdram sdram
 	.sd_we          ( SDRAM_nWE                ),
 	.sd_ras         ( SDRAM_nRAS               ),
 	.sd_cas         ( SDRAM_nCAS               ),
+
 
 	// cpu/chipset interface
 	// map rom to sdram word address $200000 - $20ffff
