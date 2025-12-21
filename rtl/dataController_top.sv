@@ -526,6 +526,7 @@ module dataController_top(
 		.loadPixels(loadPixels),
 		.pixelOutRGB(pixelOutRGB),
 		.vsync(vsync), // Sync reset
+		._hblank(_hblank), // HBlank gating
 		// CLUT Write
 		.clutWrite(selectCLUT && !_cpuRW),
 		.clutAddr(cpuAddrLo),
