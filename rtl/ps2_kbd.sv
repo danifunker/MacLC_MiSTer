@@ -127,8 +127,9 @@ end
 
 //use BRAM for table
 wire [9:0] key_code = code[ps2_key[8:0]];
-wire [9:0] code[512] =
-'{
+reg [9:0] code[512];
+initial begin
+code = '{
 	/* 000 */ 9'h07b,
 	/* 001 */ 9'h07b,	//F9
 	/* 002 */ 9'h07b,
@@ -642,5 +643,6 @@ wire [9:0] code[512] =
 	/* 1fe */ 9'h07b,
 	/* 1ff */ 9'h07b
 };
+end
 
 endmodule

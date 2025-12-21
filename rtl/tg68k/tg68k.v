@@ -32,7 +32,10 @@ module tg68k (
 	input berr,
 	input [15:0] din,
 	output [15:0] dout,
-	output reg [31:0] addr
+	output reg [31:0] addr,
+
+	// Debug outputs
+	output [1:0] busstate
 );
 
 wire  [1:0] tg68_busstate;
@@ -222,5 +225,8 @@ TG68KdotC_Kernel tg68k (
 	.nResetOut      ( reset_n       ),
 	.FC             ( fc            )
 );
+
+// Expose busstate for debugging
+assign busstate = tg68_busstate;
 
 endmodule
