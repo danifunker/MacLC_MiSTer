@@ -499,7 +499,7 @@ module emu
 		.reset      ( !_cpuReset ),
 		.phi1       ( cpu_en_p  ),
 		.phi2       ( cpu_en_n  ),
-		.cpu        ( {status_cpu[1], |status_cpu} ),
+		.cpu        ( {status_cpu[0] ? 2'b11 : 2'b00} ),
 
 		.dtack_n    ( _cpuDTACK  ),
 		.rw_n       ( tg68_rw    ),
