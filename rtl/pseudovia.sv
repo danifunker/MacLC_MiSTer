@@ -1,12 +1,14 @@
-// Mac LC Pseudo-VIA
-// Simplified VIA-like device in V8 ASIC at 0x526000-0x527FFF
+// Mac LC Pseudo-VIA - CORRECTED
+// Mapped at 0x526000-0x527FFF in V8
+// Register Stride is 512 bytes (0x200)
 
 module pseudovia(
     input clk_sys,
     input reset,
     
     // CPU interface
-    input [10:0] addr,
+    // Expanded to 13 bits to handle 0x1C00 max offset
+    input [12:0] addr, 
     input [7:0] data_in,
     output reg [7:0] data_out,
     input we,
@@ -22,24 +24,30 @@ module pseudovia(
     input [3:0] monitor_id
 );
 
-// Register map (VIA-like but simplified)
-localparam REG_VPORB    = 11'h000;  // Port B output
-localparam REG_VDIRB    = 11'h400;  // Port B direction
-localparam REG_VIFR     = 11'hD00;  // Interrupt flag
-localparam REG_VIER     = 11'hE00;  // Interrupt enable
-localparam REG_CONFIG   = 11'h1000; // RAM config register
-localparam REG_VIDEO    = 11'h1400; // Video config register
+// Register map (Stride 0x200)
+localparam REG_VPORB    = 13'h0000; // Reg 0: Port B
+localparam REG_VDIRB    = 13'h0400; // Reg 2: Port B Direction
+localparam REG_CONFIG   = 13'h1000; // Reg 8: RAM Config (V8 specific)
+localparam REG_VIDEO    = 13'h1400; // Reg 10: Video Config (V8 specific)
+localparam REG_VIFR     = 13'h1A00; // Reg 13: Interrupt Flag
+localparam REG_VIER     = 13'h1C00; // Reg 14: Interrupt Enable
 
 reg [7:0] port_b;
 reg [7:0] dir_b;
-reg [7:0] ifr;
-reg [7:0] ier;
+reg [7:0] ifr; // Bits 0-6 are flags, Bit 7 is Summary
+reg [7:0] ier; // Bits 0-6 are masks, Bit 7 is Set/Clear control
 reg [7:0] config_reg;
 reg [7:0] video_config;
 
-// Interrupt flags
+// Interrupt flags (V8/Eagle specific)
+// Bit 6: VBlank
+// Bit 5: Slot IRQ (PDS)
 wire vbl_flag = vblank_irq;
 wire slot_flag = slot_irq;
+
+// Interrupt Summary Logic
+wire [6:0] active_irqs = ifr[6:0] & ier[6:0];
+wire irq_pending = |active_irqs;
 
 always @(posedge clk_sys) begin
     if (reset) begin
@@ -51,23 +59,33 @@ always @(posedge clk_sys) begin
         video_config <= 8'h00;
         irq_out <= 1'b0;
     end else begin
-        // Update interrupt flags
+        // Update interrupt flags (Set on rising edge of input)
+        // Note: Real VIA uses edge detection, here we assume pulse or level handled by top
         if (vbl_flag) ifr[6] <= 1'b1;
         if (slot_flag) ifr[5] <= 1'b1;
         
-        // Generate IRQ
-        irq_out <= |(ifr[6:0] & ier[6:0]);
+        // Update IRQ Output
+        irq_out <= irq_pending;
         
+        // Update Summary Bit (Read-only status)
+        ifr[7] <= irq_pending;
+
         if (req) begin
             if (we) begin
-                case (addr[10:8])
-                    3'h0: port_b <= data_in;
-                    3'h4: dir_b <= data_in;
-                    3'h6: begin  // IFR - write 1 to clear
-                        if (data_in[6]) ifr[6] <= 1'b0;
-                        if (data_in[5]) ifr[5] <= 1'b0;
+                case (addr)
+                    REG_VPORB: port_b <= data_in;
+                    REG_VDIRB: dir_b <= data_in;
+                    REG_CONFIG: config_reg <= data_in;
+                    REG_VIDEO:  video_config <= data_in;
+                    
+                    REG_VIFR: begin 
+                        // Write 1 to clear specific bits (Standard VIA)
+                        // Note: Bit 7 is ignored on write
+                        ifr[6:0] <= ifr[6:0] & ~data_in[6:0];
                     end
-                    3'h7: begin  // IER
+                    
+                    REG_VIER: begin
+                        // Bit 7 controls Set (1) or Clear (0)
                         if (data_in[7])
                             ier[6:0] <= ier[6:0] | data_in[6:0];
                         else
@@ -75,35 +93,31 @@ always @(posedge clk_sys) begin
                     end
                     default: ;
                 endcase
-                
-                // Special registers
-                if (addr[10:0] == REG_CONFIG)
-                    config_reg <= data_in;
-                if (addr[10:0] == REG_VIDEO)
-                    video_config <= data_in;
             end else begin
-                case (addr[10:8])
-                    3'h0: data_out <= port_b;
-                    3'h4: data_out <= dir_b;
-                    3'h6: data_out <= {1'b0, ifr[6:0]};
-                    3'h7: data_out <= {1'b1, ier[6:0]};
+                // Read Logic
+                case (addr)
+                    REG_VPORB: data_out <= port_b;
+                    REG_VDIRB: data_out <= dir_b;
+                    REG_VIFR:  data_out <= ifr; // Returns calculated summary bit 7
+                    REG_VIER:  data_out <= {1'b1, ier[6:0]}; // Bit 7 always 1 on read
+                    
+                    REG_CONFIG: begin
+                        // Return RAM size | [cite_start]0x04 (bit 2 always set in V8) [cite: 52]
+                        case (ram_config)
+                            2'b00: data_out <= 8'h04; // 128K
+                            2'b01: data_out <= 8'h05; // 512K
+                            2'b10: data_out <= 8'h06; // 1MB
+                            2'b11: data_out <= 8'h07; // 4MB
+                        endcase
+                    end
+                    
+                    REG_VIDEO: begin
+                         [cite_start]// Monitor ID in bits 5:3 [cite: 57]
+                        data_out <= {2'b00, monitor_id, 3'b000};
+                    end
+                    
                     default: data_out <= 8'hFF;
                 endcase
-                
-                // Special registers
-                if (addr[10:0] == REG_CONFIG) begin
-                    // Return RAM size | 0x04 (bit 2 always set)
-                    case (ram_config)
-                        2'b00: data_out <= 8'h04;  // 128K
-                        2'b01: data_out <= 8'h05;  // 512K
-                        2'b10: data_out <= 8'h06;  // 1MB
-                        2'b11: data_out <= 8'h07;  // 4MB
-                    endcase
-                end
-                if (addr[10:0] == REG_VIDEO) begin
-                    // Monitor ID in bits 5:3
-                    data_out <= {2'b00, monitor_id, 3'b000};
-                end
             end
         end
     end

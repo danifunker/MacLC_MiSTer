@@ -1,5 +1,5 @@
-// Mac LC V8 Video Controller - CORRECTED
-// Runs at full 32MHz system clock for proper 25MHz pixel rate
+// Mac LC V8 Video Controller - FIXED
+// Supports 1, 2, 4, 8, and 16 bpp modes correctly
 
 module maclc_v8_video(
     input clk_sys,
@@ -17,6 +17,7 @@ module maclc_v8_video(
     output reg vsync,
     output reg hblank,
     output reg vblank,
+ 
     output reg [7:0] vga_r,
     output reg [7:0] vga_g,
     output reg [7:0] vga_b,
@@ -31,21 +32,37 @@ localparam [21:0] VRAM_BASE = 22'h340000;
 reg [10:0] h_total, h_active, h_sync_start, h_sync_end;
 reg [9:0] v_total, v_active, v_sync_start, v_sync_end;
 
+// Bits per pixel and fetch mask configuration
+reg [4:0] bits_per_pixel; // 1, 2, 4, 8, 16
+reg [3:0] fetch_mask;     // When to fetch new word
+
 always @(*) begin
+    case (video_mode)
+        3'd0: begin bits_per_pixel = 1;  fetch_mask = 4'hF; end // 1bpp: Fetch every 16
+        3'd1: begin bits_per_pixel = 2;  fetch_mask = 4'h7; end // 2bpp: Fetch every 8
+        3'd2: begin bits_per_pixel = 4;  fetch_mask = 4'h3; end // 4bpp: Fetch every 4
+        3'd3: begin bits_per_pixel = 8;  fetch_mask = 4'h1; end // 8bpp: Fetch every 2
+        3'd4: begin bits_per_pixel = 16; fetch_mask = 4'h0; end // 16bpp: Fetch every 1
+        default: begin bits_per_pixel = 1; fetch_mask = 4'hF; end
+    endcase
+end
+
+always @(*) begin
+    // Standard V8 monitor timings
     case (monitor_id)
-        4'h1: begin
-            h_total = 11'd832; h_active = 11'd640;
-            h_sync_start = 11'd656; h_sync_end = 11'd752;
-            v_total = 10'd918; v_active = 10'd870;
-            v_sync_start = 10'd871; v_sync_end = 10'd877;
+        4'h1: begin // 12" RGB (512x384)
+             h_total = 11'd832; h_active = 11'd640; // Note: MAME maps active to 512, but V8 uses 640 timing
+             h_sync_start = 11'd656; h_sync_end = 11'd752;
+             v_total = 10'd918; v_active = 10'd870;
+             v_sync_start = 10'd871; v_sync_end = 10'd877;
         end
-        4'h2: begin
+        4'h2: begin // 12" RGB Alternate
             h_total = 11'd640; h_active = 11'd512;
             h_sync_start = 11'd528; h_sync_end = 11'd576;
             v_total = 10'd407; v_active = 10'd384;
             v_sync_start = 10'd385; v_sync_end = 10'd388;
         end
-        default: begin
+        default: begin // VGA 640x480 (Monitor ID 6)
             h_total = 11'd800; h_active = 11'd640;
             h_sync_start = 11'd656; h_sync_end = 11'd752;
             v_total = 10'd525; v_active = 10'd480;
@@ -78,43 +95,62 @@ always @(posedge clk_sys) begin
     de <= (h_count < h_active) && (v_count < v_active);
 end
 
-// Video address - 1024 byte row stride, fetch every 16 pixels
-wire [10:0] fetch_x = {h_count[10:4], 4'b0000};
-assign video_addr = VRAM_BASE + {v_count, fetch_x[10:1], 1'b0};
+// --- Video Address Generation ---
+// VRAM Stride is 1024 bytes (0x400)
+// We calculate the byte offset of the current pixel group
+// h_count must be masked to align with the fetch width (16, 8, 4, or 2 bytes)
+// However, since we fetch 16-bit words, we just multiply h_count by BPP/8
+// Simplified: Address = Base + (Y * 1024) + (X * BPP / 8)
+// Since video_data_in is 16-bit, we want to align to even bytes.
+
+wire [10:0] row_offset = (h_count * bits_per_pixel) >> 3; // Convert pixels to bytes
+wire [10:0] fetch_addr = {row_offset[10:1], 1'b0};        // Align to 16-bit word boundary
+
+// VRAM_BASE + (v_count * 1024) + offset
+assign video_addr = VRAM_BASE + {v_count, 10'd0} + {11'd0, fetch_addr};
 
 reg [15:0] video_data;
+reg [15:0] pixel_shift;
+reg [3:0]  pixel_count;
+
+// Latch data from VRAM
 always @(posedge clk_sys) begin
     if (video_latch && !hblank && !vblank)
         video_data <= video_data_in;
 end
 
-reg [15:0] pixel_shift;
-reg [3:0] pixel_count;
-
+// --- Shift Register Logic ---
 always @(posedge clk_sys) begin
     if (hblank || vblank) begin
         pixel_shift <= 16'd0;
-        pixel_count <= 4'd0;
+        // Pre-load logic reset
     end else begin
-        if (h_count[3:0] == 4'd0) begin
+        // Check if we hit the fetch boundary for the current mode
+        if ((h_count & fetch_mask) == 0) begin 
             pixel_shift <= video_data;
-            pixel_count <= 4'd15;
         end else begin
-            pixel_shift <= {pixel_shift[14:0], 1'b0};
-            if (pixel_count != 0)
-                pixel_count <= pixel_count - 4'd1;
+            // Shift left by bits_per_pixel
+            case (bits_per_pixel)
+                5'd1:  pixel_shift <= {pixel_shift[14:0], 1'b0};
+                5'd2:  pixel_shift <= {pixel_shift[13:0], 2'b0};
+                5'd4:  pixel_shift <= {pixel_shift[11:0], 4'b0};
+                5'd8:  pixel_shift <= {pixel_shift[7:0],  8'b0};
+                5'd16: pixel_shift <= 16'd0; // Consumed instantly
+            endcase
         end
     end
 end
 
 reg [7:0] pixel_index;
 
+// --- Pixel Extraction ---
+// We extract from the MSB (Big Endian Mac format)
 always @(*) begin
     case (video_mode)
-        3'd0: pixel_index = pixel_shift[15] ? 8'hFF : 8'h00;
-        3'd1: pixel_index = {6'b111111, pixel_shift[15:14]};
-        3'd2: pixel_index = {4'b1111, pixel_shift[15:12]};
-        3'd3: pixel_index = pixel_shift[15:8];
+        3'd0: pixel_index = pixel_shift[15] ? 8'hFF : 8'h00;          // 1bpp
+        3'd1: pixel_index = {6'b111111, pixel_shift[15:14]};          // 2bpp
+        3'd2: pixel_index = {4'b1111, pixel_shift[15:12]};            // 4bpp
+        3'd3: pixel_index = pixel_shift[15:8];                        // 8bpp
         default: pixel_index = 8'd0;
     endcase
 end
@@ -124,10 +160,14 @@ assign palette_addr = pixel_index;
 always @(posedge clk_sys) begin
     if (de) begin
         if (video_mode == 3'd4) begin
-            vga_r <= {pixel_shift[14:10], 3'b000};
-            vga_g <= {pixel_shift[9:5], 3'b000};
-            vga_b <= {pixel_shift[4:0], 3'b000};
+            // 16bpp Direct Color (X-5-5-5)
+            // Note: Use 'video_data' directly here or ensure pixel_shift is loaded correctly
+            // For 16bpp, we fetch every cycle, so video_data is the pixel.
+            vga_r <= {video_data[14:10], 3'b000};
+            vga_g <= {video_data[9:5],   3'b000};
+            vga_b <= {video_data[4:0],   3'b000};
         end else begin
+            // Palette Lookup
             vga_r <= palette_data[23:16];
             vga_g <= palette_data[15:8];
             vga_b <= palette_data[7:0];
