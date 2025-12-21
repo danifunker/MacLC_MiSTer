@@ -41,6 +41,11 @@ module addrController_top(
 	output selectROM,
 	output selectSEOverlay,
 	
+	// New LC Peripherals
+	output selectAriel,
+	output selectPseudoVIA,
+	output selectVRAM,
+	
 	// video:
 	output hsync,
 	output vsync,
@@ -133,8 +138,10 @@ module addrController_top(
 	
 	wire extraRamRead = sndReadAck;
 	assign _ramOE = ~((videoBusControl && videoControlActive) || (extraRamRead) ||
-						(cpuBusControl && selectRAM && _cpuRW));
-	assign _ramWE = ~(cpuBusControl && selectRAM && !_cpuRW);
+						(cpuBusControl && (selectRAM || selectVRAM) && _cpuRW));
+
+	// RAM Write Enable: Active for RAM or VRAM writes
+	assign _ramWE = ~(cpuBusControl && (selectRAM || selectVRAM) && !_cpuRW);
 	
 	assign _memoryUDS = cpuBusControl ? _cpuUDS : 1'b0;
 	assign _memoryLDS = cpuBusControl ? _cpuLDS : 1'b0;
@@ -177,13 +184,19 @@ module addrController_top(
 		.address(cpuAddr),
 		._cpuAS(_cpuAS),
 		.memoryOverlayOn(memoryOverlayOn),
+		.machineType(machineType), // Added machineType
 		.selectRAM(selectRAM),
 		.selectROM(selectROM),
 		.selectSCSI(selectSCSI),
 		.selectSCC(selectSCC),
 		.selectIWM(selectIWM),
 		.selectVIA(selectVIA),
-		.selectSEOverlay(selectSEOverlay));
+		.selectSEOverlay(selectSEOverlay),
+		// New Outputs
+		.selectAriel(selectAriel),
+		.selectPseudoVIA(selectPseudoVIA),
+		.selectVRAM(selectVRAM)
+	);
 
 	wire [21:0] plus_video_addr;
 

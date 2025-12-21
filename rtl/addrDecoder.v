@@ -84,16 +84,24 @@ module addrDecoder(
 	input [23:0] address,
 	input _cpuAS,
 	input memoryOverlayOn,
+	input machineType, // 0 = Mac Plus, 1 = Mac LC
+	
 	output reg selectRAM,
 	output reg selectROM,
 	output reg selectSCSI,
 	output reg selectSCC,
 	output reg selectIWM,
 	output reg selectVIA,
-	output reg selectSEOverlay
+	output reg selectSEOverlay,
+	
+	// Mac LC Specific Selects
+	output reg selectAriel,
+	output reg selectPseudoVIA,
+	output reg selectVRAM
 );
 
 	always @(*) begin
+		// Defaults
 		selectRAM = 0;
 		selectROM = 0;
 		selectSCSI = 0;
@@ -101,45 +109,98 @@ module addrDecoder(
 		selectIWM = 0;
 		selectVIA = 0;
 		selectSEOverlay = 0;
+		selectAriel = 0;
+		selectPseudoVIA = 0;
+		selectVRAM = 0;
 		
-		casez (address[23:20])
-			4'b00??: begin //00 0000 - 3F FFFF
-				if (memoryOverlayOn == 0)
-					selectRAM = !_cpuAS;
-				else begin
-					if (address[23:20] == 0) begin
-						// Mac Plus: repeated images of overlay ROM only extend to $0F0000
-						// Mac 512K: more repeated ROM images at $020000-$02FFFF
-						// Mac SE:   overlay ROM at $00 0000 - $0F FFFF
-						selectROM = !_cpuAS;
+		if (!_cpuAS) begin
+			if (machineType == 0) begin
+				// ==========================================================
+				// Mac Plus Memory Map (Legacy)
+				// ==========================================================
+				casez (address[23:20])
+					4'b00??: begin // 00 0000 - 3F FFFF (RAM / Overlay ROM)
+						if (memoryOverlayOn == 0)
+							selectRAM = 1;
+						else begin
+							if (address[23:20] == 0) begin
+								// Mac Plus: repeated images of overlay ROM only extend to $0F0000
+								selectROM = 1;
+							end
+						end
+					end
+					4'b0100: begin // 40 0000 - 4F FFFF (ROM)
+						if(configROMSize[1] || address[17] == 1'b0)
+							selectROM = 1;
+						selectSEOverlay = 1;
+					end
+					4'b0101: begin // 50 0000 - 5F FFFF (SCSI @ 580000)
+						if (address[19]) 
+							selectSCSI = 1;
+						selectSEOverlay = 1;
+					end
+					4'b0110: // 60 0000 - 6F FFFF (Overlay RAM)
+						if (memoryOverlayOn)
+							selectRAM = 1;
+					4'b10?1: // 9? ?? ?? (SCC)
+						selectSCC = 1;
+					4'b1100: // C0 0000 (IWM)
+						if (!configROMSize[1])
+							selectIWM = 1;
+					4'b1101: // D0 0000 (IWM)
+						selectIWM = 1;
+					4'b1110: // E0 0000 (VIA)
+						if (address[19]) // E8 0000 - EF FFFF
+							selectVIA = 1;
+					default: ;
+				endcase
+			end else begin
+				// ==========================================================
+				// Mac LC (V8) Memory Map
+				// ==========================================================
+				
+				// --- ROM (0xA00000 - 0xAFFFFF) ---
+				if (address >= 24'hA00000 && address <= 24'hAFFFFF) begin
+					selectROM = 1;
+				end
+				// --- Overlay ROM (0x000000) ---
+				// Mirrors ROM to 0x0 at boot
+				else if (memoryOverlayOn && address < 24'hA00000) begin
+					selectROM = 1; 
+				end
+				// --- RAM (0x000000 - 0x9FFFFF) ---
+				// Covers all lower memory except IO holes
+				else if (address < 24'hA00000) begin
+					// Check for V8 IO Holes
+					if (address >= 24'h500000 && address <= 24'h5BFFFF) begin
+						// 50 0000: VIA1
+						if (address >= 24'h500000 && address <= 24'h501FFF) selectVIA = 1;
+						// 51 4000: ASC (Audio) - usually handled by dataController, but map it?
+						// 52 4000: Ariel (RAMDAC)
+						else if (address >= 24'h524000 && address <= 24'h525FFF) selectAriel = 1;
+						// 52 6000: PseudoVIA
+						else if (address >= 24'h526000 && address <= 24'h527FFF) selectPseudoVIA = 1;
+						// 54 0000: VRAM
+						else if (address >= 24'h540000 && address <= 24'h5BFFFF) selectVRAM = 1;
+					end else begin
+						// Regular RAM
+						selectRAM = 1;
 					end
 				end
+				// --- Upper IO (0xF00000+) ---
+				else if (address >= 24'hF00000) begin
+					// F0 4000: SCC
+					if (address >= 24'hF04000 && address <= 24'hF05FFF) selectSCC = 1;
+					// F0 6000: SCSI DRQ
+					else if (address >= 24'hF06000 && address <= 24'hF07FFF) selectSCSI = 1;
+					// F1 0000: SCSI
+					else if (address >= 24'hF10000 && address <= 24'hF11FFF) selectSCSI = 1;
+					// F1 2000: SCSI DRQ
+					else if (address >= 24'hF12000 && address <= 24'hF13FFF) selectSCSI = 1;
+					// F1 6000: SWIM (IWM)
+					else if (address >= 24'hF16000 && address <= 24'hF17FFF) selectIWM = 1;
+				end
 			end
-			4'b0100: begin //40 0000 - 4F FFFF
-				if(configROMSize[1] || address[17] == 1'b0)   // <- this detects SCSI (on Plus)!!!
-					selectROM = !_cpuAS;
-				selectSEOverlay = !_cpuAS;
-			end
-			4'b0101: begin //50 000 - 5F FFFF
-				if (address[19]) // 58 000 - 5F FFFF
-					selectSCSI = !_cpuAS;
-				selectSEOverlay = !_cpuAS;
-			end
-			4'b0110: 
-				if (memoryOverlayOn)
-					selectRAM = !_cpuAS;
-			4'b10?1:
-				selectSCC = !_cpuAS;
-			4'b1100: // C0 000 - CF FFF
-				if (!configROMSize[1])
-					selectIWM = !_cpuAS;
-			4'b1101:
-				selectIWM = !_cpuAS;
-			4'b1110:
-				if (address[19]) // E8 000 - EF FFF
-					selectVIA = !_cpuAS;
-			default:
-				; // select nothing
-		endcase
+		end
 	end
 endmodule
