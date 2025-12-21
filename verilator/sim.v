@@ -256,7 +256,7 @@ module emu
 		.reset      ( !_cpuReset ),
 		.phi1       ( cpu_en_p  ),
 		.phi2       ( cpu_en_n  ),
-		.cpu        ( {status_cpu[1], |status_cpu} ),
+		.cpu        ( status_cpu[0] ? 2'b11 : 2'b00 ),
 
 		.dtack_n    ( _cpuDTACK  ),
 		.rw_n       ( tg68_rw    ),
@@ -582,9 +582,8 @@ module emu
 			// Don't byte-swap for sim_ram (original swaps for SDRAM byte ordering)
 			dio_data <= ioctl_dout;
 			dio_a <= dio_index[1:0] ? {dio_index[1:0], dio_addr[18:0]} :
-				status_mod ?
-				{3'b001, dio_addr[17:0]} :  // LC: ROM at offset 0x40000
-				{dio_index[6], dio_addr[17:0]};
+                // UNIFIED FIX: Always write Main ROM to Bank 0
+                {3'b000, dio_addr[17:0]};
 			ioctl_wait <= 1;
 		end
 
@@ -604,10 +603,8 @@ module emu
 
 	// Combinational version of dio_a for download (avoids register latency)
 	// This mirrors the registered logic but is immediate
-	wire [20:0] dio_a_comb = dio_index[1:0] ? {dio_index[1:0], dio_addr[18:0]} :
-	                         status_mod ?
-	                         {3'b001, dio_addr[17:0]} :  // LC: ROM at offset 0x40000
-	                         {dio_index[6], dio_addr[17:0]};
+wire [20:0] dio_a_comb = dio_index[1:0] ? {dio_index[1:0], dio_addr[18:0]} :
+                             {3'b000, dio_addr[17:0]}; // UNIFIED FIX: Bank 0
 
 	// Address mapping for sim_ram:
 	// sim_ram uses addr[21:0] for a 4M word (8MB) array
@@ -620,7 +617,7 @@ module emu
 	//   - {3'b000, 1'b1, dio_a_comb[20:0]} gives addr[21:0] = {1, dio_a_comb[20:0]} = 0x200000 + dio_a_comb
 	wire [24:0] ram_addr = download_cycle ? {3'b000, 1'b1, dio_a_comb[20:0] } :  // ROM at 0x200000+ (bit 21 set)
 						   ~_romOE        ?
-						   {3'b000, 1'b1, 2'b00, status_mod, memoryAddr[18:1]} :  // ROM reads at 0x200000+
+						   {3'b000, 1'b1, 2'b00, 1'b0, memoryAddr[18:1]} :  // ROM reads at 0x200000+
 										  {3'b000, (dskReadAckInt || dskReadAckExt), memoryAddr[21:1]};  // RAM at 0x000000+
 	// Use ioctl_dout directly for download (bypass registered dio_data)
 	wire [15:0] ram_din  = download_cycle ? ioctl_dout            : memoryDataOut;
