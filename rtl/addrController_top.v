@@ -138,7 +138,12 @@ module addrController_top(
 	
 	assign _memoryUDS = cpuBusControl ? _cpuUDS : 1'b0;
 	assign _memoryLDS = cpuBusControl ? _cpuLDS : 1'b0;
-	wire [21:0] addrMux = sndReadAck ? audioAddr : videoBusControl ? videoAddr : cpuAddr[21:0];
+	
+	wire vram_cpu_access = machineType && (cpuAddr[23:18] == 6'b010101);
+	wire [21:0] vram_translated = vram_cpu_access ? (22'h340000 + cpuAddr[17:0]) : cpuAddr[21:0];
+	wire [21:0] addrMux = sndReadAck ? audioAddr : 
+	                      videoBusControl ? videoAddr : 
+	                      vram_translated;
 	wire [21:0] macAddr;
 	assign macAddr[15:0] = addrMux[15:0];
 

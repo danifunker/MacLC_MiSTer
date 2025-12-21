@@ -31,9 +31,8 @@ module maclc_v8_video(
     input [23:0] palette_data
 );
 
-// VRAM base in SDRAM
-// Use same area as Mac Plus but different offset
-localparam [21:0] VRAM_BASE = 22'h3FA900;
+// VRAM base in SDRAM - moved to safe location away from Plus buffers
+localparam [21:0] VRAM_BASE = 22'h340000;
 
 // Video timing
 reg [10:0] h_total, h_active, h_sync_start, h_sync_end;
