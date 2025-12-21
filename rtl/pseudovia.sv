@@ -102,7 +102,7 @@ always @(posedge clk_sys) begin
                     REG_VIER:  data_out <= {1'b1, ier[6:0]}; // Bit 7 always 1 on read
                     
                     REG_CONFIG: begin
-                        // Return RAM size | [cite_start]0x04 (bit 2 always set in V8) [cite: 52]
+                        // Return RAM size | 0x04 (bit 2 always set in V8)
                         case (ram_config)
                             2'b00: data_out <= 8'h04; // 128K
                             2'b01: data_out <= 8'h05; // 512K
@@ -112,7 +112,7 @@ always @(posedge clk_sys) begin
                     end
                     
                     REG_VIDEO: begin
-                         [cite_start]// Monitor ID in bits 5:3 [cite: 57]
+                         // Monitor ID in bits 5:3
                         data_out <= {2'b00, monitor_id, 3'b000};
                     end
                     
