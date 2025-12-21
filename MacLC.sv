@@ -385,7 +385,7 @@ assign AUDIO_MIX = 0;
 // set the real-world inputs to sane defaults
 localparam 	  configROMSize = 1'b1;  // 128K ROM
 
-wire [1:0] configRAMSize = status_mem?2'b11; // 1MB/4MB
+wire [1:0] configRAMSize = 2'b11; // 4MB
 
 //
 // Serial Ports
@@ -832,7 +832,7 @@ wire download_cycle = dio_download && dioBusControl;
 wire vram_access = (selectVRAM) || (videoBusControl && status_mod);
 
 wire [24:0] sdram_addr = download_cycle ? {4'b0001, dio_a[20:0] } :
-						 vram_access    ? {7'b0010000, memoryAddr[17:0]} : // Offset 0x400000 (after 4MB RAM). Correct width.
+						 vram_access    ? {7'b0010000, memoryAddr[17:1]} : // Offset 0x400000 (after 4MB RAM). Correct width.
                          ~_romOE        ? (selectVideoROM ? {4'b0001, 1'b0, 1'b1, 1'b1, 4'b0000, 1'b1, memoryAddr[13:1]} : {4'b0001, 1'b0, status_mod, 1'b0, memoryAddr[18:1]}) :
                                           {3'b000, (dskReadAckInt || dskReadAckExt), memoryAddr[21:1]};
 

@@ -69,6 +69,7 @@ module dataController_top(
 	input _vblank,
 	input loadPixels,
 	output vid_alt,
+	input vsync, // Added Sync Input
 
 	// audio
 	output [10:0] audioOut,  // 8 bit audio + 3 bit volume
@@ -524,10 +525,13 @@ module dataController_top(
 		.dataIn(memoryDataIn),
 		.loadPixels(loadPixels),
 		.pixelOutRGB(pixelOutRGB),
+		.vsync(vsync), // Sync reset
 		// CLUT Write
 		.clutWrite(selectCLUT && !_cpuRW),
 		.clutAddr(cpuAddrLo),
-		.clutData({cpuDataIn[15:8], cpuDataIn[15:8], cpuDataIn[15:8]})
+		.clutData({cpuDataIn[15:8], cpuDataIn[15:8], cpuDataIn[15:8]}), // Fallback
+		.clutByteSel(cpuAddrLo[1:0]),
+		.clutByteData(cpuDataIn[15:8])
 	);
 
 	// Mouse

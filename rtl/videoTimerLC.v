@@ -8,7 +8,7 @@ module videoTimerLC(
 	output reg vsync,
 	output _hblank,
 	output _vblank,
-	output loadPixels // Used to signal Shifter? Actually Shifter should monitor FIFO.
+	output loadPixels // Used to signal Shifter
 );
 
 	// VGA 640x480 @ 60Hz Timing (25.175 MHz pixel clock)
@@ -51,29 +51,69 @@ module videoTimerLC(
 	assign _vblank = (v_count < V_ACTIVE);
 
 	// Address Generation (System Clock Domain)
-	// We only fetch active video data.
-	// Reset address at VSync.
+	// We duplicate the counters in the system domain to track active video lines.
+	// This allows us to pause fetching during blanking, preventing FIFO overflow.
+	// Since clk_sys (65MHz) > clk (25MHz), we use a fractional counter or just run faster and stall.
+	// Actually, we are driven by `videoBusControl` which happens at 16.25 MHz (65/4).
+	// We need to count 320 fetches (640 pixels) per line.
 
-	// Cross VSync to System Domain
+	// Cross VSync to System Domain to reset counters
 	reg vsync_sys_1, vsync_sys_2;
 	always @(posedge clk_sys) begin
-		vsync_sys_1 <= v_sync_active; // Active high internal
+		vsync_sys_1 <= v_sync_active;
 		vsync_sys_2 <= vsync_sys_1;
 	end
-
 	wire vsync_start = vsync_sys_1 && !vsync_sys_2;
 
 	reg [21:0] addr;
+	reg [8:0] word_count; // 0..319
+	reg [9:0] line_count; // 0..524
+
+	// State machine for line fetching?
+	// Simply: If `videoBusControl` and `word_count < 320` and `line_count < 480`: Fetch.
+	// We need to detect "End of Line" in Sys domain.
+	// We don't have HSync from Vid domain easily aligned.
+	// We can estimate timing?
+	// 1 line = 31.77 us.
+	// 65 MHz clocks = 2065 clocks.
+	// We can build a line timer in Sys domain.
+
+	reg [11:0] sys_h_count;
+
+	// 25.175 MHz * 800 clocks = 31.777 us.
+	// 65 MHz * X = 31.777 us -> X = 2065.5.
+	// Let's use 2065.
+	localparam SYS_H_TOTAL = 2065;
+	localparam SYS_V_ACTIVE = 480;
 
 	always @(posedge clk_sys) begin
 		if (vsync_start) begin
 			addr <= 0;
-		end else if (videoBusControl) begin
-			addr <= addr + 1'b1;
+			word_count <= 0;
+			line_count <= 0;
+			sys_h_count <= 0;
+		end else begin
+			if (sys_h_count == SYS_H_TOTAL - 1) begin
+				sys_h_count <= 0;
+				word_count <= 0;
+				if (line_count < V_TOTAL) line_count <= line_count + 1'b1;
+			end else begin
+				sys_h_count <= sys_h_count + 1'b1;
+			end
+
+			// Fetch logic
+			if (videoBusControl) begin
+				// Fetch only if active area
+				if (line_count < SYS_V_ACTIVE && word_count < 320) begin
+					addr <= addr + 1'b1;
+					word_count <= word_count + 1'b1;
+				end
+			end
 		end
 	end
 
 	assign videoAddr = addr;
-	assign loadPixels = 0;
+	// loadPixels used to gate the Write Enable in Shifter
+	assign loadPixels = (line_count < SYS_V_ACTIVE && word_count < 320);
 
 endmodule
