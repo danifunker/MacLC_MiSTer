@@ -815,14 +815,14 @@ module emu
 	always @(posedge clk_sys) begin
 		reg old_cyc = 0;
 		if(ioctl_write) begin
-			dio_data <= {ioctl_data[7:0], ioctl_data[15:8]};
-			dio_a <= dio_index[1:0] ? {dio_index[1:0], dio_addr[18:0]} : 
-			 status_mod ?
-			 {dio_index[6], dio_addr[18:0]} :  // LC: 512KB ROM
-						  {dio_index[6], dio_addr[17:0]};
-			// Plus: 128KB ROM
-			ioctl_wait <= 1;
-		end
+            dio_data <= {ioctl_data[7:0], ioctl_data[15:8]};
+            dio_a <= dio_index[1:0] ? {dio_index[1:0], dio_addr[18:0]} : 
+             status_mod ?
+             {1'b1, dio_addr[18:0]} :  // LC: Force Bit 18 HIGH to match Read Logic
+                          {dio_index[6], dio_addr[17:0]};
+            // Plus: 128KB ROM
+            ioctl_wait <= 1;
+        end
 
 		old_cyc <= dioBusControl;
 		if(~dioBusControl) dio_write <= ioctl_wait;
