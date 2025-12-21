@@ -224,7 +224,7 @@ localparam CONF_STR = {
 	"O1011,Monitor,13\" RGB,12\" RGB,15\" Portrait;",
 	"-;",
 	"O5,Speed,Normal,16MHz;",
-	"ODE,CPU,68020;",
+	"ODE,CPU,68000,68020;",
 	"O4,Memory,4MB;",
 	"-;",
 	"R0,Reset & Apply CPU+Memory;",
@@ -396,6 +396,9 @@ wire [7:0] ariel_pixel_addr;
 wire [23:0] ariel_palette_data;
 wire [7:0] ariel_reg_dout;
 wire selectAriel;
+wire selectPseudoVIA;
+wire [7:0] pseudovia_dout;
+wire pseudovia_irq;
 
 wire maclc_mode = status_mod; // 0=Plus mode, 1=LC mode
 
@@ -648,6 +651,7 @@ addrController_top ac0
 );
 
 assign selectAriel = maclc_mode && (cpuAddr[23:13] == 11'h292);
+assign selectPseudoVIA = maclc_mode && (cpuAddr[23:13] == 11'h293);
 
 wire [1:0] diskEject;
 wire [1:0] diskMotor, diskAct;
@@ -671,6 +675,21 @@ ariel_ramdac ariel(
 	.req(selectAriel && cpuBusControl),
 	.pixel_index(ariel_pixel_addr),
 	.rgb_out(ariel_palette_data)
+);
+
+pseudovia pvia(
+	.clk_sys(clk_sys),
+	.reset(~n_reset),
+	.addr(cpuAddr[10:0]),
+	.data_in(cpuDataOut[7:0]),
+	.data_out(pseudovia_dout),
+	.we(selectPseudoVIA && !_cpuRW && cpuBusControl),
+	.req(selectPseudoVIA && cpuBusControl),
+	.vblank_irq(v8_vblank),
+	.slot_irq(1'b0),
+	.irq_out(pseudovia_irq),
+	.ram_config(configRAMSize),
+	.monitor_id(v8_monitor_id)
 );
 
 maclc_v8_video v8_video(
@@ -730,6 +749,8 @@ dataController_top #(SCSI_DEVS) dc0
 	.memoryLatch(memoryLatch),
 	.selectAriel(selectAriel),
 	.ariel_data_in(ariel_reg_dout),
+	.selectPseudoVIA(selectPseudoVIA),
+	.pseudovia_data_in(pseudovia_dout),
 	
 	// peripherals
 	.ps2_key(ps2_key), 
