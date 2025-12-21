@@ -40,7 +40,9 @@ module addrDecoder(
 	// Mac LC specific
 	output reg selectPseudoVIA,
 	output reg selectCLUT,
-	output reg selectVRAM
+	output reg selectVRAM,
+	output reg selectASC,
+	output reg selectRAMDAC
 );
 
 	always @(*) begin
@@ -56,68 +58,115 @@ module addrDecoder(
 		selectPseudoVIA = 0;
 		selectCLUT = 0;
 		selectVRAM = 0;
+		selectASC = 0;
+		selectRAMDAC = 0;
 
-		casez (address[23:20])
-			4'b00??: begin //00 0000 - 3F FFFF
-				if (memoryOverlayOn == 0)
+		if (configROMSize[1]) begin // Mac LC Mode (V8 Chip Map)
+			casez (address[23:20])
+				4'b0000, 4'b0001, 4'b0010, 4'b0011,
+				4'b0100, 4'b0101, 4'b0110, 4'b0111,
+				4'b1000, 4'b1001: begin // 0x000000 - 0x9FFFFF
 					selectRAM = !_cpuAS;
-				else begin
-					if (address[23:20] == 0) begin
-						// Mac Plus: repeated images of overlay ROM only extend to $0F0000
-						// Mac 512K: more repeated ROM images at $020000-$02FFFF
-						// Mac SE:   overlay ROM at $00 0000 - $0F FFFF
-						selectROM = !_cpuAS;
+				end
+				4'b1010: begin // 0xA00000 - 0xAFFFFF
+					selectROM = !_cpuAS;
+				end
+				4'b0101: begin // 0x500000 - 0x5FFFFF
+					// VIA1: 0x500000 - 0x501FFF
+					if (address[19:13] == 7'h00) selectVIA = !_cpuAS;
+
+					// ASC: 0x514000 - 0x515FFF
+					else if (address[19:13] == 7'h0A) selectASC = !_cpuAS;
+
+					// RAMDAC (Ariel): 0x524000 - 0x525FFF
+					else if (address[19:13] == 7'h12) selectRAMDAC = !_cpuAS;
+
+					// PseudoVIA: 0x526000 - 0x527FFF
+					else if (address[19:13] == 7'h13) selectPseudoVIA = !_cpuAS;
+
+					// VRAM: 0x540000 - 0x5BFFFF
+					// High nibble 5. Second nibble 4,5,6,7,8,9,A,B.
+					// Corresponds to bit patterns 01xx and 10xx in bits 19:16.
+					// Simplified: (19=0, 18=1) OR (19=1, 18=0).
+					else if ((address[19] == 0 && address[18] == 1) || (address[19] == 1 && address[18] == 0)) selectVRAM = !_cpuAS;
+
+				end
+				4'b1111: begin // 0xF00000 - 0xFFFFFF
+					// SCC: 0xF04000 - 0xF05FFF (8KB)
+					// Matches 0xF04xxx and 0xF05xxx. Bits 19:13 must match 0x04 >> 1 = 0x02?
+					// 0x04 = 0000 0100. 0x05 = 0000 0101.
+					// Bit 12 varies. 19:13 is constant.
+					// 0x04 >> 1 = 0000 0010 (0x02).
+					if (address[19:13] == 7'h02) selectSCC = !_cpuAS;
+
+					// SCSI DRQ: 0xF06000 - 0xF07FFF (8KB)
+					// 0x06, 0x07. 19:13 == 0x03.
+					else if (address[19:13] == 7'h03) selectSCSI = !_cpuAS; // Map DRQ to SCSI for now
+
+					// SCSI Control: 0xF10000 - 0xF11FFF (8KB)
+					// 0x10, 0x11. 19:13 == 0x08.
+					else if (address[19:13] == 7'h08) selectSCSI = !_cpuAS;
+
+					// SCSI DRQ (Alt): 0xF12000 - 0xF13FFF (8KB)
+					// 0x12, 0x13. 19:13 == 0x09.
+					else if (address[19:13] == 7'h09) selectSCSI = !_cpuAS;
+
+					// SWIM (IWM): 0xF16000 - 0xF17FFF (8KB)
+					// 0x16, 0x17. 19:13 == 0x0B.
+					else if (address[19:13] == 7'h0B) selectIWM = !_cpuAS;
+
+					// CLUT (from previous context, keep if needed or mapped to RAMDAC?)
+					// User said RAMDAC is Ariel.
+					// CLUT in previous context was at F02000.
+					// If not in the new list, maybe ignore or keep?
+					// I'll keep it disabled unless we need it, but the user list is authoritative.
+					// "RAMDAC ... Ariel Palette Chip".
+					// So I assume RAMDAC covers palette operations.
+				end
+			endcase
+
+		end else begin // Legacy Mode
+			casez (address[23:20])
+				4'b00??: begin //00 0000 - 3F FFFF
+					if (memoryOverlayOn == 0)
+						selectRAM = !_cpuAS;
+					else begin
+						if (address[23:20] == 0) begin
+							// Mac Plus: repeated images of overlay ROM only extend to $0F0000
+							// Mac 512K: more repeated ROM images at $020000-$02FFFF
+							// Mac SE:   overlay ROM at $00 0000 - $0F FFFF
+							selectROM = !_cpuAS;
+						end
 					end
 				end
-			end
-			4'b0100: begin //40 0000 - 4F FFFF
-				if(configROMSize[1] || address[17] == 1'b0)   // <- this detects SCSI (on Plus)!!!
-					selectROM = !_cpuAS;
-				selectSEOverlay = !_cpuAS;
-			end
-			4'b0101: begin //50 000 - 5F FFFF
-				if (address[19]) // 58 000 - 5F FFFF
-					selectSCSI = !_cpuAS;
-				selectSEOverlay = !_cpuAS;
-			end
-			4'b0110:
-				if (memoryOverlayOn)
-					selectRAM = !_cpuAS;
-			4'b1010: begin // A0 0000 - AF FFFF
-				if (configROMSize[1]) // Mac LC ROM
-					selectROM = !_cpuAS;
-			end
-			4'b10?1:
-				selectSCC = !_cpuAS;
-			4'b1100: // C0 000 - CF FFF
-				if (!configROMSize[1])
-					selectIWM = !_cpuAS;
-			4'b1101:
-				selectIWM = !_cpuAS;
-			4'b1110: // E0 0000 - EF FFFF
-				if (address[19]) // E8 000 - EF FFF
-					selectVIA = !_cpuAS;
-				else // E0 0000 - E7 FFFF
-					selectVideoROM = !_cpuAS;
-			4'b1111: begin // F0 0000 - FF FFFF
-				// Mac LC Specifics
-				// VRAM at 0xF40000
-				if (address[23:16] == 8'hF4)
-					selectVRAM = !_cpuAS;
-				// Pseudo-VIA at 0xF00000
-				else if (address[23:16] == 8'hF0) begin
-					// Let's carve out a space for CLUT if needed.
-					// Assuming PseudoVIA occupies minimal space.
-					// User said "recognize LC-specific memory ranges (VRAM, Pseudo-VIA, CLUT)."
-					// Let's put CLUT at F02000 (arbitrary, as discussed)
-					if (address[15:12] == 4'h2) // F0 2xxx
-						selectCLUT = !_cpuAS;
-					else
-						selectPseudoVIA = !_cpuAS;
+				4'b0100: begin //40 0000 - 4F FFFF
+					if(address[17] == 1'b0)   // <- this detects SCSI (on Plus)!!!
+						selectROM = !_cpuAS;
+					selectSEOverlay = !_cpuAS;
 				end
-			end
-			default:
-				; // select nothing
-		endcase
+				4'b0101: begin //50 000 - 5F FFFF
+					if (address[19]) // 58 000 - 5F FFFF
+						selectSCSI = !_cpuAS;
+					selectSEOverlay = !_cpuAS;
+				end
+				4'b0110:
+					if (memoryOverlayOn)
+						selectRAM = !_cpuAS;
+				4'b10?1:
+					selectSCC = !_cpuAS;
+				4'b1100: // C0 000 - CF FFF
+					if (!configROMSize[1])
+						selectIWM = !_cpuAS;
+				4'b1101:
+					selectIWM = !_cpuAS;
+				4'b1110: // E0 0000 - EF FFFF
+					if (address[19]) // E8 000 - EF FFF
+						selectVIA = !_cpuAS;
+					else // E0 0000 - E7 FFFF
+						selectVideoROM = !_cpuAS;
+				default:
+					; // select nothing
+			endcase
+		end
 	end
 endmodule

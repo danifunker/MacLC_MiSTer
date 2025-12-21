@@ -36,6 +36,8 @@ module dataController_top(
 	// New LC Selects
 	input selectPseudoVIA,
 	input selectCLUT,
+	input selectASC,
+	input selectRAMDAC,
 
 	input _cpuVMA,
 
@@ -184,6 +186,8 @@ module dataController_top(
 	assign cpuDataOut = selectIWM ? iwmDataOut :
 							  selectVIA ? viaDataOut :
 							  selectPseudoVIA ? {pseudoViaDataOut, 8'h00} : // PseudoVIA 8-bit?
+							  selectASC ? 16'hFFFF : // Stub ASC
+							  selectRAMDAC ? 16'hFFFF : // Stub RAMDAC
 							  selectSCC ? { sccDataOut, 8'hEF } :
 							  selectSCSI ? { scsiDataOut, 8'hEF } :
 							  (cpuBusControl && memoryLatch) ? memoryDataIn : cpu_data;

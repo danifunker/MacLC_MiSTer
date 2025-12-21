@@ -44,6 +44,8 @@ module addrController_top(
 	output selectPseudoVIA,
 	output selectCLUT,
 	output selectVRAM,
+	output selectASC,
+	output selectRAMDAC,
 
 	// video:
 	output hsync,
@@ -227,7 +229,9 @@ module addrController_top(
 		.selectVideoROM(selectVideoROM),
 		.selectPseudoVIA(selectPseudoVIA),
 		.selectCLUT(selectCLUT),
-		.selectVRAM(selectVRAM)
+		.selectVRAM(selectVRAM),
+		.selectASC(selectASC),
+		.selectRAMDAC(selectRAMDAC)
 	);
 
 	wire hsync_legacy, vsync_legacy, hblank_legacy, vblank_legacy, loadPixels_legacy;

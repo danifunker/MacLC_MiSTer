@@ -448,7 +448,7 @@ wire memoryLatch;
 // peripherals
 wire vid_alt, loadPixels, pixelOut, _hblank, _vblank, hsync, vsync;
 wire memoryOverlayOn, selectSCSI, selectSCC, selectIWM, selectVIA, selectRAM, selectROM, selectSEOverlay, selectVideoROM;
-wire selectPseudoVIA, selectCLUT, selectVRAM; // New selects
+wire selectPseudoVIA, selectCLUT, selectVRAM, selectASC, selectRAMDAC; // New selects
 wire [15:0] dataControllerDataOut;
 
 // audio
@@ -630,6 +630,8 @@ addrController_top ac0
 	.selectPseudoVIA(selectPseudoVIA), // Connect new selects
 	.selectCLUT(selectCLUT),
 	.selectVRAM(selectVRAM),
+	.selectASC(selectASC),
+	.selectRAMDAC(selectRAMDAC),
 	.hsync(hsync),
 	.vsync(vsync),
 	._hblank(_hblank),
@@ -679,6 +681,8 @@ dataController_top #(SCSI_DEVS) dc0
 	.selectSEOverlay(selectSEOverlay),
 	.selectPseudoVIA(selectPseudoVIA), // Connect new selects
 	.selectCLUT(selectCLUT),
+	.selectASC(selectASC),
+	.selectRAMDAC(selectRAMDAC),
 	.cpuBusControl(cpuBusControl),
 	.videoBusControl(videoBusControl),
 	.memoryDataOut(memoryDataOut),
@@ -832,7 +836,7 @@ wire download_cycle = dio_download && dioBusControl;
 wire vram_access = (selectVRAM) || (videoBusControl && status_mod);
 
 wire [24:0] sdram_addr = download_cycle ? {4'b0001, dio_a[20:0] } :
-						 vram_access    ? {7'b0010000, memoryAddr[17:1]} : // Offset 0x400000 (after 4MB RAM). Correct width.
+						 vram_access    ? {1'b1, 6'b000000, memoryAddr[19], memoryAddr[17:1]} : // Offset 16MB (0x800000 words). 512KB VRAM.
                          ~_romOE        ? (selectVideoROM ? {4'b0001, 1'b0, 1'b1, 1'b1, 4'b0000, 1'b1, memoryAddr[13:1]} : {4'b0001, 1'b0, status_mod, 1'b0, memoryAddr[18:1]}) :
                                           {3'b000, (dskReadAckInt || dskReadAckExt), memoryAddr[21:1]};
 
