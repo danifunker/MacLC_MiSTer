@@ -1,0 +1,4 @@
+set_global_assignment -name VERILOG_FILE [file join $::quartus(qip_path) TG68K_ALU.v ]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) TG68K_Pack.sv ]
+set_global_assignment -name VERILOG_FILE [file join $::quartus(qip_path) TG68KdotC_Kernel.v ]
+set_global_assignment -name VERILOG_FILE [file join $::quartus(qip_path) tg68k.v ]
