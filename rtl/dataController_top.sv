@@ -20,9 +20,7 @@ module dataController_top(
 	input [3:0] cpuAddrRegHi, // A12-A9
 	input [2:0] cpuAddrRegMid, // A6-A4
 	input [1:0] cpuAddrRegLo, // A2-A1
-	input [7:0] cpuAddrLo, // A8-A1 (Byte address bits usually A7-A0 but bus is 16-bit word address?)
-	// 68000 address bus A23-A1.
-	// cpuAddrLo passed is cpuAddr[8:1] (A8-A1).
+	input [7:0] cpuAddrLo, // A8-A1
 	input _cpuUDS,
 	input _cpuLDS,
 	input _cpuRW,
