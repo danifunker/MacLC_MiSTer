@@ -220,11 +220,11 @@ localparam CONF_STR = {
 	"OBC,Scale,Normal,V-Integer,Narrower HV-Integer,Wider HV-Integer;",
 	"-;",
 	"O9,Model,Plus,LC;",
-	"OFG,Video Mode,1bpp,2bpp,4bpp,8bpp,16bpp;",
+	"OFG,Video Mode,4bpp,1bpp,2bpp,8bpp,16bpp;",
 	"O1011,Monitor,13\" RGB,12\" RGB,15\" Portrait;",
 	"-;",
 	"O5,Speed,Normal,16MHz;",
-	"ODE,CPU,68000,68020;",
+	"ODE,CPU,68020;",
 	"O4,Memory,4MB;",
 	"-;",
 	"R0,Reset & Apply CPU+Memory;",
@@ -245,7 +245,7 @@ pll pll
 );
 
 reg       status_mem = 1'b1;
-reg [1:0] status_cpu = 2'b10;
+reg [1:0] status_cpu = 2'b00;
 reg       status_mod;
 reg       n_reset = 0;
 wire      status_turbo = 1'b1;
@@ -652,11 +652,11 @@ assign selectAriel = maclc_mode && (cpuAddr[23:13] == 11'h292);
 wire [1:0] diskEject;
 wire [1:0] diskMotor, diskAct;
 
-wire [2:0] v8_video_mode = status[16:15] == 2'b00 ? 3'd0 :
+wire [2:0] v8_video_mode = status[16:15] == 2'b00 ? 3'd2 :
                            status[16:15] == 2'b01 ? 3'd1 :
-                           status[16:15] == 2'b10 ? 3'd2 :
+                           status[16:15] == 2'b10 ? 3'd0 :
                            status[16:15] == 2'b11 ? 3'd3 :
-                           status[17] ? 3'd4 : 3'd0;
+                           status[17] ? 3'd4 : 3'd2;
 
 wire [3:0] v8_monitor_id = status[11:10] == 2'b00 ? 4'h6 :
                            status[11:10] == 2'b01 ? 4'h2 : 4'h1;
@@ -676,7 +676,7 @@ ariel_ramdac ariel(
 maclc_v8_video v8_video(
 	.clk_sys(clk_sys),
 	.clk8_en_p(clk8_en_p),
-	.reset(~n_reset),
+	.reset(~n_reset || ~maclc_mode),
 	
 	.video_addr(v8_video_addr),
 	.video_data_in(sdram_do),
