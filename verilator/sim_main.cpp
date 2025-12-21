@@ -28,6 +28,7 @@
 #include "sim_audio.h"
 #include "sim_input.h"
 #include "sim_clock.h"
+#include "m68k_dasm.h"
 
 #include "../imgui/imgui_memory_editor.h"
 #include "../imgui/ImGuiFileDialog.h"
@@ -64,6 +65,7 @@ const char* cpu_trace_filename = "cpu_trace.log";
 int cpu_trace_count = 0;
 const int cpu_trace_max = 10000;  // Stop after this many instructions
 int post_download_delay = 0;  // Delay after ROM load before tracing
+uint32_t cpu_trace_last_pc = 0xFFFFFFFF;  // For edge detection (new instruction)
 
 // RAM debug
 // ---------
@@ -177,16 +179,31 @@ int verilate() {
 
 			// CPU trace output - skip while ROM is downloading
 			if (cpu_trace_enable && VERTOPINTERN->debug_fetch_valid && !*bus.ioctl_download) {
-				uint32_t pc = VERTOPINTERN->debug_pc;
-				uint16_t opcode = VERTOPINTERN->debug_opcode;
-				if (cpu_trace_file) {
-					fprintf(cpu_trace_file, "%08X: %04X\n", pc, opcode);
-					cpu_trace_count++;
-					if (cpu_trace_count >= cpu_trace_max) {
-						fprintf(stderr, "CPU trace limit reached (%d instructions)\n", cpu_trace_max);
-						fclose(cpu_trace_file);
-						cpu_trace_file = nullptr;
-						cpu_trace_enable = false;
+				// Access TG68K internal signals (flattened via verilator public_flat)
+				uint32_t pc = VERTOPINTERN->emu__DOT__tg68k__DOT__tg68k__DOT__exe_pc;
+				uint16_t opcode = VERTOPINTERN->emu__DOT__tg68k__DOT__tg68k__DOT__exe_opcode;
+				uint16_t sndopc = VERTOPINTERN->emu__DOT__tg68k__DOT__tg68k__DOT__sndopc;
+
+				// Only log when PC changes (new instruction) to avoid duplicates
+				if (pc != cpu_trace_last_pc) {
+					cpu_trace_last_pc = pc;
+
+					// Disassemble with both opcode words for complete decoding
+					unsigned short opwords[2] = { opcode, sndopc };
+					const char* disasm = disassemble_68k_ext(pc, opwords, 2);
+
+					// Output to debug console
+					console.AddLog("%08X: %04X %04X  %s", pc, opcode, sndopc, disasm);
+
+					// Also write to trace file if open
+					if (cpu_trace_file) {
+						fprintf(cpu_trace_file, "%08X: %04X %04X  %s\n", pc, opcode, sndopc, disasm);
+						cpu_trace_count++;
+						if (cpu_trace_count >= cpu_trace_max) {
+							fprintf(stderr, "CPU trace limit reached (%d instructions)\n", cpu_trace_max);
+							fclose(cpu_trace_file);
+							cpu_trace_file = nullptr;
+						}
 					}
 				}
 			}

@@ -6221,9 +6221,9 @@ module TG68KdotC_Kernel
   wire setaddrvalue;
   wire addrvalue;
   wire [15:0] opcode;
-  wire [15:0] exe_opcode;
-  wire [15:0] sndopc;
-  wire [31:0] exe_pc;
+  wire [15:0] exe_opcode /* verilator public_flat */;
+  wire [15:0] sndopc /* verilator public_flat */;
+  wire [31:0] exe_pc /* verilator public_flat */;
   wire [31:0] last_opc_pc;
   wire [15:0] last_opc_read;
   wire [31:0] reg_qa;
