@@ -728,8 +728,6 @@ dataController_top #(SCSI_DEVS) dc0
 	.memoryDataOut(memoryDataOut),
 	.memoryDataIn(sdram_do),
 	.memoryLatch(memoryLatch),
-	.maclc_mode(maclc_mode),
-	.selectAriel(selectAriel),
 	.selectAriel(selectAriel),
 	.ariel_data_in(ariel_reg_dout),
 	
