@@ -83,6 +83,10 @@ module addrDecoder(
 			4'b0110:
 				if (memoryOverlayOn)
 					selectRAM = !_cpuAS;
+			4'b1010: begin // A0 0000 - AF FFFF
+				if (configROMSize[1]) // Mac LC ROM
+					selectROM = !_cpuAS;
+			end
 			4'b10?1:
 				selectSCC = !_cpuAS;
 			4'b1100: // C0 000 - CF FFF
