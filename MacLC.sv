@@ -385,7 +385,7 @@ assign AUDIO_MIX = 0;
 // set the real-world inputs to sane defaults
 localparam 	  configROMSize = 1'b1;  // 128K ROM
 
-wire [1:0] configRAMSize = status_mem?2'b11; // 1MB/4MB
+wire [1:0] configRAMSize = 2'b11; // 4MB
 
 //
 // Serial Ports
