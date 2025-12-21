@@ -11,7 +11,10 @@ module videoShifterLC(
 	input [23:0] clutData,
 
 	input videoBusControl, // Indicates valid data on bus (needs latching)
-	input memoryLatch // Latch strobe
+	input memoryLatch, // Latch strobe
+
+	// Synchronization
+	input vsync // From videoTimerLC (Vid Domain) - used to reset pointers
 );
 
 	// Palette Memory: 256 entries x 24 bits
@@ -35,14 +38,28 @@ module videoShifterLC(
 	reg [9:0] wr_ptr = 0;
 	reg [9:0] rd_ptr = 0;
 
-	// Write Logic (Sys Domain)
-	// Reset wr_ptr on some signal?
-	// We don't have a frame sync in Sys domain easily available from videoTimerLC other than vsync_start logic there.
-	// But simply treating it as a circular buffer is safest if bandwidth is sufficient.
-	// The read pointer chases the write pointer.
-	// Write Logic:
+	// Reset pointers on VSync.
+	// Cross VSync to System Domain for wr_ptr reset.
+	reg vsync_sys_1, vsync_sys_2;
 	always @(posedge clk_sys) begin
-		if (videoBusControl && memoryLatch) begin
+		vsync_sys_1 <= vsync; // vsync is active low coming from videoTimerLC output?
+		// videoTimerLC outputs `vsync` (reg) which is active low.
+		// Wait, `videoTimerLC` logic: `vsync <= ~v_sync_active`.
+		// So `vsync` is low during sync pulse.
+		// We want to trigger on edge of sync pulse.
+		// Let's look for falling edge of `vsync` (start of sync pulse) or rising edge (end).
+		// Start of frame is usually start of VSync pulse.
+
+		vsync_sys_2 <= vsync_sys_1;
+	end
+
+	wire vsync_sys_edge = !vsync_sys_1 && vsync_sys_2; // Falling edge (active low pulse start)
+
+	// Write Logic (Sys Domain)
+	always @(posedge clk_sys) begin
+		if (vsync_sys_edge) begin
+			wr_ptr <= 0;
+		end else if (videoBusControl && memoryLatch) begin
 			line_buffer[wr_ptr] <= dataIn;
 			wr_ptr <= wr_ptr + 1'b1;
 		end
@@ -53,20 +70,25 @@ module videoShifterLC(
 
 	reg [15:0] current_word;
 
-	// We assume initial sync is close enough or it self-corrects?
-	// If write is faster, wr_ptr laps rd_ptr.
-	// With 1024 depth, and 320 words per line used.
-	// It's effectively a large FIFO.
+	// Detect VSync edge in Vid Domain
+	reg vsync_vid_1;
+	always @(posedge clk) vsync_vid_1 <= vsync;
+	wire vsync_vid_edge = !vsync && vsync_vid_1; // Falling edge
 
 	always @(posedge clk) begin
-		// Pre-fetch word
-		current_word <= line_buffer[rd_ptr];
-
-		if (pixel_sel == 1) begin
+		if (vsync_vid_edge) begin
+			rd_ptr <= 0;
 			pixel_sel <= 0;
-			rd_ptr <= rd_ptr + 1'b1;
 		end else begin
-			pixel_sel <= 1;
+			// Pre-fetch word
+			current_word <= line_buffer[rd_ptr];
+
+			if (pixel_sel == 1) begin
+				pixel_sel <= 0;
+				rd_ptr <= rd_ptr + 1'b1;
+			end else begin
+				pixel_sel <= 1;
+			end
 		end
 	end
 

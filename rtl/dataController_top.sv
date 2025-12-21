@@ -349,6 +349,17 @@ module dataController_top(
 	reg  [7:0] kbd_to_mac;
 	reg kbd_data_valid;
 
+	// Declarations moved from bottom for correct scope resolution
+	wire [7:0] kbd_in_data;
+	wire kbd_in_strobe;
+	reg  [7:0] kbd_out_data;
+	reg  kbd_out_strobe;
+
+	reg  [7:0] adb_din;
+	reg        adb_din_strobe;
+	wire [7:0] adb_dout;
+	wire       adb_dout_strobe;
+
 	// Keyboard transmitter-receiver
 	always @(posedge clk32) begin
 		if (clk8_en_p) begin
@@ -517,6 +528,48 @@ module dataController_top(
 		.clutWrite(selectCLUT && !_cpuRW),
 		.clutAddr(cpuAddrLo),
 		.clutData({cpuDataIn[15:8], cpuDataIn[15:8], cpuDataIn[15:8]})
+	);
+
+	// Mouse
+	ps2_mouse mouse(
+		.clk(clk32),
+		.ce(clk8_en_p),
+		.reset(~_cpuReset),
+		.ps2_mouse(ps2_mouse),
+		.x1(mouseX1),
+		.y1(mouseY1),
+		.x2(mouseX2),
+		.y2(mouseY2),
+		.button(mouseButton));
+
+	// Keyboard
+	ps2_kbd kbd(
+		.clk(clk32),
+		.ce(clk8_en_p),
+		.reset(~_cpuReset),
+		.ps2_key(ps2_key),
+		.data_out(kbd_out_data),              // data from mac
+		.strobe_out(kbd_out_strobe),
+		.data_in(kbd_in_data),         // data to mac
+		.strobe_in(kbd_in_strobe),
+		.capslock(capslock)
+		);
+
+	adb adb(
+		.clk(clk32),
+		.clk_en(clk8_en_p),
+		.reset(~_cpuReset),
+		.st({ADBST1, ADBST0}),
+		._int(_ADBint),
+		.viaBusy(kbd_transmitting || kbd_receiving),
+		.listen(ADBListen),
+		.adb_din(adb_din),
+		.adb_din_strobe(adb_din_strobe),
+		.adb_dout(adb_dout),
+		.adb_dout_strobe(adb_dout_strobe),
+
+		.ps2_mouse(ps2_mouse),
+		.ps2_key(ps2_key)
 	);
 
 endmodule

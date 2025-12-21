@@ -153,17 +153,18 @@ module addrController_top(
 
 	wire extraRamRead = sndReadAck;
 
-	// Legacy RAM OE logic
-	// For LC, if videoBusControl is active, we read RAM.
-	// videoControlActive (_hblank) is for legacy blanking.
-	// We need to ensure we read RAM for LC video even if _hblank (legacy) logic says otherwise?
-	// But `_hblank` comes from `videoTimer` output.
-	// We muxed `_hblank` at the end.
-	// So `videoControlActive` uses the active `_hblank`.
+	// RAM Output Enable
+	// Enable if:
+	// 1. Video Cycle (LC: always valid fetch, Legacy: if not blanked)
+	// 2. Extra Cycle (Sound)
+	// 3. CPU Cycle (Select RAM or Select VRAM) and Read
+	assign _ramOE = ~((videoBusControl && (isLC || videoControlActive)) || (extraRamRead) ||
+						(cpuBusControl && (selectRAM || selectVRAM) && _cpuRW));
 
-	assign _ramOE = ~((videoBusControl && videoControlActive) || (extraRamRead) ||
-						(cpuBusControl && selectRAM && _cpuRW));
-	assign _ramWE = ~(cpuBusControl && selectRAM && !_cpuRW);
+	// RAM Write Enable
+	// Enable if:
+	// 1. CPU Cycle (Select RAM or Select VRAM) and Write
+	assign _ramWE = ~(cpuBusControl && (selectRAM || selectVRAM) && !_cpuRW);
 
 	assign _memoryUDS = cpuBusControl ? _cpuUDS : 1'b0;
 	assign _memoryLDS = cpuBusControl ? _cpuLDS : 1'b0;

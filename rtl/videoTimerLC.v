@@ -53,13 +53,8 @@ module videoTimerLC(
 	// Address Generation (System Clock Domain)
 	// We only fetch active video data.
 	// Reset address at VSync.
-	// Only increment if we are in an active line?
-	// But `h_count` is in `clk` domain.
-	// We can approximate or just fetch continuously (wrapping).
-	// Since `videoShifterLC` has a large buffer, continuous fetch is okay as long as we don't fetch wildly out of sync.
-	// But to save bandwidth or power? No, bus slots are fixed.
-	// But we must reset `addr` correctly.
 
+	// Cross VSync to System Domain
 	reg vsync_sys_1, vsync_sys_2;
 	always @(posedge clk_sys) begin
 		vsync_sys_1 <= v_sync_active; // Active high internal
@@ -69,29 +64,6 @@ module videoTimerLC(
 	wire vsync_start = vsync_sys_1 && !vsync_sys_2;
 
 	reg [21:0] addr;
-
-	// We also need to pause address increment during blanking to avoid fetching garbage into FIFO?
-	// If we fetch garbage, FIFO fills with garbage. Shifter reads garbage during blanking?
-	// Shifter output is gated by `_hblank` in Top Level (`VGA_DE`).
-	// So garbage pixels during blanking are fine.
-	// But we must align the *valid* pixels to the start of the line.
-	// If FIFO gets garbage, `rd_ptr` might read garbage when active video starts.
-	// Ideally, we reset FIFO pointers or Sync.
-	// Or we stop fetching during blanking.
-	// We can bring `h_active` signal to sys domain?
-	// Or simpler:
-	// We fetch continuously. Address wraps around VRAM size?
-	// Address size is 22 bits.
-	// 640x480 = 307KB. 256KB VRAM?
-	// If VRAM is 256KB, address wraps.
-	// Let's implement active line logic if possible.
-	// But given constraints, free running fetch + VSync reset is a reasonable start.
-	// The Shifter will just consume what is in the buffer.
-	// If `wr_ptr` and `rd_ptr` drift, we might shift the image.
-	// But with 1.3x bandwidth, buffer stays full.
-	// We need to ensure we don't read "old" data.
-	// With circular buffer, we overwrite old data.
-	// So it should be fine.
 
 	always @(posedge clk_sys) begin
 		if (vsync_start) begin
