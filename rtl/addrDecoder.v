@@ -63,9 +63,15 @@ module addrDecoder(
 
 		if (configROMSize[1]) begin // Mac LC Mode (V8 Chip Map)
 			casez (address[23:20])
-				4'b0000, 4'b0001, 4'b0010, 4'b0011,
+				4'b0000: begin // 0x000000 - 0x0FFFFF
+					if (memoryOverlayOn)
+						selectROM = !_cpuAS; // Mirror ROM at 0x0 at boot
+					else
+						selectRAM = !_cpuAS;
+				end
+				4'b0001, 4'b0010, 4'b0011,
 				4'b0100, 4'b0101, 4'b0110, 4'b0111,
-				4'b1000, 4'b1001: begin // 0x000000 - 0x9FFFFF
+				4'b1000, 4'b1001: begin // 0x100000 - 0x9FFFFF
 					selectRAM = !_cpuAS;
 				end
 				4'b1010: begin // 0xA00000 - 0xAFFFFF

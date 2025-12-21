@@ -192,7 +192,7 @@ module addrController_top(
 	                     rom_access && configROMSize[1] == 1'b0 ? 1'b0 : // force A18 to 0 for 64K/128K/256K ROM access (Legacy). Allow for LC (configROMSize=2).
 									addrMux[18];
 	assign macAddr[19] = ram_access && configRAMSize[1] == 1'b0 ? 1'b0 : // force A19 to 0 for 128K or 512K RAM access
-									rom_access ? 1'b0 : 								   // force A19 to 0 for ROM access
+									rom_access && configROMSize[1] == 1'b0 ? 1'b0 : // force A19 to 0 for Legacy ROM access. Allow for LC.
 									addrMux[19];
 	assign macAddr[20] = ram_access && configRAMSize != 2'b11 ? 1'b0 :   // force A20 to 0 for all but 4MB RAM access
 									rom_access ? 1'b0 : 								   // force A20 to 0 for ROM access

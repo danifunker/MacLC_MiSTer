@@ -836,7 +836,7 @@ wire download_cycle = dio_download && dioBusControl;
 wire vram_access = (selectVRAM) || (videoBusControl && status_mod);
 
 wire [24:0] sdram_addr = download_cycle ? {4'b0001, dio_a[20:0] } :
-						 vram_access    ? {1'b1, 6'b000000, memoryAddr[19], memoryAddr[17:1]} : // Offset 16MB (0x800000 words). 512KB VRAM.
+						 vram_access    ? (status_mod ? {2'b01, 5'b00000, memoryAddr[19], memoryAddr[17:1]} : {1'b0, 7'b0010000, memoryAddr[17:1]}) : // LC: 16MB Offset (0x800000). Legacy: 4MB Offset (0x400000).
                          ~_romOE        ? (selectVideoROM ? {4'b0001, 1'b0, 1'b1, 1'b1, 4'b0000, 1'b1, memoryAddr[13:1]} : {4'b0001, 1'b0, status_mod, 1'b0, memoryAddr[18:1]}) :
                                           {3'b000, (dskReadAckInt || dskReadAckExt), memoryAddr[21:1]};
 

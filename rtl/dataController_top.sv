@@ -532,7 +532,7 @@ module dataController_top(
 		.vsync(vsync), // Sync reset
 		._hblank(_hblank), // HBlank gating
 		// CLUT Write
-		.clutWrite(selectCLUT && !_cpuRW),
+		.clutWrite((selectCLUT || selectRAMDAC) && !_cpuRW),
 		.clutAddr(cpuAddrLo),
 		.clutData({cpuDataIn[15:8], cpuDataIn[15:8], cpuDataIn[15:8]}), // Fallback
 		.clutByteSel(cpuAddrLo[1:0]),
