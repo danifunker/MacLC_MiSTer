@@ -499,7 +499,7 @@ module emu
 		.reset      ( !_cpuReset ),
 		.phi1       ( cpu_en_p  ),
 		.phi2       ( cpu_en_n  ),
-		.cpu        ( {status_cpu[0] ? 2'b11 : 2'b00} ),
+		.cpu        ( status_cpu[0] ? 2'b10 : 2'b00 ),
 
 		.dtack_n    ( _cpuDTACK  ),
 		.rw_n       ( tg68_rw    ),
@@ -816,11 +816,11 @@ module emu
 		reg old_cyc = 0;
 		if(ioctl_write) begin
             dio_data <= {ioctl_data[7:0], ioctl_data[15:8]};
-            if (dio_index[1:0]) 
-                dio_a <= {dio_index[1:0], dio_addr[18:0]}; // Secondary images
-            else
-                dio_a <= {3'b000, dio_addr[17:0]}; // Main ROM -> Bank 0
-                
+            dio_a <= dio_index[1:0] ? {dio_index[1:0], dio_addr[18:0]} : 
+             status_mod ?
+             {3'b001, dio_addr[17:0]} :  // LC: Set Bit 18 HIGH (21-bit result: 0_01_addr)
+                          {dio_index[6], dio_addr[17:0]};
+            // Plus: 128KB ROM
             ioctl_wait <= 1;
         end
 
@@ -836,7 +836,7 @@ module emu
 
 	wire [24:0] sdram_addr = download_cycle ? {4'b0001, dio_a[20:0] } : 
 							 ~_romOE        ?
-							 {4'b0001, 2'b00, 1'b0, memoryAddr[18:1]} :
+							 {4'b0001, 2'b00, status_mod, memoryAddr[18:1]} :
 											  {3'b000, (dskReadAckInt || dskReadAckExt), memoryAddr[21:1]};
 	wire [15:0] sdram_din  = download_cycle ? dio_data              : memoryDataOut;
 	wire  [1:0] sdram_ds   = download_cycle ? 2'b11                 : { !_memoryUDS, !_memoryLDS };
