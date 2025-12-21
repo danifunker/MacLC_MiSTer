@@ -818,7 +818,7 @@ module emu
             dio_data <= {ioctl_data[7:0], ioctl_data[15:8]};
             dio_a <= dio_index[1:0] ? {dio_index[1:0], dio_addr[18:0]} : 
              status_mod ?
-             {1'b1, dio_addr[18:0]} :  // LC: Force Bit 18 HIGH to match Read Logic
+             {3'b001, dio_addr[17:0]} :  // LC: Set Bit 18 HIGH (21-bit result: 0_01_addr)
                           {dio_index[6], dio_addr[17:0]};
             // Plus: 128KB ROM
             ioctl_wait <= 1;
