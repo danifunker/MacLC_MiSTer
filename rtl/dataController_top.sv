@@ -1,13 +1,14 @@
 module dataController_top(
 	// clocks:
-	input clk32,					// 32.5 MHz pixel clock
+	input clk32,					// 32.5 MHz pixel clock (System clock in MacLC context?)
+	input clk_vid_lc,          // 25.175 MHz pixel clock
 	input clk8_en_p,
 	input clk8_en_n,
 	input E_rising,
 	input E_falling,
-	
+
 	// system control:
-	input machineType, // 0 - Mac Plus, 1 - Mac SE
+	input machineType, // 0 - Mac Plus, 1 - Mac SE/LC
 	input _systemReset,
 
 	// 68000 CPU control:
@@ -19,36 +20,44 @@ module dataController_top(
 	input [3:0] cpuAddrRegHi, // A12-A9
 	input [2:0] cpuAddrRegMid, // A6-A4
 	input [1:0] cpuAddrRegLo, // A2-A1
+	input [7:0] cpuAddrLo, // A8-A1 (Byte address bits usually A7-A0 but bus is 16-bit word address?)
+	// 68000 address bus A23-A1.
+	// cpuAddrLo passed is cpuAddr[8:1] (A8-A1).
 	input _cpuUDS,
-	input _cpuLDS,	
+	input _cpuLDS,
 	input _cpuRW,
 	output [15:0] cpuDataOut,
-	
+
 	// peripherals:
 	input selectSCSI,
 	input selectSCC,
 	input selectIWM,
 	input selectVIA,
 	input selectSEOverlay,
+
+	// New LC Selects
+	input selectPseudoVIA,
+	input selectCLUT,
+
 	input _cpuVMA,
-	
+
 	// RAM/ROM:
-	input videoBusControl,	
-	input cpuBusControl,	
+	input videoBusControl,
+	input cpuBusControl,
 	input [15:0] memoryDataIn,
 	output [15:0] memoryDataOut,
 	input memoryLatch,
-	
+
 	// keyboard:
 	input [10:0] ps2_key,
-	output capslock, 
-	 
+	output capslock,
+
 	// mouse:
 	input [24:0] ps2_mouse,
-	
+
 	// serial:
-	input serialIn, 
-	output serialOut,	
+	input serialIn,
+	output serialOut,
 	input serialCTS,
 	output serialRTS,
 
@@ -56,7 +65,8 @@ module dataController_top(
 	input [32:0] timestamp,
 
 	// video:
-	output pixelOut,	
+	output pixelOut,
+	output [23:0] pixelOutRGB, // New 24-bit output
 	input _hblank,
 	input _vblank,
 	input loadPixels,
@@ -66,7 +76,7 @@ module dataController_top(
 	output [10:0] audioOut,  // 8 bit audio + 3 bit volume
 	output snd_alt,
 	input loadSound,
-	
+
 	// misc
 	output memoryOverlayOn,
 	input [1:0] insertDisk,
@@ -92,11 +102,11 @@ module dataController_top(
 	output           [15:0] sd_buff_din[SCSI_DEVS],
 	input                   sd_buff_wr
 );
-	
+
 	parameter SCSI_DEVS = 2;
-	
+
 	// add binary volume levels according to volume setting
-	assign audioOut = 
+	assign audioOut =
 		(snd_vol[0]?audio_x1:11'd0) +
 		(snd_vol[1]?audio_x2:11'd0) +
 		(snd_vol[2]?audio_x4:11'd0);
@@ -105,7 +115,7 @@ module dataController_top(
 	wire [10:0] audio_x1 = { {3{audio_latch[7]}}, audio_latch };
 	wire [10:0] audio_x2 = { {2{audio_latch[7]}}, audio_latch, 1'b0 };
 	wire [10:0] audio_x4 = {    audio_latch[7]  , audio_latch, 2'b00};
-	
+
 	reg loadSoundD;
 	always @(posedge clk32)
 		if (clk8_en_n) loadSoundD <= loadSound;
@@ -114,11 +124,11 @@ module dataController_top(
 	reg [7:0] audio_latch;
 	always @(posedge clk32) begin
 		if(clk8_en_p && loadSoundD) begin
-			if(snd_ena) audio_latch <= 8'h7f; // when disabled, drive output high
+			if(snd_ena) audio_latch <= 8'h7f; // when disabled, drive output high
 			else  	 	audio_latch <= memoryDataIn[15:8] - 8'd128;
 		end
 	end
-	
+
 	// CPU reset generation
 	// For initial CPU reset, RESET and HALT must be asserted for at least 100ms = 800,000 clocks of clk8
 	reg [19:0] resetDelay; // 20 bits = 1 million
@@ -128,7 +138,7 @@ module dataController_top(
 		// force a reset when the FPGA configuration is completed
 		resetDelay <= 20'hFFFFF;
 	end
-	
+
 	always @(posedge clk32 or negedge _systemReset) begin
 		if (_systemReset == 1'b0) begin
 			resetDelay <= 20'hFFFFF;
@@ -138,7 +148,7 @@ module dataController_top(
 		end
 	end
 	assign _cpuReset = isResetting ? 1'b0 : 1'b1;
-	
+
 	// interconnects
 	wire SEL;
 	wire _viaIrq, _sccIrq, sccWReq;
@@ -147,13 +157,26 @@ module dataController_top(
 	wire [7:0] sccDataOut;
 	wire [7:0] scsiDataOut;
 	wire mouseX1, mouseX2, mouseY1, mouseY2, mouseButton;
-	
+
 	// interrupt control
-	assign _cpuIPL = 
+	// Mac LC uses RBV (PseudoVIA) interrupts?
+	// For now, assume mapped to similar IPL or combined.
+	// RBV usually handles VBL and Slot IRQs.
+	// We need to wire up PseudoVIA IRQ.
+	wire _pseudoViaIrq;
+
+	// If machineType is LC, we might use _pseudoViaIrq?
+	// But 68k expects specific IPL levels.
+	// VIA/RBV usually triggers IPL 1 or 2?
+	// Let's wire it up.
+
+	assign _cpuIPL =
 		!_viaIrq?3'b110:
+		!_pseudoViaIrq?3'b101: // Just a guess for priority
 		!_sccIrq?3'b101:
 		3'b111;
-		
+
+	wire [7:0] pseudoViaDataOut;
 
 	reg [15:0] cpu_data;
 	always @(posedge clk32) if (cpuBusControl && memoryLatch) cpu_data <= memoryDataIn;
@@ -161,10 +184,11 @@ module dataController_top(
 	// CPU-side data output mux
 	assign cpuDataOut = selectIWM ? iwmDataOut :
 							  selectVIA ? viaDataOut :
+							  selectPseudoVIA ? {pseudoViaDataOut, 8'h00} : // PseudoVIA 8-bit?
 							  selectSCC ? { sccDataOut, 8'hEF } :
 							  selectSCSI ? { scsiDataOut, 8'hEF } :
 							  (cpuBusControl && memoryLatch) ? memoryDataIn : cpu_data;
-	
+
 	// Memory-side
 	assign memoryDataOut = cpuDataIn;
 
@@ -282,6 +306,19 @@ module dataController_top(
 		.irq        (viaIrq)
 	);
 
+	// PseudoVIA (Mac LC)
+	pseudovia pvia(
+		.clk(clk32),
+		.reset(!_cpuReset),
+		._cs(!selectPseudoVIA), // Active low CS
+		._rw(_cpuRW),
+		.addr(cpuAddrRegHi), // Use similar addressing bits
+		.data_in(cpuDataIn[15:8]), // Upper byte?
+		.data_out(pseudoViaDataOut),
+		._irq(_pseudoViaIrq),
+		.vbl_in(~_vblank) // Pass VBL (active high)
+	);
+
 	wire _rtccs   = ~via_pb_oe[2] | via_pb_o[2];
 	wire rtcck    = ~via_pb_oe[1] | via_pb_o[1];
 	wire rtcdat_i = ~via_pb_oe[0] | via_pb_o[0];
@@ -322,7 +359,7 @@ module dataController_top(
 				if (kbdclk_count == (machineType ? 8'd80 : 12'd1300)) begin // ~165usec - Mac Plus / faster - ADB
 					kbdclk <= ~kbdclk;
 					kbdclk_count <= 0;
-					if (kbdclk) begin 
+					if (kbdclk) begin
 						// shift before the falling edge
 						if (kbd_transmitting) kbd_out_data <= { kbd_out_data[6:0], kbddat_i };
 						if (kbd_receiving) kbddata_o <= kbd_to_mac[7-kbd_bitcnt];
@@ -380,7 +417,7 @@ module dataController_top(
 
 			// The last bit of the command leaves the keyboard data line low; the
 			// Macintosh then indicates it's ready to receive the keyboard's response by
-			// setting the data line high. 
+			// setting the data line high.
 			if (kbd_wait_receiving && kbddat_i && kbd_data_valid) begin
 				kbd_wait_receiving <= 0;
 				kbd_receiving <= 1;
@@ -460,65 +497,28 @@ module dataController_top(
 		.cts(serialCTS),
 		.rts(serialRTS)
 		);
-				
-	// Video
+
+	// Video (Legacy)
 	videoShifter vs(
-		.clk32(clk32), 
+		.clk32(clk32),
 		.memoryLatch(memoryLatch),
 		.dataIn(memoryDataIn),
-		.loadPixels(loadPixels), 
+		.loadPixels(loadPixels),
 		.pixelOut(pixelOut));
-	
-	// Mouse
-	ps2_mouse mouse(
-		.clk(clk32),
-		.ce(clk8_en_p),
-		.reset(~_cpuReset),
-		.ps2_mouse(ps2_mouse),
-		.x1(mouseX1),
-		.y1(mouseY1),
-		.x2(mouseX2),
-		.y2(mouseY2),
-		.button(mouseButton));
 
-	wire [7:0] kbd_in_data;
-	wire kbd_in_strobe;
-	reg  [7:0] kbd_out_data;
-	reg  kbd_out_strobe;
-
-	// Keyboard
-	ps2_kbd kbd(
-		.clk(clk32),
-		.ce(clk8_en_p),
-		.reset(~_cpuReset),
-		.ps2_key(ps2_key),
-		.data_out(kbd_out_data),              // data from mac
-		.strobe_out(kbd_out_strobe),
-		.data_in(kbd_in_data),         // data to mac
-		.strobe_in(kbd_in_strobe),
-		.capslock(capslock)
-		);
-		
-	reg  [7:0] adb_din;
-	reg        adb_din_strobe;
-	wire [7:0] adb_dout;
-	wire       adb_dout_strobe;
-
-	adb adb(
-		.clk(clk32),
-		.clk_en(clk8_en_p),
-		.reset(~_cpuReset),
-		.st({ADBST1, ADBST0}),
-		._int(_ADBint),
-		.viaBusy(kbd_transmitting || kbd_receiving),
-		.listen(ADBListen),
-		.adb_din(adb_din),
-		.adb_din_strobe(adb_din_strobe),
-		.adb_dout(adb_dout),
-		.adb_dout_strobe(adb_dout_strobe),
-
-		.ps2_mouse(ps2_mouse),
-		.ps2_key(ps2_key)
+	// Video (LC)
+	videoShifterLC vs_lc(
+		.clk(clk_vid_lc),
+		.clk_sys(clk32), // Connect system clock for write port
+		.videoBusControl(videoBusControl),
+		.memoryLatch(memoryLatch),
+		.dataIn(memoryDataIn),
+		.loadPixels(loadPixels),
+		.pixelOutRGB(pixelOutRGB),
+		// CLUT Write
+		.clutWrite(selectCLUT && !_cpuRW),
+		.clutAddr(cpuAddrLo),
+		.clutData({cpuDataIn[15:8], cpuDataIn[15:8], cpuDataIn[15:8]})
 	);
 
 endmodule

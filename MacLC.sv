@@ -179,7 +179,7 @@ module emu
 assign ADC_BUS  = 'Z;
 assign USER_OUT = '1;
 
-assign {DDRAM_CLK, DDRAM_BURSTCNT, DDRAM_ADDR, DDRAM_DIN, DDRAM_BE, DDRAM_RD, DDRAM_WE} = 0; 
+assign {DDRAM_CLK, DDRAM_BURSTCNT, DDRAM_ADDR, DDRAM_DIN, DDRAM_BE, DDRAM_RD, DDRAM_WE} = 0;
 assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
 
 assign LED_USER  = dio_download || (disk_act ^ |diskMotor);
@@ -206,7 +206,7 @@ video_freak video_freak
 	.SCALE(status[12:11])
 );
 
-`include "build_id.v" 
+`include "build_id.v"
 localparam CONF_STR = {
 	"MACLC;UART115200;",
 	"-;",
@@ -227,7 +227,7 @@ localparam CONF_STR = {
 	//"OA,Serial,Off,On;",
 	//"-;",
 	"R0,Reset & Apply CPU+Memory;",
-	"v,0;", // [optional] config version 0-99. 
+	"v,0;", // [optional] config version 0-99.
 	        // If CONF_STR options are changed in incompatible way, then change version number too,
 			// so all options will get default values on first start.
 	"V,v",`BUILD_DATE
@@ -235,14 +235,16 @@ localparam CONF_STR = {
 
 ////////////////////   CLOCKS   ///////////////////
 
-wire clk_sys, clk_mem;
+wire clk_sys_pll, clk_mem;
+wire clk_vid_lc; // New 25.175 MHz clock
 wire pll_locked;
 
 pll pll
 (
 	.refclk(CLK_50M),
 	.outclk_0(clk_mem),
-	.outclk_1(clk_sys),
+	.outclk_1(clk_sys_pll),
+	.outclk_2(clk_vid_lc),
 	.locked(pll_locked)
 );
 
@@ -251,6 +253,12 @@ reg [1:0] status_cpu = 2'b10;
 reg       status_mod;
 reg       n_reset = 0;
 wire      status_turbo = 1'b1;
+
+// Use 65 MHz clock for system if LC model is selected (status_mod=1)
+// This is to allow sufficient video bandwidth (32.5 MB/s)
+// If Plus model (status_mod=0), use standard 32.5 MHz.
+wire clk_sys = status_mod ? clk_mem : clk_sys_pll;
+
 always @(posedge clk_sys) begin
 	reg [15:0] rst_cnt;
 
@@ -319,7 +327,7 @@ hps_io #(.CONF_STR(CONF_STR), .VDNUM(SCSI_DEVS), .WIDE(1)) hps_io
 	.sd_buff_dout(sd_buff_dout),
 	.sd_buff_din(sd_buff_din),
 	.sd_buff_wr(sd_buff_wr),
-	
+
 	.img_mounted(img_mounted),
 	.img_size(img_size),
 
@@ -339,12 +347,16 @@ hps_io #(.CONF_STR(CONF_STR), .VDNUM(SCSI_DEVS), .WIDE(1)) hps_io
 	.ps2_mouse(ps2_mouse)
 );
 
-assign CLK_VIDEO = clk_sys;
+// Switch video clock
+// If LC model (status_mod=1), use clk_vid_lc for video output signals
+assign CLK_VIDEO = status_mod ? clk_vid_lc : clk_sys;
 assign CE_PIXEL  = 1;
 
-assign VGA_R  = {8{pixelOut}};
-assign VGA_G  = {8{pixelOut}};
-assign VGA_B  = {8{pixelOut}};
+wire [23:0] pixelOutRGB;
+
+assign VGA_R  = status_mod ? pixelOutRGB[23:16] : {8{pixelOut}};
+assign VGA_G  = status_mod ? pixelOutRGB[15:8] : {8{pixelOut}};
+assign VGA_B  = status_mod ? pixelOutRGB[7:0] : {8{pixelOut}};
 assign VGA_DE = _vblank & _hblank;
 assign VGA_VS = vsync;
 assign VGA_HS = hsync;
@@ -374,7 +386,7 @@ assign AUDIO_MIX = 0;
 localparam 	  configROMSize = 1'b1;  // 128K ROM
 
 wire [1:0] configRAMSize = status_mem?2'b11; // 1MB/4MB
-			  
+
 //
 // Serial Ports
 //
@@ -436,6 +448,7 @@ wire memoryLatch;
 // peripherals
 wire vid_alt, loadPixels, pixelOut, _hblank, _vblank, hsync, vsync;
 wire memoryOverlayOn, selectSCSI, selectSCC, selectIWM, selectVIA, selectRAM, selectROM, selectSEOverlay, selectVideoROM;
+wire selectPseudoVIA, selectCLUT, selectVRAM; // New selects
 wire [15:0] dataControllerDataOut;
 
 // audio
@@ -582,29 +595,30 @@ tg68k tg68k (
 addrController_top ac0
 (
 	.clk(clk_sys),
+	.clk_vid_lc(clk_vid_lc), // Connect new clock
 	.clk8(clk8),
 	.clk8_en_p(clk8_en_p),
 	.clk8_en_n(clk8_en_n),
 	.clk16_en_p(clk16_en_p),
 	.clk16_en_n(clk16_en_n),
-	.cpuAddr(cpuAddr), 
+	.cpuAddr(cpuAddr),
 	._cpuUDS(_cpuUDS),
 	._cpuLDS(_cpuLDS),
 	._cpuRW(_cpuRW),
 	._cpuAS(_cpuAS),
 	.turbo(status_turbo),
 	.configROMSize({status_mod,~status_mod}),
-	.configRAMSize(configRAMSize), 
+	.configRAMSize(configRAMSize),
 	.memoryAddr(memoryAddr),
 	.memoryLatch(memoryLatch),
 	._memoryUDS(_memoryUDS),
 	._memoryLDS(_memoryLDS),
-	._romOE(_romOE), 
-	._ramOE(_ramOE), 
+	._romOE(_romOE),
+	._ramOE(_ramOE),
 	._ramWE(_ramWE),
-	.videoBusControl(videoBusControl),	
-	.dioBusControl(dioBusControl),	
-	.cpuBusControl(cpuBusControl),	
+	.videoBusControl(videoBusControl),
+	.dioBusControl(dioBusControl),
+	.cpuBusControl(cpuBusControl),
 	.selectSCSI(selectSCSI),
 	.selectSCC(selectSCC),
 	.selectIWM(selectIWM),
@@ -613,7 +627,10 @@ addrController_top ac0
 	.selectROM(selectROM),
 	.selectSEOverlay(selectSEOverlay),
 	.selectVideoROM(selectVideoROM),
-	.hsync(hsync), 
+	.selectPseudoVIA(selectPseudoVIA), // Connect new selects
+	.selectCLUT(selectCLUT),
+	.selectVRAM(selectVRAM),
+	.hsync(hsync),
 	.vsync(vsync),
 	._hblank(_hblank),
 	._vblank(_vblank),
@@ -635,29 +652,33 @@ wire [1:0] diskMotor, diskAct;
 
 dataController_top #(SCSI_DEVS) dc0
 (
-	.clk32(clk_sys), 
+	.clk32(clk_sys),
+	.clk_vid_lc(clk_vid_lc), // Connect new clock
 	.clk8_en_p(clk8_en_p),
 	.clk8_en_n(clk8_en_n),
 	.E_rising(E_rising),
 	.E_falling(E_falling),
 	.machineType(status_mod),
 	._systemReset(n_reset),
-	._cpuReset(_cpuReset), 
+	._cpuReset(_cpuReset),
 	._cpuIPL(_cpuIPL),
-	._cpuUDS(_cpuUDS), 
-	._cpuLDS(_cpuLDS), 
-	._cpuRW(_cpuRW), 
+	._cpuUDS(_cpuUDS),
+	._cpuLDS(_cpuLDS),
+	._cpuRW(_cpuRW),
 	._cpuVMA(_cpuVMA),
 	.cpuDataIn(cpuDataOut),
-	.cpuDataOut(dataControllerDataOut), 	
+	.cpuDataOut(dataControllerDataOut),
 	.cpuAddrRegHi(cpuAddr[12:9]),
 	.cpuAddrRegMid(cpuAddr[6:4]),  // for SCSI
-	.cpuAddrRegLo(cpuAddr[2:1]),		
+	.cpuAddrRegLo(cpuAddr[2:1]),
+	.cpuAddrLo(cpuAddr[8:1]), // A8-A1.
 	.selectSCSI(selectSCSI),
 	.selectSCC(selectSCC),
 	.selectIWM(selectIWM),
 	.selectVIA(selectVIA),
 	.selectSEOverlay(selectSEOverlay),
+	.selectPseudoVIA(selectPseudoVIA), // Connect new selects
+	.selectCLUT(selectCLUT),
 	.cpuBusControl(cpuBusControl),
 	.videoBusControl(videoBusControl),
 	.memoryDataOut(memoryDataOut),
@@ -665,7 +686,7 @@ dataController_top #(SCSI_DEVS) dc0
 	.memoryLatch(memoryLatch),
 
 	// peripherals
-	.ps2_key(ps2_key), 
+	.ps2_key(ps2_key),
 	.capslock(capslock),
 	.ps2_mouse(ps2_mouse),
 	// serial uart
@@ -679,8 +700,9 @@ dataController_top #(SCSI_DEVS) dc0
 
 	// video
 	._hblank(_hblank),
-	._vblank(_vblank), 
+	._vblank(_vblank),
 	.pixelOut(pixelOut),
+	.pixelOutRGB(pixelOutRGB), // Connect 24-bit output
 	.loadPixels(loadPixels),
 	.vid_alt(vid_alt),
 
@@ -759,7 +781,7 @@ always @(posedge clk_sys) begin
 		dsk_int_ds <= 0;
 		dsk_int_ss <= 0;
 	end
-end	
+end
 
 always @(posedge clk_sys) begin
 	reg old_down;
@@ -776,14 +798,14 @@ always @(posedge clk_sys) begin
 	end
 end
 
-// disk images are being stored right after os rom at word offset 0x80000 and 0x100000 
+// disk images are being stored right after os rom at word offset 0x80000 and 0x100000
 reg [20:0] dio_a;
 reg [15:0] dio_data;
 reg        dio_write;
 
 always @(posedge clk_sys) begin
 	reg old_cyc = 0;
-	
+
 	if(ioctl_write) begin
 		dio_data <= {ioctl_data[7:0], ioctl_data[15:8]};
 		case(dio_index)
@@ -807,7 +829,10 @@ wire download_cycle = dio_download && dioBusControl;
 
 ////////////////////////// SDRAM /////////////////////////////////
 
-wire [24:0] sdram_addr = download_cycle ? {4'b0001, dio_a[20:0] } : 
+wire vram_access = (selectVRAM) || (videoBusControl && status_mod);
+
+wire [24:0] sdram_addr = download_cycle ? {4'b0001, dio_a[20:0] } :
+						 vram_access    ? {7'b0010000, memoryAddr[17:0]} : // Offset 0x400000 (after 4MB RAM). Correct width.
                          ~_romOE        ? (selectVideoROM ? {4'b0001, 1'b0, 1'b1, 1'b1, 4'b0000, 1'b1, memoryAddr[13:1]} : {4'b0001, 1'b0, status_mod, 1'b0, memoryAddr[18:1]}) :
                                           {3'b000, (dskReadAckInt || dskReadAckExt), memoryAddr[21:1]};
 

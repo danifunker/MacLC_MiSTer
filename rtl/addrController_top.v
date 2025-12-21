@@ -1,6 +1,7 @@
 module addrController_top(
 	// clocks:
 	input clk,
+	input clk_vid_lc, // New 25.175MHz clock
 	output clk8,						// 8.125 MHz CPU clock
 	output clk8_en_p,
 	output clk8_en_n,
@@ -40,6 +41,9 @@ module addrController_top(
 	output selectROM,
 	output selectSEOverlay,
 	output selectVideoROM,
+	output selectPseudoVIA,
+	output selectCLUT,
+	output selectVRAM,
 
 	// video:
 	output hsync,
@@ -134,19 +138,38 @@ module addrController_top(
 
 	// interconnects
 	wire [21:0] videoAddr;
+	wire [21:0] videoAddrLegacy;
+	wire [21:0] videoAddrLC;
+
+	// Mac LC Detection
+	// configROMSize: 0=64K, 1=128K, 2=256K.
+	// In MacLC.sv, status_mod=1 maps to configROMSize=2 (2'b10).
+	wire isLC = configROMSize[1];
 
 	// RAM/ROM control signals
-	wire videoControlActive = _hblank;
+	wire videoControlActive = _hblank; // For Legacy. LC uses its own blanking/control logic inside videoTimerLC?
 
 	assign _romOE = ~(cpuBusControl && (selectROM || selectVideoROM) && _cpuRW);
 
 	wire extraRamRead = sndReadAck;
+
+	// Legacy RAM OE logic
+	// For LC, if videoBusControl is active, we read RAM.
+	// videoControlActive (_hblank) is for legacy blanking.
+	// We need to ensure we read RAM for LC video even if _hblank (legacy) logic says otherwise?
+	// But `_hblank` comes from `videoTimer` output.
+	// We muxed `_hblank` at the end.
+	// So `videoControlActive` uses the active `_hblank`.
+
 	assign _ramOE = ~((videoBusControl && videoControlActive) || (extraRamRead) ||
 						(cpuBusControl && selectRAM && _cpuRW));
 	assign _ramWE = ~(cpuBusControl && selectRAM && !_cpuRW);
 
 	assign _memoryUDS = cpuBusControl ? _cpuUDS : 1'b0;
 	assign _memoryLDS = cpuBusControl ? _cpuLDS : 1'b0;
+
+	assign videoAddr = isLC ? videoAddrLC : videoAddrLegacy;
+
 	wire [21:0] addrMux = sndReadAck ? audioAddr : videoBusControl ? videoAddr : cpuAddr[21:0];
 	wire [21:0] macAddr;
 	assign macAddr[15:0] = addrMux[15:0];
@@ -187,17 +210,6 @@ module addrController_top(
 		dskReadAckExt ? dskReadAddrExt + 22'h300000:   // second dsk image at 3MB (0x180000 words offset)
 		macAddr;
 
-	// I need to correct memoryAddr offsets for Floppies.
-	// Previous: F1 (Index 1) -> 0x280000 (0x200000 + 0x080000 words). Offset 0x100000 bytes.
-	// AC has: dskReadAckInt ? dskReadAddrInt + 22'h100000. 0x100000 byte offset.
-	// Now F4 (Index 4) -> 0x300000 (0x200000 + 0x100000 words). Offset 0x200000 bytes.
-	// 0x200000 bytes is 22'h200000.
-
-	// Previous F2 (Index 2) -> 0x300000 (0x200000 + 0x100000 words). Offset 0x200000 bytes.
-	// AC has: dskReadAckExt ? dskReadAddrExt + 22'h200000.
-	// Now F5 (Index 5) -> 0x380000 (0x200000 + 0x180000 words). Offset 0x300000 bytes.
-	// 0x300000 bytes is 22'h300000.
-
 	// address decoding
 	addrDecoder ad(
 		.configROMSize(configROMSize),
@@ -211,7 +223,14 @@ module addrController_top(
 		.selectIWM(selectIWM),
 		.selectVIA(selectVIA),
 		.selectSEOverlay(selectSEOverlay),
-		.selectVideoROM(selectVideoROM));
+		.selectVideoROM(selectVideoROM),
+		.selectPseudoVIA(selectPseudoVIA),
+		.selectCLUT(selectCLUT),
+		.selectVRAM(selectVRAM)
+	);
+
+	wire hsync_legacy, vsync_legacy, hblank_legacy, vblank_legacy, loadPixels_legacy;
+	wire hsync_lc, vsync_lc, hblank_lc, vblank_lc, loadPixels_lc;
 
 	// video
 	videoTimer vt(
@@ -219,11 +238,31 @@ module addrController_top(
 		.clk_en(clk8_en_p),
 		.busCycle(busCycle),
 		.vid_alt(vid_alt),
-		.videoAddr(videoAddr),
-		.hsync(hsync),
-		.vsync(vsync),
-		._hblank(_hblank),
-		._vblank(_vblank),
-		.loadPixels(loadPixels));
+		.videoAddr(videoAddrLegacy),
+		.hsync(hsync_legacy),
+		.vsync(vsync_legacy),
+		._hblank(hblank_legacy),
+		._vblank(vblank_legacy),
+		.loadPixels(loadPixels_legacy));
+
+	videoTimerLC vt_lc(
+		.clk(clk_vid_lc),
+		.clk_sys(clk),
+		.busCycle(busCycle),
+		.videoBusControl(videoBusControl),
+		.videoAddr(videoAddrLC),
+		.hsync(hsync_lc),
+		.vsync(vsync_lc),
+		._hblank(hblank_lc),
+		._vblank(vblank_lc),
+		.loadPixels(loadPixels_lc)
+	);
+
+	// Mux Video Signals
+	assign hsync = isLC ? hsync_lc : hsync_legacy;
+	assign vsync = isLC ? vsync_lc : vsync_legacy;
+	assign _hblank = isLC ? hblank_lc : hblank_legacy;
+	assign _vblank = isLC ? vblank_lc : vblank_legacy;
+	assign loadPixels = isLC ? loadPixels_lc : loadPixels_legacy;
 
 endmodule
