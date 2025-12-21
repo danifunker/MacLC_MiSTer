@@ -93,22 +93,32 @@ module emu
 
 	// Reset logic
 	reg n_reset = 0;
-	always @(posedge clk_sys) begin
-		reg [15:0] rst_cnt;
+always @(posedge clk_sys) begin
+        reg [15:0] rst_cnt;
 
-		if (clk8_en_p) begin
-			if(~pll_locked || reset || ~_cpuReset_o) begin
-				rst_cnt <= '1;
-				n_reset <= 0;
-			end
-			else if(rst_cnt) begin
-				rst_cnt <= rst_cnt - 1'd1;
-			end
-			else begin
-				n_reset <= 1;
-			end
-		end
-	end
+        if (clk8_en_p) begin
+            // various sources can reset the mac
+            if(~pll_locked || status[0] || buttons[1] || RESET || ~_cpuReset_o) begin
+                rst_cnt <= '1;
+                n_reset <= 0;
+            end
+            else if(rst_cnt) begin
+                rst_cnt    <= rst_cnt - 1'd1;
+                status_mem <= status[4];
+                
+                // --- FORCE MAC LC DEFAULTS FOR SIMULATION ---
+                // status_cpu <= status[14:13]; // Old: Defaults to 0 (68000)
+                // status_mod <= status[9];     // Old: Defaults to 0 (Mac Plus)
+                
+                status_cpu <= 2'b01; // Force Index 1 (68020)
+                status_mod <= 1'b1;  // Force Index 1 (Mac LC)
+                // --------------------------------------------
+            end
+            else begin
+                n_reset <= 1;
+            end
+        end
+    end
 
 	///////////////////////////////////////////////////
 
