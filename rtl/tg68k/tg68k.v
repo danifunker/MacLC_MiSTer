@@ -223,9 +223,7 @@ TG68KdotC_Kernel tg68k (
 	.nWr            ( tg68_rw       ),
 	.busstate       ( tg68_busstate ), // 00-> fetch code 10->read data 11->write data 01->no memaccess
 	.nResetOut      ( reset_n       ),
-	.FC             ( fc            ),
-	.nDSACK0        ( 1'b1          ), 
-    .nDSACK1        ( dtack_n       )
+	.FC             ( fc            )
 );
 
 // Expose busstate for debugging
