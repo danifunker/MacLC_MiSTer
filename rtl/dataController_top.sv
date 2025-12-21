@@ -36,6 +36,8 @@ module dataController_top(
 	
 	input selectAriel,
 	input [7:0] ariel_data_in,
+	input selectPseudoVIA,
+	input [7:0] pseudovia_data_in,
 
 	// RAM/ROM:
 
@@ -171,7 +173,8 @@ assign cpuDataOut = selectIWM ? iwmDataOut :
                     selectVIA ? viaDataOut :
                     selectSCC ? { sccDataOut, 8'hEF } :
                     selectSCSI ? { scsiDataOut, 8'hEF } :
-                    selectAriel ? {ariel_data_in, ariel_data_in} :  
+                    selectAriel ? {ariel_data_in, ariel_data_in} :
+                    selectPseudoVIA ? {pseudovia_data_in, pseudovia_data_in} :
                     (cpuBusControl && memoryLatch) ? memoryDataIn : cpu_data;
 	
 	// Memory-side
