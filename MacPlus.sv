@@ -210,8 +210,8 @@ video_freak video_freak
 localparam CONF_STR = {
 	"MACPLUS;UART115200;",
 	"-;",
-	"F1,DSK,Mount Pri Floppy;",
-	"F2,DSK,Mount Sec Floppy;",
+	"F4,DSK,Mount Pri Floppy;",
+	"F5,DSK,Mount Sec Floppy;",
 	"-;",
 	"SC0,IMGVHD,Mount SCSI-6;",
 	"SC1,IMGVHD,Mount SCSI-5;",
@@ -219,7 +219,7 @@ localparam CONF_STR = {
 	"O78,Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	"OBC,Scale,Normal,V-Integer,Narrower HV-Integer,Wider HV-Integer;",
 	"-;",
-	"O9,Model,Plus,SE;",
+	"O9A,Model,Plus,SE,LC;",
 	"O5,Speed,8MHz,16MHz;",
 	"ODE,CPU,68000,68010,68020;",
 	"O4,Memory,1MB,4MB;",
@@ -250,7 +250,7 @@ pll pll
 
 reg       status_mem;
 reg [1:0] status_cpu;
-reg       status_mod;
+reg [1:0] status_mod;
 reg       n_reset = 0;
 always @(posedge clk_sys) begin
 	reg [15:0] rst_cnt;
@@ -264,8 +264,9 @@ always @(posedge clk_sys) begin
 		else if(rst_cnt) begin
 			rst_cnt    <= rst_cnt - 1'd1;
 			status_mem <= status[4];
-			status_cpu <= status[14:13];
-			status_mod <= status[9];
+			status_mod <= status[10:9];
+			if (status[10:9] == 2) status_cpu <= 2'b11;
+			else status_cpu <= status[14:13];
 		end
 		else begin
 			n_reset <= 1;
@@ -436,7 +437,7 @@ wire memoryLatch;
 
 // peripherals
 wire vid_alt, loadPixels, pixelOut, _hblank, _vblank, hsync, vsync;
-wire memoryOverlayOn, selectSCSI, selectSCC, selectIWM, selectVIA, selectRAM, selectROM, selectSEOverlay;
+wire memoryOverlayOn, selectSCSI, selectSCC, selectIWM, selectVIA, selectRAM, selectROM, selectSEOverlay, selectPseudoVIA, selectCLUT, selectVRAM;
 wire [15:0] dataControllerDataOut;
 
 // audio
@@ -594,7 +595,7 @@ addrController_top ac0
 	._cpuRW(_cpuRW),
 	._cpuAS(_cpuAS),
 	.turbo(status_turbo),
-	.configROMSize({status_mod,~status_mod}),
+	.configROMSize({status_mod[0],~status_mod[0]}),
 	.configRAMSize(configRAMSize), 
 	.memoryAddr(memoryAddr),
 	.memoryLatch(memoryLatch),
@@ -610,9 +611,12 @@ addrController_top ac0
 	.selectSCC(selectSCC),
 	.selectIWM(selectIWM),
 	.selectVIA(selectVIA),
+	.selectPseudoVIA(selectPseudoVIA),
+	.selectCLUT(selectCLUT),
 	.selectRAM(selectRAM),
 	.selectROM(selectROM),
 	.selectSEOverlay(selectSEOverlay),
+	.selectVRAM(selectVRAM),
 	.hsync(hsync), 
 	.vsync(vsync),
 	._hblank(_hblank),
@@ -640,7 +644,7 @@ dataController_top #(SCSI_DEVS) dc0
 	.clk8_en_n(clk8_en_n),
 	.E_rising(E_rising),
 	.E_falling(E_falling),
-	.machineType(status_mod),
+	.machineType(status_mod[0]),
 	._systemReset(n_reset),
 	._cpuReset(_cpuReset), 
 	._cpuIPL(_cpuIPL),
@@ -657,6 +661,8 @@ dataController_top #(SCSI_DEVS) dc0
 	.selectSCC(selectSCC),
 	.selectIWM(selectIWM),
 	.selectVIA(selectVIA),
+	.selectPseudoVIA(selectPseudoVIA),
+	.selectCLUT(selectCLUT),
 	.selectSEOverlay(selectSEOverlay),
 	.cpuBusControl(cpuBusControl),
 	.videoBusControl(videoBusControl),
@@ -750,7 +756,7 @@ always @(posedge clk_sys) begin
 	reg old_down;
 
 	old_down <= dio_download;
-	if(old_down && ~dio_download && dio_index == 1) begin
+	if(old_down && ~dio_download && dio_index == 4) begin
 		dsk_int_ds <= (dio_addr == 409600);   // double sides disk, addr counts words, not bytes
 		dsk_int_ss <= (dio_addr == 204800);   // single sided disk
 	end
@@ -765,7 +771,7 @@ always @(posedge clk_sys) begin
 	reg old_down;
 
 	old_down <= dio_download;
-	if(old_down && ~dio_download && dio_index == 2) begin
+	if(old_down && ~dio_download && dio_index == 5) begin
 		dsk_ext_ds <= (dio_addr == 409600);   // double sided disk, addr counts words, not bytes
 		dsk_ext_ss <= (dio_addr == 204800);   // single sided disk
 	end
@@ -786,7 +792,9 @@ always @(posedge clk_sys) begin
 	
 	if(ioctl_write) begin
 		dio_data <= {ioctl_data[7:0], ioctl_data[15:8]};
-		dio_a <= dio_index[1:0] ? {dio_index[1:0], dio_addr[18:0]} : {dio_index[6], dio_addr[17:0]};
+		if (dio_index == 2) dio_a <= 21'h080000 + dio_addr[18:0]; // LC ROM
+		else if (dio_index == 3) dio_a <= 21'h0C0000 + dio_addr[17:0]; // Video ROM
+		else dio_a <= dio_index[1:0] ? {dio_index[1:0], dio_addr[18:0]} : {dio_index[6], dio_addr[17:0]};
 		ioctl_wait <= 1;
 	end
 
@@ -802,7 +810,9 @@ wire download_cycle = dio_download && dioBusControl;
 ////////////////////////// SDRAM /////////////////////////////////
 
 wire [24:0] sdram_addr = download_cycle ? {4'b0001, dio_a[20:0] } : 
-                         ~_romOE        ? {4'b0001, 2'b00, status_mod, memoryAddr[18:1]} :
+                         (status_mod == 2 && ~_romOE) ? {4'b0001, 2'b01, memoryAddr[18:0]} : // LC ROM (0x280000)
+                         (status_mod == 2 && (videoBusControl || selectVRAM)) ? {4'b0001, 2'b11, memoryAddr[18:0]} : // LC VRAM (0x380000)
+                         ~_romOE        ? {4'b0001, 2'b00, status_mod[0], memoryAddr[18:1]} :
                                           {3'b000, (dskReadAckInt || dskReadAckExt), memoryAddr[21:1]};
 
 wire [15:0] sdram_din  = download_cycle ? dio_data              : memoryDataOut;

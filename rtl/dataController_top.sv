@@ -29,6 +29,8 @@ module dataController_top(
 	input selectSCC,
 	input selectIWM,
 	input selectVIA,
+	input selectPseudoVIA,
+	input selectCLUT,
 	input selectSEOverlay,
 	input _cpuVMA,
 	
@@ -141,18 +143,25 @@ module dataController_top(
 	
 	// interconnects
 	wire SEL;
-	wire _viaIrq, _sccIrq, sccWReq;
+	wire _viaIrq, _sccIrq, _pseudoViaIrq, sccWReq;
 	wire [15:0] viaDataOut;
 	wire [15:0] iwmDataOut;
 	wire [7:0] sccDataOut;
 	wire [7:0] scsiDataOut;
+	wire [7:0] pseudoViaDataOut;
 	wire mouseX1, mouseX2, mouseY1, mouseY2, mouseButton;
 	
 	// interrupt control
-	assign _cpuIPL = 
-		!_viaIrq?3'b110:
+	// LC: VIA1=L1, PseudoVIA=L2, SCC=L4?
+	// Plus: VIA=L1, SCC=L2, Programmer=L4/7.
+	assign _cpuIPL = (machineType == 2) ?
+		(!_viaIrq ? 3'b110 : // Level 1 (Inverted logic: 000=7, 111=0? No. IPL is inverted. 110 = 1.)
+		 !_pseudoViaIrq ? 3'b101 : // Level 2
+		 !_sccIrq ? 3'b011 : // Level 4
+		 3'b111) :
+		(!_viaIrq?3'b110:
 		!_sccIrq?3'b101:
-		3'b111;
+		3'b111);
 		
 
 	reg [15:0] cpu_data;
@@ -161,6 +170,7 @@ module dataController_top(
 	// CPU-side data output mux
 	assign cpuDataOut = selectIWM ? iwmDataOut :
 							  selectVIA ? viaDataOut :
+							  selectPseudoVIA ? { 8'h00, pseudoViaDataOut } :
 							  selectSCC ? { sccDataOut, 8'hEF } :
 							  selectSCSI ? { scsiDataOut, 8'hEF } :
 							  (cpuBusControl && memoryLatch) ? memoryDataIn : cpu_data;
@@ -468,6 +478,29 @@ module dataController_top(
 		.dataIn(memoryDataIn),
 		.loadPixels(loadPixels), 
 		.pixelOut(pixelOut));
+	videoShifterLC vs_lc(
+		.clk32(clk32),
+		.loadPixels(loadPixels),
+		.dataIn(memoryDataIn),
+		.pixelOut(pixelOutRGB),
+		.clut_addr(cpuAddrRegLo),
+		.clut_wr(selectCLUT && !_cpuRW),
+		.clut_data(cpuDataIn[15:8])
+	);
+	wire pseudoViaIrq;
+	assign _pseudoViaIrq = ~pseudoViaIrq;
+
+	pseudovia pvia(
+		.clk32(clk32),
+		.reset(!_cpuReset),
+		.cs(selectPseudoVIA),
+		.rw(_cpuRW),
+		.rs({2'b00, cpuAddrRegLo}),
+		.din(cpuDataIn[7:0]),
+		.dout(pseudoViaDataOut),
+		.irq(pseudoViaIrq),
+		.vblank(!_vblank)
+	);
 	
 	// Mouse
 	ps2_mouse mouse(

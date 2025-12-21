@@ -1,6 +1,7 @@
 module addrController_top(
 	// clocks:
 	input clk,
+	input clk_vid_lc, // 25.175 MHz for LC Video
 	output clk8,						// 8.125 MHz CPU clock
 	output clk8_en_p,
 	output clk8_en_n,
@@ -9,6 +10,7 @@ module addrController_top(
 
 	// system config:
 	input turbo,               // 0 = normal, 1 = faster
+	input [1:0] machineType,   // 0 = Plus, 1 = SE, 2 = LC
 	input [1:0] configROMSize,  // 0 = 64K ROM, 1 = 128K ROM, 2 = 256K ROM
 	input [1:0] configRAMSize,	// 0 = 128K, 1 = 512K, 2 = 1MB, 3 = 4MB RAM
 
@@ -16,21 +18,21 @@ module addrController_top(
 	input [23:0] cpuAddr,
 	input _cpuUDS,
 	input _cpuLDS,
-	input _cpuRW,	
+	input _cpuRW,
 	input _cpuAS,
-	
+
 	// RAM/ROM:
 	output [21:0] memoryAddr,
 	output _memoryUDS,
-	output _memoryLDS,	
+	output _memoryLDS,
 	output _romOE,
-	output _ramOE,	
-	output _ramWE,	
+	output _ramOE,
+	output _ramWE,
 	output videoBusControl,
 	output dioBusControl,
 	output cpuBusControl,
 	output memoryLatch,
-	
+
 	// peripherals:
 	output selectSCSI,
 	output selectSCC,
@@ -39,7 +41,8 @@ module addrController_top(
 	output selectRAM,
 	output selectROM,
 	output selectSEOverlay,
-	
+	output selectVRAM,
+
 	// video:
 	output hsync,
 	output vsync,
@@ -47,13 +50,13 @@ module addrController_top(
 	output _vblank,
 	output loadPixels,
 	input  vid_alt,
-		
+
 	input  snd_alt,
 	output loadSound,
-		
+
 	// misc
 	input memoryOverlayOn,
-	
+
 	// interface to read dsk image from ram
 	input [21:0] dskReadAddrInt,
 	output dskReadAckInt,
@@ -66,20 +69,20 @@ module addrController_top(
 
 	localparam SIZE = 20'd135408;  // 168*806 clk8 events per frame
 	localparam STEP = 20'd5920;    // one step every 16*370 clk8 events
-	
-	reg [21:0] audioAddr; 
+
+	reg [21:0] audioAddr;
 	reg [19:0] snd_div;
-	
+
 	reg sndReadAckD;
 	always @(posedge clk)
 		if (clk8_en_n) sndReadAckD <= sndReadAck;
-	
+
 	reg vblankD, vblankD2;
 	always @(posedge clk) begin
 		if(clk8_en_p && sndReadAckD) begin
 			vblankD <= _vblank;
 			vblankD2 <= vblankD;
-		
+
 			// falling adge of _vblank = begin of vblank phase
 			if(vblankD2 && !vblankD) begin
 				audioAddr <= snd_alt?22'h3FA100:22'h3FFD00;
@@ -133,55 +136,58 @@ module addrController_top(
 
 	// interconnects
 	wire [21:0] videoAddr;
-	
+
 	// RAM/ROM control signals
 	wire videoControlActive = _hblank;
 
 	assign _romOE = ~(cpuBusControl && selectROM && _cpuRW);
-	
+
 	wire extraRamRead = sndReadAck;
 	assign _ramOE = ~((videoBusControl && videoControlActive) || (extraRamRead) ||
 						(cpuBusControl && selectRAM && _cpuRW));
 	assign _ramWE = ~(cpuBusControl && selectRAM && !_cpuRW);
-	
+
 	assign _memoryUDS = cpuBusControl ? _cpuUDS : 1'b0;
 	assign _memoryLDS = cpuBusControl ? _cpuLDS : 1'b0;
+
+	// Address Mux
 	wire [21:0] addrMux = sndReadAck ? audioAddr : videoBusControl ? videoAddr : cpuAddr[21:0];
+
 	wire [21:0] macAddr;
 	assign macAddr[15:0] = addrMux[15:0];
 
 	// video and sound always addresses ram
 	wire ram_access = (cpuBusControl && selectRAM) || videoBusControl || sndReadAck;
 	wire rom_access = (cpuBusControl && selectROM);
-	
+
 	// simulate smaller RAM/ROM sizes
 	assign macAddr[16] = rom_access && configROMSize == 2'b00 ? 1'b0 :     // force A16 to 0 for 64K ROM access
-									addrMux[16]; 
+									addrMux[16];
 	assign macAddr[17] = ram_access && configRAMSize == 2'b00 ? 1'b0 :   // force A17 to 0 for 128K RAM access
 									rom_access && configROMSize == 2'b01 ? 1'b0 :  // force A17 to 0 for 128K ROM access
 									rom_access && configROMSize == 2'b00 ? 1'b1 :  // force A17 to 1 for 64K ROM access (64K ROM image is at $20000)
-									addrMux[17]; 
+									addrMux[17];
 	assign macAddr[18] = ram_access && configRAMSize == 2'b00 ? 1'b0 :   // force A18 to 0 for 128K RAM access
-	                     rom_access && configROMSize != 2'b11 ? 1'b0 : // force A18 to 0 for 64K/128K/256K ROM access
-									addrMux[18]; 
+	                     rom_access && configROMSize != 2'b11 && machineType != 2 ? 1'b0 : // force A18 to 0 for 64K/128K/256K ROM access (except LC)
+									addrMux[18];
 	assign macAddr[19] = ram_access && configRAMSize[1] == 1'b0 ? 1'b0 : // force A19 to 0 for 128K or 512K RAM access
-									rom_access ? 1'b0 : 								   // force A19 to 0 for ROM access
-									addrMux[19]; 
+									rom_access && machineType != 2 ? 1'b0 : // force A19 to 0 for ROM access (except LC)
+									addrMux[19];
 	assign macAddr[20] = ram_access && configRAMSize != 2'b11 ? 1'b0 :   // force A20 to 0 for all but 4MB RAM access
 									rom_access ? 1'b0 : 								   // force A20 to 0 for ROM access
-									addrMux[20]; 
+									addrMux[20];
 	assign macAddr[21] = ram_access && configRAMSize != 2'b11 ? 1'b0 :   // force A21 to 0 for all but 4MB RAM access
 									rom_access ? 1'b0 : 								   // force A21 to 0 for ROM access
-									addrMux[21]; 
-	
-			
+									addrMux[21];
+
+
 	// floppy emulation gets extra slots 0 and 1
 	assign dskReadAckInt = (extraBusControl == 1'b1) && (extra_slot_count == 0);
 	assign dskReadAckExt = (extraBusControl == 1'b1) && (extra_slot_count == 1);
 	// audio gets extra slot 2
 	wire sndReadAck    = (extraBusControl == 1'b1) && (extra_slot_count == 2);
 
-	assign memoryAddr = 
+	assign memoryAddr =
 		dskReadAckInt ? dskReadAddrInt + 22'h100000:   // first dsk image at 1MB
 		dskReadAckExt ? dskReadAddrExt + 22'h200000:   // second dsk image at 2MB
 		macAddr;
@@ -189,6 +195,7 @@ module addrController_top(
 	// address decoding
 	addrDecoder ad(
 		.configROMSize(configROMSize),
+		.machineType(machineType),
 		.address(cpuAddr),
 		._cpuAS(_cpuAS),
 		.memoryOverlayOn(memoryOverlayOn),
@@ -198,19 +205,46 @@ module addrController_top(
 		.selectSCC(selectSCC),
 		.selectIWM(selectIWM),
 		.selectVIA(selectVIA),
+		.selectVRAM(selectVRAM),
 		.selectSEOverlay(selectSEOverlay));
 
-	// video
+	// video (Mac Plus/SE)
+	wire hsync_p, vsync_p, _hblank_p, _vblank_p, loadPixels_p;
+	wire [21:0] videoAddr_p;
+
 	videoTimer vt(
 		.clk(clk),
 		.clk_en(clk8_en_p),
-		.busCycle(busCycle), 
+		.busCycle(busCycle),
 		.vid_alt(vid_alt),
-		.videoAddr(videoAddr), 
-		.hsync(hsync), 
-		.vsync(vsync), 
-		._hblank(_hblank),
-		._vblank(_vblank), 
-		.loadPixels(loadPixels));
-		
+		.videoAddr(videoAddr_p),
+		.hsync(hsync_p),
+		.vsync(vsync_p),
+		._hblank(_hblank_p),
+		._vblank(_vblank_p),
+		.loadPixels(loadPixels_p));
+
+	// video (Mac LC)
+	wire hsync_lc, vsync_lc, _hblank_lc, _vblank_lc, loadPixels_lc;
+	wire [21:0] videoAddrLC;
+
+	videoTimerLC vt_lc(
+		.clk(clk_vid_lc),
+		.clk_en(1'b1),
+		.busCycle(busCycle), // unused in LC timer?
+		.videoAddr(videoAddrLC),
+		.hsync(hsync_lc),
+		.vsync(vsync_lc),
+		._hblank(_hblank_lc),
+		._vblank(_vblank_lc),
+		.loadPixels(loadPixels_lc)
+	);
+
+	assign hsync = (machineType == 2) ? hsync_lc : hsync_p;
+	assign vsync = (machineType == 2) ? vsync_lc : vsync_p;
+	assign _hblank = (machineType == 2) ? _hblank_lc : _hblank_p;
+	assign _vblank = (machineType == 2) ? _vblank_lc : _vblank_p;
+	assign loadPixels = (machineType == 2) ? loadPixels_lc : loadPixels_p;
+	assign videoAddr = (machineType == 2) ? videoAddrLC : videoAddr_p;
+
 endmodule
