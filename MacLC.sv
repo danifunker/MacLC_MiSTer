@@ -812,28 +812,22 @@ module emu
 	reg [15:0] dio_data;
 	reg        dio_write;
 
-always @(posedge clk_sys) begin
-        reg [15:0] rst_cnt;
-
-        if (clk8_en_p) begin
-            // various sources can reset the mac
-            if(~pll_locked || status[0] || buttons[1] || RESET || ~_cpuReset_o) begin
-                rst_cnt <= '1;
-                n_reset <= 0;
-            end
-            else if(rst_cnt) begin
-                rst_cnt    <= rst_cnt - 1'd1;
-                status_mem <= status[4];
+	always @(posedge clk_sys) begin
+		reg old_cyc = 0;
+		if(ioctl_write) begin
+            dio_data <= {ioctl_data[7:0], ioctl_data[15:8]};
+            if (dio_index[1:0]) 
+                dio_a <= {dio_index[1:0], dio_addr[18:0]}; // Secondary images
+            else
+                dio_a <= {3'b000, dio_addr[17:0]}; // Main ROM -> Bank 0
                 
-                status_cpu <= 2'b01; // Force Index 1 (68020)
-                status_mod <= 1'b1;  // Force Index 1 (Mac LC)
-                // --------------------------------------------
-            end
-            else begin
-                n_reset <= 1;
-            end
+            ioctl_wait <= 1;
         end
-    end
+
+		old_cyc <= dioBusControl;
+		if(~dioBusControl) dio_write <= ioctl_wait;
+		if(old_cyc & ~dioBusControl & dio_write) ioctl_wait <= 0;
+	end
 
 
 	// sdram used for ram/rom maps directly into 68k address space
