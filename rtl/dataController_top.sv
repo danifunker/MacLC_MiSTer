@@ -8,7 +8,6 @@ module dataController_top(
 	
 	// system control:
 	input machineType, // 0 - Mac Plus, 1 - Mac LC
-	input maclc_mode,  // 0 = Mac Plus mode, 1 = Mac LC mode
 
 	input _systemReset,
 
@@ -34,13 +33,11 @@ module dataController_top(
 	input selectSEOverlay,
 	input _cpuVMA,
 	
-	// V8 Video peripheral selects
+	
 	input selectAriel,
-	input selectVRAM,
-
-	// V8 Video data buses
 	input [7:0] ariel_data_in,
-	input [31:0] vram_data_in,
+
+	// RAM/ROM:
 
 	// RAM/ROM:
 	input videoBusControl,	
@@ -82,21 +79,19 @@ module dataController_top(
 	input [1:0] insertDisk,
 	input [1:0] diskSides,
 	output [1:0] diskEject,
+	output [1:0] diskMotor,
+	output [1:0] diskAct,
+
+	output [21:0] dskReadAddrInt,
+	input dskReadAckInt,
+	output [21:0] dskReadAddrExt,
+	input dskReadAckExt,
+
 	// connections to io controller
 	input   [SCSI_DEVS-1:0] img_mounted,
 	input            [31:0] img_size,
 	output           [31:0] io_lba[SCSI_DEVS],
 	output  [SCSI_DEVS-1:0] io_rd,
-	output  [SCSI_DEVS-1:0] io_wr,
-	input   [SCSI_DEVS-1:0] io_ack,
-	input             [7:0] sd_buff_addr,
-	input            [15:0] sd_buff_dout,
-	output           [15:0] sd_buff_din[SCSI_DEVS],
-	input                   sd_buff_wr
-);
-	
-	parameter SCSI_DEVS = 2;
-	
 	output  [SCSI_DEVS-1:0] io_wr,
 	input   [SCSI_DEVS-1:0] io_ack,
 	input             [7:0] sd_buff_addr,
@@ -171,16 +166,15 @@ module dataController_top(
 	reg [15:0] cpu_data;
 	always @(posedge clk32) if (cpuBusControl && memoryLatch) cpu_data <= memoryDataIn;
 
-	reg [15:0] cpu_data;
-	always @(posedge clk32) if (cpuBusControl && memoryLatch) cpu_data <= memoryDataIn;
-
-	assign cpuDataOut = selectIWM ? iwmDataOut :
-	                    selectVIA ? viaDataOut :
-	                    selectSCC ? { sccDataOut, 8'hEF } :
-	                    selectSCSI ? { scsiDataOut, 8'hEF } :
-	                    selectAriel ? {ariel_data_in, ariel_data_in} :  
-	                    (cpuBusControl && memoryLatch) ? memoryDataIn : cpu_data;
-		
+	// CPU-side data output mux
+assign cpuDataOut = selectIWM ? iwmDataOut :
+                    selectVIA ? viaDataOut :
+                    selectSCC ? { sccDataOut, 8'hEF } :
+                    selectSCSI ? { scsiDataOut, 8'hEF } :
+                    selectAriel ? {ariel_data_in, ariel_data_in} :  
+                    (cpuBusControl && memoryLatch) ? memoryDataIn : cpu_data;
+	
+	// Memory-side
 	assign memoryDataOut = cpuDataIn;
 
 	// SCSI
