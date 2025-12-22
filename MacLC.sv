@@ -274,7 +274,7 @@ always @(posedge clk_sys) begin
 
 	if (clk8_en_p) begin
 		// various sources can reset the mac
-		if(~pll_locked || status[0] || buttons[1] || RESET || ~_cpuReset_o) begin
+		if(~pll_locked || ~video_pll_locked || status[0] || buttons[1] || RESET || ~_cpuReset_o) begin
 			rst_cnt <= '1;
 			n_reset <= 0;
 		end
@@ -361,11 +361,12 @@ hps_io #(.CONF_STR(CONF_STR), .VDNUM(SCSI_DEVS), .WIDE(1)) hps_io
 // If LC model (status_mod=1), use clk_vid_lc for video output signals
 // If Plus model (status_mod=0), use standard 32.5 MHz (clk_sys_pll)
 wire clk_vid_mix = status_mod ? clk_vid_lc : clk_sys_pll;
+wire video_pll_locked;
 
 video_pll video_pll_inst (
 	.refclk(clk_vid_mix),
 	.outclk(CLK_VIDEO),
-	.locked()
+	.locked(video_pll_locked)
 );
 assign CE_PIXEL  = 1;
 
