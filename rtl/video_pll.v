@@ -1,7 +1,8 @@
 `timescale 1ns/10ps
 module video_pll (
 	input  wire refclk,
-	output wire outclk
+	output wire outclk,
+	output wire locked
 );
 
 	altera_pll #(
@@ -16,7 +17,8 @@ module video_pll (
 	) pll_inst (
 		.rst(1'b0),
 		.outclk(outclk),
-		.refclk(refclk)
+		.refclk(refclk),
+		.locked(locked)
 	);
 
 endmodule

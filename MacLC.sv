@@ -364,7 +364,8 @@ wire clk_vid_mix = status_mod ? clk_vid_lc : clk_sys_pll;
 
 video_pll video_pll_inst (
 	.refclk(clk_vid_mix),
-	.outclk(CLK_VIDEO)
+	.outclk(CLK_VIDEO),
+	.locked()
 );
 assign CE_PIXEL  = 1;
 
