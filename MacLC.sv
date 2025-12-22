@@ -222,7 +222,7 @@ module emu
 	);
 
 	reg       status_mem = 1'b1;
-	reg [1:0] status_cpu = 2'b00;
+	reg [1:0] status_cpu = 2'b10;
 	reg       status_mod;
 	reg       n_reset = 0;
 	wire      status_turbo = 1'b1;
