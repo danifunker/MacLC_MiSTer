@@ -201,7 +201,7 @@ module emu
 		"O1011,Monitor,13\" RGB,12\" RGB,15\" Portrait;",
 		"-;",
 		"O5,Speed,Normal,16MHz;",
-		"ODE,CPU,68000,68020;",
+		"ODE,CPU,68000,68010,68020;",
 		"O4,Memory,4MB;",
 		"-;",
 		"R0,Reset & Apply CPU+Memory;",
@@ -222,7 +222,7 @@ module emu
 	);
 
 	reg       status_mem = 1'b1;
-	reg [1:0] status_cpu = 2'b00;
+	reg [1:0] status_cpu = 2'b10;
 	reg       status_mod;
 	reg       n_reset = 0;
 	wire      status_turbo = 1'b1;
@@ -499,7 +499,7 @@ module emu
 		.reset      ( !_cpuReset ),
 		.phi1       ( cpu_en_p  ),
 		.phi2       ( cpu_en_n  ),
-		.cpu        ( status_cpu[0] ? 2'b10 : 2'b00 ),
+		.cpu        ( {status_cpu[1], |status_cpu}),
 
 		.dtack_n    ( _cpuDTACK  ),
 		.rw_n       ( tg68_rw    ),
