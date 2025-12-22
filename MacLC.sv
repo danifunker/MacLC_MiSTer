@@ -257,7 +257,17 @@ wire      status_turbo = 1'b1;
 // Use 65 MHz clock for system if LC model is selected (status_mod=1)
 // This is to allow sufficient video bandwidth (32.5 MB/s)
 // If Plus model (status_mod=0), use standard 32.5 MHz.
-wire clk_sys = status_mod ? clk_mem : clk_sys_pll;
+wire clk_sys;
+
+altclkctrl #(
+	.clock_type("Global Clock"),
+	.number_of_clocks(2),
+	.ena_register_mode("none")
+) sys_clk_mux (
+	.inclk({2'b00, clk_mem, clk_sys_pll}),
+	.clkselect({1'b0, status_mod}),
+	.outclk(clk_sys)
+);
 
 always @(posedge clk_sys) begin
 	reg [15:0] rst_cnt;
@@ -349,7 +359,16 @@ hps_io #(.CONF_STR(CONF_STR), .VDNUM(SCSI_DEVS), .WIDE(1)) hps_io
 
 // Switch video clock
 // If LC model (status_mod=1), use clk_vid_lc for video output signals
-assign CLK_VIDEO = status_mod ? clk_vid_lc : clk_sys;
+// If Plus model (status_mod=0), use standard 32.5 MHz (clk_sys_pll)
+altclkctrl #(
+	.clock_type("Global Clock"),
+	.number_of_clocks(2),
+	.ena_register_mode("none")
+) video_clk_mux (
+	.inclk({2'b00, clk_vid_lc, clk_sys_pll}),
+	.clkselect({1'b0, status_mod}),
+	.outclk(CLK_VIDEO)
+);
 assign CE_PIXEL  = 1;
 
 wire [23:0] pixelOutRGB;
