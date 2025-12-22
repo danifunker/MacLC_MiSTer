@@ -261,11 +261,11 @@ wire clk_sys;
 
 altclkctrl #(
 	.clock_type("Global Clock"),
-	.number_of_clocks(2),
+	.number_of_clocks(4),
 	.ena_register_mode("none")
 ) sys_clk_mux (
-	.inclk({2'b00, clk_mem, clk_sys_pll}),
-	.clkselect({1'b0, status_mod}),
+	.inclk({clk_mem, clk_sys_pll, 2'b00}),
+	.clkselect({1'b1, status_mod}),
 	.outclk(clk_sys)
 );
 
@@ -362,11 +362,11 @@ hps_io #(.CONF_STR(CONF_STR), .VDNUM(SCSI_DEVS), .WIDE(1)) hps_io
 // If Plus model (status_mod=0), use standard 32.5 MHz (clk_sys_pll)
 altclkctrl #(
 	.clock_type("Global Clock"),
-	.number_of_clocks(2),
+	.number_of_clocks(4),
 	.ena_register_mode("none")
 ) video_clk_mux (
-	.inclk({2'b00, clk_vid_lc, clk_sys_pll}),
-	.clkselect({1'b0, status_mod}),
+	.inclk({clk_vid_lc, clk_sys_pll, 2'b00}),
+	.clkselect({1'b1, status_mod}),
 	.outclk(CLK_VIDEO)
 );
 assign CE_PIXEL  = 1;
