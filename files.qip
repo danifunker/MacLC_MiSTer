@@ -23,3 +23,4 @@ set_global_assignment -name SYSTEMVERILOG_FILE MacLC.sv
 set_global_assignment -name VERILOG_FILE rtl/videoTimerLC.v
 set_global_assignment -name VERILOG_FILE rtl/videoShifterLC.v
 set_global_assignment -name VERILOG_FILE rtl/pseudovia.v
+set_global_assignment -name VERILOG_FILE rtl/video_pll.v

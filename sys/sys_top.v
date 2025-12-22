@@ -1246,7 +1246,12 @@ end
 
 wire hdmi_tx_clk;
 `ifndef MISTER_DEBUG_NOHDMI
-	assign hdmi_tx_clk = (~vga_fb & direct_video) ? clk_vid : hdmi_clk_out;
+	cyclonev_clkselect hdmi_clk_sw
+	(
+		.clkselect({1'b1, ~vga_fb & direct_video}),
+		.inclk({clk_vid, hdmi_clk_out, 2'b00}),
+		.outclk(hdmi_tx_clk)
+	);
 `else
 	assign hdmi_tx_clk = clk_vid;
 `endif
@@ -1321,7 +1326,12 @@ assign HDMI_TX_D  = hdmi_out_d;
 `ifndef MISTER_DUAL_SDRAM
 	wire vga_tx_clk;
 	`ifndef MISTER_DEBUG_NOHDMI
-		assign vga_tx_clk = (~vga_fb & ~vga_scaler) ? clk_vid : hdmi_clk_out;
+		cyclonev_clkselect vga_clk_sw
+		(
+			.clkselect({1'b1, ~vga_fb & ~vga_scaler}),
+			.inclk({clk_vid, hdmi_clk_out, 2'b00}),
+			.outclk(vga_tx_clk)
+		);
 	`else
 		assign vga_tx_clk = clk_vid;
 	`endif

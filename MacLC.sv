@@ -360,13 +360,10 @@ hps_io #(.CONF_STR(CONF_STR), .VDNUM(SCSI_DEVS), .WIDE(1)) hps_io
 // Switch video clock
 // If LC model (status_mod=1), use clk_vid_lc for video output signals
 // If Plus model (status_mod=0), use standard 32.5 MHz (clk_sys_pll)
-altclkctrl #(
-	.clock_type("Global Clock"),
-	.number_of_clocks(4),
-	.ena_register_mode("none")
-) video_clk_mux (
-	.inclk({clk_vid_lc, clk_sys_pll, 2'b00}),
-	.clkselect({1'b1, status_mod}),
+wire clk_vid_mix = status_mod ? clk_vid_lc : clk_sys_pll;
+
+video_pll video_pll_inst (
+	.refclk(clk_vid_mix),
 	.outclk(CLK_VIDEO)
 );
 assign CE_PIXEL  = 1;
