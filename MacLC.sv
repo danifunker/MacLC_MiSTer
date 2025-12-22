@@ -201,7 +201,7 @@ module emu
 		"O1011,Monitor,13\" RGB,12\" RGB,15\" Portrait;",
 		"-;",
 		"O5,Speed,Normal,16MHz;",
-		"ODE,CPU,68000,68020;",
+		"ODE,CPU,68000,68010,68020;",
 		"O4,Memory,4MB;",
 		"-;",
 		"R0,Reset & Apply CPU+Memory;",

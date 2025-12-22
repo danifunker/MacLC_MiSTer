@@ -53,7 +53,7 @@ int multi_step_amount = 1024;
 // Machine configuration
 // ---------------------
 int cfg_machineType = 0;  // 0=Plus, 1=LC
-int cfg_cpuType = 1;      // 0=FX68K, 1=TG68K (use TG68K for verilator)
+int cfg_cpuType = 10;      // 0=FX68K, 1=TG68K (use TG68K for verilator)
 int cfg_memSize = 1;      // 0=1MB, 1=4MB
 
 // CPU trace
