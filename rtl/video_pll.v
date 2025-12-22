@@ -12,9 +12,7 @@ module video_pll (
 		.phase_shift0("0 ps"),
 		.duty_cycle0(50),
 		.pll_type("General"),
-		.pll_subtype("General"),
-		.pll_auto_reset("On"),
-		.pll_bandwidth_preset("Auto")
+		.pll_subtype("General")
 	) pll_inst (
 		.rst(1'b0),
 		.outclk(outclk),
