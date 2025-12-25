@@ -51,20 +51,15 @@ end
 
 // Debug: track if we ever get a request
 integer ariel_req_count = 0;
-integer ariel_wr_count = 0;
 
 // CPU register access (matching MAME ariel.cpp behavior)
 // Note: 68k only outputs A1-A23, so we use reg_addr[2:1] to decode
 // word-aligned addresses (at byte offsets 0, 2, 4, 6 from base)
 always @(posedge clk_sys) begin
-    if (req && !we && ariel_req_count < 20) begin
-        $display("ARIEL RD: reg=%d addr[2:1]=%d data_out=%02x (palette_addr=%d comp=%d)",
-                 reg_addr[2:1], reg_addr[2:1], data_out, palette_addr, color_comp);
+    if (req && ariel_req_count < 50) begin
+        $display("ARIEL %s: full_addr=%03x reg=%d data=%02x",
+                 we ? "WR" : "RD", reg_addr, reg_addr[2:1], we ? data_in : data_out);
         ariel_req_count <= ariel_req_count + 1;
-    end
-    if (req && we && ariel_wr_count < 20) begin
-        $display("ARIEL WR: reg=%d data_in=%02x", reg_addr[2:1], data_in);
-        ariel_wr_count <= ariel_wr_count + 1;
     end
     if (reset) begin
         palette_addr <= 8'd0;

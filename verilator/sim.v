@@ -410,7 +410,10 @@ module emu
 	wire [1:0] diskMotor, diskAct;
 
 	// Video Mode Selection - hardcoded for simulation (4bpp)
-	wire [2:0] v8_video_mode = 3'd2; // 4bpp
+	wire [7:0] pvia_video_config;
+	// Force 4bpp mode for testing - ROM writes 0x40 (1bpp) due to monitor detection issue
+	wire [2:0] v8_video_mode = 3'd2; // 4bpp forced
+	// wire [2:0] v8_video_mode = pvia_video_config[2:0]; // bpp mode from ROM
 
 	// Monitor ID Selection - 13" RGB
 	wire [3:0] v8_monitor_id = 4'h6;
@@ -440,7 +443,8 @@ module emu
 		.slot_irq(1'b0),
 		.irq_out(pseudovia_irq),
 		.ram_config(configRAMSize),
-		.monitor_id(v8_monitor_id)
+		.monitor_id(v8_monitor_id),
+		.video_config(pvia_video_config)
 	);
 
 	maclc_v8_video v8_video(

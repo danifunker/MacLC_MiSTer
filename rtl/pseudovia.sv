@@ -38,7 +38,10 @@ module pseudovia(
 
     // Config from top level
     input [1:0] ram_config,  // 0=128K, 1=512K, 2=1MB, 3=4MB
-    input [3:0] monitor_id   // Monitor ID for video config
+    input [3:0] monitor_id,  // Monitor ID for video config
+
+    // Video config output (set by ROM, bits 2:0 = bpp mode)
+    output reg [7:0] video_config
 );
 
 // Internal registers (256 bytes for native mode)
@@ -64,12 +67,17 @@ wire any_slot_irq = |slot_irqs_masked;
 wire [7:0] active_ifr = regs[3] & ier & 8'h1B;
 wire irq_pending = |active_ifr;
 
+// Debug counter
+integer pvia_access_count = 0;
+integer pvia_reg10_reads = 0;
+
 always @(posedge clk_sys) begin
     if (reset) begin
         ier <= 8'h00;
         ifr <= 8'h00;
         port_b <= 8'h00;
         irq_out <= 1'b0;
+        video_config <= 8'h02;  // Default to 4bpp mode
         // Initialize regs
         regs[2] <= 8'h7F;  // All slot IRQs inactive (high = no IRQ)
         regs[3] <= 8'h00;
@@ -97,6 +105,11 @@ always @(posedge clk_sys) begin
         end
 
         if (req) begin
+            // Debug: log first 20 accesses
+            if (pvia_access_count < 20) begin
+                $display("PVIA %s: addr=%04x native=%d", we ? "WR" : "RD", addr, addr[12:8] == 5'b00000);
+                pvia_access_count <= pvia_access_count + 1;
+            end
             if (addr[12:8] == 5'b00000) begin
                 // Native mode: offset 0x00-0xFF
                 if (we) begin
@@ -118,7 +131,12 @@ always @(posedge clk_sys) begin
                                 regs[3] <= regs[3] & ~(data_in & 8'h7F);
                         end
 
-                        8'h10: regs[8'h10] <= data_in;  // Video config
+                        8'h10: begin
+                            regs[8'h10] <= data_in;
+                            video_config <= data_in;
+                            $display("PVIA: Video config WRITE = %02x (bpp mode = %d)",
+                                     data_in, data_in[2:0]);
+                        end
 
                         8'h12: begin
                             // Slot IER - bit 7 controls set/clear
@@ -162,8 +180,11 @@ always @(posedge clk_sys) begin
                         8'h03: data_out <= regs[3];  // IFR
 
                         8'h10: begin
-                            // Video config - monitor ID in bits 5:3
-                            data_out <= {2'b00, monitor_id, 2'b00};
+                            // Video config - monitor ID in bits 6:3 (matches MAME: montype << 3)
+                            data_out <= {1'b0, monitor_id, 3'b000};
+                            pvia_reg10_reads <= pvia_reg10_reads + 1;
+                            $display("PVIA: Video config READ[%0d], monitor_id=%d, returning %02x",
+                                     pvia_reg10_reads, monitor_id, {1'b0, monitor_id, 3'b000});
                         end
 
                         8'h12: data_out <= regs[8'h12] & 8'h7F;  // Slot IER, bit 7 always 0
