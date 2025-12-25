@@ -1,122 +1,209 @@
-// Mac LC Pseudo-VIA - CORRECTED
-// Mapped at 0x526000-0x527FFF in V8
-// Register Stride is 512 bytes (0x200)
+// Mac LC Pseudo-VIA
+// Based on MAME's pseudovia.cpp by R. Belmont
+//
+// Mapped at $F26000-$F27FFF in CPU space (V8 internal 0x526000)
+// Two access modes:
+//   - Native mode (offset < 0x100): Direct register access
+//   - VIA-compat mode (offset >= 0x100): offset >> 9 gives register 0-15
+//
+// Native mode registers:
+//   0x00: Port B output
+//   0x01: RAM Config (read-only, from v8 config callbacks)
+//   0x02: Slot/VBlank interrupt status (active low)
+//   0x03: IFR (interrupt flag register)
+//   0x10: Video config (monitor ID in bits 5:3)
+//   0x12: Slot IER (interrupt enable)
+//   0x13: IER (legacy VIA style)
+//
+// VIA-compat mode (offset >> 9):
+//   1: Port A
+//   13: IFR
+//   14: IER
 
 module pseudovia(
     input clk_sys,
     input reset,
-    
-    // CPU interface
-    // Expanded to 13 bits to handle 0x1C00 max offset
-    input [12:0] addr, 
+
+    // CPU interface - full offset within $F26000-$F27FFF range
+    input [12:0] addr,  // Offset 0x0000-0x1FFF
     input [7:0] data_in,
     output reg [7:0] data_out,
     input we,
     input req,
-    
+
     // Interrupts
-    input vblank_irq,
-    input slot_irq,
+    input vblank_irq,    // Active high VBlank signal
+    input slot_irq,      // Slot interrupt
     output reg irq_out,
-    
-    // Config
+
+    // Config from top level
     input [1:0] ram_config,  // 0=128K, 1=512K, 2=1MB, 3=4MB
-    input [3:0] monitor_id
+    input [3:0] monitor_id   // Monitor ID for video config
 );
 
-// Register map (Stride 0x200)
-localparam REG_VPORB    = 13'h0000; // Reg 0: Port B
-localparam REG_VDIRB    = 13'h0400; // Reg 2: Port B Direction
-localparam REG_CONFIG   = 13'h1000; // Reg 8: RAM Config (V8 specific)
-localparam REG_VIDEO    = 13'h1400; // Reg 10: Video Config (V8 specific)
-localparam REG_VIFR     = 13'h1A00; // Reg 13: Interrupt Flag
-localparam REG_VIER     = 13'h1C00; // Reg 14: Interrupt Enable
+// Internal registers (256 bytes for native mode)
+reg [7:0] regs [0:255];
 
+// VIA-style IER and IFR (for VIA-compat mode access)
+reg [7:0] ier;
+reg [7:0] ifr;
+
+// Port B data
 reg [7:0] port_b;
-reg [7:0] dir_b;
-reg [7:0] ifr; // Bits 0-6 are flags, Bit 7 is Summary
-reg [7:0] ier; // Bits 0-6 are masks, Bit 7 is Set/Clear control
-reg [7:0] config_reg;
-reg [7:0] video_config;
 
-// Interrupt flags (V8/Eagle specific)
-// Bit 6: VBlank
-// Bit 5: Slot IRQ (PDS)
-wire vbl_flag = vblank_irq;
-wire slot_flag = slot_irq;
+// Slot interrupt status - active LOW
+// Bit 6: VBlank (active low = VBlank is happening)
+// Bits 3-5: Slot IRQs
+wire [7:0] slot_status = {1'b0, ~vblank_irq, ~slot_irq, 4'b1111, 1'b1};
 
-// Interrupt Summary Logic
-wire [6:0] active_irqs = ifr[6:0] & ier[6:0];
-wire irq_pending = |active_irqs;
+// IRQ recalculation
+wire [7:0] slot_irqs = (~regs[2]) & 8'h78;  // Check bits 3-6 (slots + vblank)
+wire [7:0] slot_irqs_masked = slot_irqs & (regs[8'h12] & 8'h78);
+wire any_slot_irq = |slot_irqs_masked;
+
+wire [7:0] active_ifr = regs[3] & ier & 8'h1B;
+wire irq_pending = |active_ifr;
 
 always @(posedge clk_sys) begin
     if (reset) begin
-        port_b <= 8'h00;
-        dir_b <= 8'h00;
-        ifr <= 8'h00;
         ier <= 8'h00;
-        config_reg <= 8'h00;
-        video_config <= 8'h00;
+        ifr <= 8'h00;
+        port_b <= 8'h00;
         irq_out <= 1'b0;
+        // Initialize regs
+        regs[2] <= 8'h7F;  // All slot IRQs inactive (high = no IRQ)
+        regs[3] <= 8'h00;
+        regs[8'h12] <= 8'h00;
+        regs[8'h13] <= 8'h00;
     end else begin
-        // Update interrupt flags (Set on rising edge of input)
-        // Note: Real VIA uses edge detection, here we assume pulse or level handled by top
-        if (vbl_flag) ifr[6] <= 1'b1;
-        if (slot_flag) ifr[5] <= 1'b1;
-        
-        // Update IRQ Output
-        irq_out <= irq_pending;
-        
-        // Update Summary Bit (Read-only status)
-        ifr[7] <= irq_pending;
+        // Update slot/vblank status (active low)
+        regs[2] <= slot_status;
+
+        // Update slot IRQ summary in IFR (bit 1 = any slot)
+        if (any_slot_irq)
+            regs[3][1] <= 1'b1;
+        else
+            regs[3][1] <= 1'b0;
+
+        // Update IRQ output
+        if (irq_pending) begin
+            regs[3][7] <= 1'b1;
+            ifr <= active_ifr | 8'h80;
+            irq_out <= 1'b1;
+        end else begin
+            regs[3][7] <= 1'b0;
+            ifr <= 8'h00;
+            irq_out <= 1'b0;
+        end
 
         if (req) begin
-            if (we) begin
-                case (addr)
-                    REG_VPORB: port_b <= data_in;
-                    REG_VDIRB: dir_b <= data_in;
-                    REG_CONFIG: config_reg <= data_in;
-                    REG_VIDEO:  video_config <= data_in;
-                    
-                    REG_VIFR: begin 
-                        // Write 1 to clear specific bits (Standard VIA)
-                        // Note: Bit 7 is ignored on write
-                        ifr[6:0] <= ifr[6:0] & ~data_in[6:0];
-                    end
-                    
-                    REG_VIER: begin
-                        // Bit 7 controls Set (1) or Clear (0)
-                        if (data_in[7])
-                            ier[6:0] <= ier[6:0] | data_in[6:0];
-                        else
-                            ier[6:0] <= ier[6:0] & ~data_in[6:0];
-                    end
-                    default: ;
-                endcase
+            if (addr[12:8] == 5'b00000) begin
+                // Native mode: offset 0x00-0xFF
+                if (we) begin
+                    case (addr[7:0])
+                        8'h00: port_b <= data_in;  // Port B output
+
+                        8'h01: ;  // Config - read only
+
+                        8'h02: begin
+                            // Write 1 to bit 6 to clear VBlank flag
+                            regs[2] <= regs[2] | (data_in & 8'h40);
+                        end
+
+                        8'h03: begin
+                            // IFR write - bit 7 controls set/clear
+                            if (data_in[7])
+                                regs[3] <= regs[3] | (data_in & 8'h7F);
+                            else
+                                regs[3] <= regs[3] & ~(data_in & 8'h7F);
+                        end
+
+                        8'h10: regs[8'h10] <= data_in;  // Video config
+
+                        8'h12: begin
+                            // Slot IER - bit 7 controls set/clear
+                            if (data_in[7])
+                                regs[8'h12] <= regs[8'h12] | (data_in & 8'h7F);
+                            else
+                                regs[8'h12] <= regs[8'h12] & ~(data_in & 8'h7F);
+                        end
+
+                        8'h13: begin
+                            // IER - bit 7 controls set/clear
+                            if (data_in[7]) begin
+                                regs[8'h13] <= regs[8'h13] | (data_in & 8'h7F);
+                                // Special case from MAME
+                                if (data_in == 8'hFF)
+                                    regs[8'h13] <= 8'h1F;
+                            end else begin
+                                regs[8'h13] <= regs[8'h13] & ~(data_in & 8'h7F);
+                            end
+                        end
+
+                        default: regs[addr[7:0]] <= data_in;
+                    endcase
+                end else begin
+                    // Read native mode
+                    case (addr[7:0])
+                        8'h00: data_out <= port_b;  // Port B
+
+                        8'h01: begin
+                            // RAM config register (from v8 callbacks)
+                            // Return RAM size | 0x04 (bit 2 always set)
+                            case (ram_config)
+                                2'b00: data_out <= 8'h04;  // 128K
+                                2'b01: data_out <= 8'h05;  // 512K
+                                2'b10: data_out <= 8'h06;  // 1MB
+                                2'b11: data_out <= 8'h07;  // 4MB
+                            endcase
+                        end
+
+                        8'h02: data_out <= regs[2];  // Slot/VBlank status
+                        8'h03: data_out <= regs[3];  // IFR
+
+                        8'h10: begin
+                            // Video config - monitor ID in bits 5:3
+                            data_out <= {2'b00, monitor_id, 2'b00};
+                        end
+
+                        8'h12: data_out <= regs[8'h12] & 8'h7F;  // Slot IER, bit 7 always 0
+                        8'h13: data_out <= regs[8'h13] & 8'h7F;  // IER, bit 7 always 0
+
+                        default: data_out <= regs[addr[7:0]];
+                    endcase
+                end
             end else begin
-                // Read Logic
-                case (addr)
-                    REG_VPORB: data_out <= port_b;
-                    REG_VDIRB: data_out <= dir_b;
-                    REG_VIFR:  data_out <= ifr; // Returns calculated summary bit 7
-                    REG_VIER:  data_out <= {1'b1, ier[6:0]}; // Bit 7 always 1 on read
-                    
-                    REG_CONFIG: begin
-                        // Return RAM size | 0x04 (bit 2 always set in V8)
-                        case (ram_config)
-                            2'b00: data_out <= 8'h04; // 128K
-                            2'b01: data_out <= 8'h05; // 512K
-                            2'b10: data_out <= 8'h06; // 1MB
-                            2'b11: data_out <= 8'h07; // 4MB
-                        endcase
+                // VIA-compat mode: offset >= 0x100
+                // Register = offset >> 9 (bits 12:9)
+                case (addr[12:9])
+                    4'd1: begin  // Port A
+                        if (we)
+                            ; // Port A output - could connect to handler
+                        else
+                            data_out <= 8'hD5;  // Default Port A read value (from MAME)
                     end
-                    
-                    REG_VIDEO: begin
-                         // Monitor ID in bits 5:3
-                        data_out <= {2'b00, monitor_id, 3'b000};
+
+                    4'd13: begin  // IFR
+                        if (we) begin
+                            if (data_in[7])
+                                ifr <= 8'h7F;  // Writing 0x80+ clears all
+                        end else begin
+                            data_out <= ifr;
+                        end
                     end
-                    
-                    default: data_out <= 8'hFF;
+
+                    4'd14: begin  // IER
+                        if (we) begin
+                            if (data_in[7])
+                                ier <= ier | (data_in & 8'h7F);
+                            else
+                                ier <= ier & ~(data_in & 8'h7F);
+                        end else begin
+                            data_out <= ier;
+                        end
+                    end
+
+                    default: data_out <= 8'h00;
                 endcase
             end
         end

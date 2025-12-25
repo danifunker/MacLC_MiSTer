@@ -183,7 +183,7 @@ module emu
 		.SCALE(status[12:11])
 	);
 	
-	`include "build_id.v" 
+	`include "build_id.v"
 	localparam CONF_STR = {
 		"MACLC;UART115200;",
 		"-;",
@@ -196,7 +196,6 @@ module emu
 		"O78,Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 		"OBC,Scale,Normal,V-Integer,Narrower HV-Integer,Wider HV-Integer;",
 		"-;",
-		"O9,Model,Plus,LC;",
 		"OFG,Video Mode,4bpp,1bpp,2bpp,8bpp,16bpp;",
 		"O1011,Monitor,13\" RGB,12\" RGB,15\" Portrait;",
 		"-;",
@@ -223,7 +222,6 @@ module emu
 
 	reg       status_mem = 1'b1;
 	reg [1:0] status_cpu = 2'b10;
-	reg       status_mod;
 	reg       n_reset = 0;
 	wire      status_turbo = 1'b1;
 	always @(posedge clk_sys) begin
@@ -239,7 +237,6 @@ module emu
 				rst_cnt    <= rst_cnt - 1'd1;
 				status_mem <= status[4];
 				status_cpu <= status[14:13];
-				status_mod <= status[9];
 			end
 			else begin
 				n_reset <= 1;
@@ -315,13 +312,13 @@ module emu
 	assign CLK_VIDEO = clk_sys;
 	assign CE_PIXEL  = 1;
 
-	// Video Output Mux (Legacy Mac Plus vs V8 Mac LC)
-	assign VGA_R  = maclc_mode ? v8_vga_r : {8{pixelOut}};
-	assign VGA_G  = maclc_mode ? v8_vga_g : {8{pixelOut}};
-	assign VGA_B  = maclc_mode ? v8_vga_b : {8{pixelOut}};
-	assign VGA_DE = maclc_mode ? v8_de : (_vblank & _hblank);
-	assign VGA_VS = maclc_mode ? v8_vsync : vsync;
-	assign VGA_HS = maclc_mode ? v8_hsync : hsync;
+	// Video Output - Mac LC V8 video system
+	assign VGA_R  = v8_vga_r;
+	assign VGA_G  = v8_vga_g;
+	assign VGA_B  = v8_vga_b;
+	assign VGA_DE = v8_de;
+	assign VGA_VS = v8_vsync;
+	assign VGA_HS = v8_hsync;
 	assign VGA_F1 = 0;
 	assign VGA_SL = 0;
 
@@ -331,9 +328,8 @@ module emu
 	assign AUDIO_S = 1;
 	assign AUDIO_MIX = 0;
 
-	// set the real-world inputs to sane defaults
-	localparam 	  configROMSize = 1'b1; // 128K ROM
-	wire [1:0] configRAMSize = 2'b11; // 1MB/4MB
+	// Mac LC memory configuration
+	wire [1:0] configRAMSize = 2'b11; // 4MB RAM
 				  
 	// Serial Ports
 	wire serialOut;
@@ -348,11 +344,11 @@ module emu
 	wire [7:0] ariel_pixel_addr;
 	wire [23:0] ariel_palette_data;
 	wire [7:0] ariel_reg_dout;
-	wire selectAriel;
-	wire selectPseudoVIA;
+	wire selectAriel;      // From address decoder
+	wire selectPseudoVIA;  // From address decoder
+	wire selectVRAM;       // From address decoder
 	wire [7:0] pseudovia_dout;
 	wire pseudovia_irq;
-	wire maclc_mode = status_mod; // 0=Plus mode, 1=LC mode
 
 	assign serialIn =  UART_RXD;
 	assign UART_TXD = serialOut;
@@ -535,24 +531,23 @@ module emu
 		.clk8_en_n(clk8_en_n),
 		.clk16_en_p(clk16_en_p),
 		.clk16_en_n(clk16_en_n),
-		.cpuAddr(cpuAddr), 
+		.cpuAddr(cpuAddr),
 		._cpuUDS(_cpuUDS),
 		._cpuLDS(_cpuLDS),
 		._cpuRW(_cpuRW),
 		._cpuAS(_cpuAS),
 		.turbo(status_turbo),
-		.configROMSize({status_mod,~status_mod}),
-		.configRAMSize(configRAMSize), 
+		.configRAMSize(configRAMSize),
 		.memoryAddr(memoryAddr),
 		.memoryLatch(memoryLatch),
 		._memoryUDS(_memoryUDS),
 		._memoryLDS(_memoryLDS),
-		._romOE(_romOE), 
-		._ramOE(_ramOE), 
+		._romOE(_romOE),
+		._ramOE(_ramOE),
 		._ramWE(_ramWE),
-		.videoBusControl(videoBusControl),	
-		.dioBusControl(dioBusControl),	
-		.cpuBusControl(cpuBusControl),	
+		.videoBusControl(videoBusControl),
+		.dioBusControl(dioBusControl),
+		.cpuBusControl(cpuBusControl),
 		.selectSCSI(selectSCSI),
 		.selectSCC(selectSCC),
 		.selectIWM(selectIWM),
@@ -560,14 +555,16 @@ module emu
 		.selectRAM(selectRAM),
 		.selectROM(selectROM),
 		.selectSEOverlay(selectSEOverlay),
-		.hsync(hsync), 
+		.selectAriel(selectAriel),
+		.selectPseudoVIA(selectPseudoVIA),
+		.selectVRAM(selectVRAM),
+		.hsync(hsync),
 		.vsync(vsync),
 		._hblank(_hblank),
 		._vblank(_vblank),
 		.loadPixels(loadPixels),
 		.vid_alt(vid_alt),
 		.v8_video_addr(v8_video_addr),
-		.machineType(status_mod),
 		.memoryOverlayOn(memoryOverlayOn),
 
 		.snd_alt(snd_alt),
@@ -578,9 +575,6 @@ module emu
 		.dskReadAddrExt(dskReadAddrExt),
 		.dskReadAckExt(dskReadAckExt)
 	);
-
-	assign selectAriel = maclc_mode && (cpuAddr[23:13] == 11'h292); // 0x524xxx
-	assign selectPseudoVIA = maclc_mode && (cpuAddr[23:13] == 11'h293); // 0x526xxx
 
 	wire [1:0] diskEject;
 	wire [1:0] diskMotor, diskAct;
@@ -633,7 +627,7 @@ module emu
 	maclc_v8_video v8_video(
 		.clk_sys(clk_sys),
 		.clk8_en_p(clk8_en_p),
-		.reset(~n_reset || ~maclc_mode),
+		.reset(~n_reset),
 		
 		// VRAM Interface
 		// Addr is offset from VRAM base (0x340000 in word addr space)
@@ -662,13 +656,13 @@ module emu
 
 	dataController_top #(SCSI_DEVS) dc0
 	(
-		.clk32(clk_sys), 
+		.clk32(clk_sys),
 		.clk8_en_p(clk8_en_p),
 		.clk8_en_n(clk8_en_n),
 		.E_rising(E_rising),
 		.E_falling(E_falling),
-		.machineType(status_mod),
 		._systemReset(n_reset),
+		.pseudovia_irq(pseudovia_irq),
 		._cpuReset(_cpuReset), 
 		._cpuIPL(_cpuIPL),
 		._cpuUDS(_cpuUDS), 
@@ -815,14 +809,13 @@ module emu
 	always @(posedge clk_sys) begin
 		reg old_cyc = 0;
 		if(ioctl_write) begin
-            dio_data <= {ioctl_data[7:0], ioctl_data[15:8]};
-            dio_a <= dio_index[1:0] ? {dio_index[1:0], dio_addr[18:0]} : 
-             status_mod ?
-             {3'b001, dio_addr[17:0]} :  // LC: Set Bit 18 HIGH (21-bit result: 0_01_addr)
-                          {dio_index[6], dio_addr[17:0]};
-            // Plus: 128KB ROM
-            ioctl_wait <= 1;
-        end
+			dio_data <= {ioctl_data[7:0], ioctl_data[15:8]};
+			// Mac LC: ROM goes to SDRAM offset 0x40000 (bit 18 high)
+			// Floppy images at indexes 1,2 go to higher addresses
+			dio_a <= dio_index[1:0] ? {dio_index[1:0], dio_addr[18:0]} :
+			                          {3'b001, dio_addr[17:0]};
+			ioctl_wait <= 1;
+		end
 
 		old_cyc <= dioBusControl;
 		if(~dioBusControl) dio_write <= ioctl_wait;
@@ -834,10 +827,12 @@ module emu
 	wire download_cycle = dio_download && dioBusControl;
 	////////////////////////// SDRAM /////////////////////////////////
 
-	wire [24:0] sdram_addr = download_cycle ? {4'b0001, dio_a[20:0] } : 
-							 ~_romOE        ?
-							 {4'b0001, 2'b00, status_mod, memoryAddr[18:1]} :
-											  {3'b000, (dskReadAckInt || dskReadAckExt), memoryAddr[21:1]};
+	// SDRAM Address mapping for Mac LC:
+	// ROM: SDRAM 0x100000 + offset (bit 18 selects LC ROM location)
+	// RAM: SDRAM 0x000000 + offset
+	wire [24:0] sdram_addr = download_cycle ? {4'b0001, dio_a[20:0] } :
+	                         ~_romOE        ? {4'b0001, 2'b00, 1'b1, memoryAddr[18:1]} :
+	                                          {3'b000, (dskReadAckInt || dskReadAckExt), memoryAddr[21:1]};
 	wire [15:0] sdram_din  = download_cycle ? dio_data              : memoryDataOut;
 	wire  [1:0] sdram_ds   = download_cycle ? 2'b11                 : { !_memoryUDS, !_memoryLDS };
 	wire        sdram_we   = download_cycle ?

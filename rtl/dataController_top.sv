@@ -5,11 +5,10 @@ module dataController_top(
 	input clk8_en_n,
 	input E_rising,
 	input E_falling,
-	
-	// system control:
-	input machineType, // 0 - Mac Plus, 1 - Mac LC
 
+	// system control:
 	input _systemReset,
+	input pseudovia_irq,  // PseudoVIA interrupt (VBlank, slots)
 
 	// 68000 CPU control:
 	output _cpuReset,
@@ -158,11 +157,15 @@ module dataController_top(
 	wire [7:0] scsiDataOut;
 	wire mouseX1, mouseX2, mouseY1, mouseY2, mouseButton;
 	
-	// interrupt control
-	assign _cpuIPL = 
-		!_viaIrq?3'b110:
-		!_sccIrq?3'b101:
-		3'b111;
+	// Mac LC interrupt priorities (active low encoding: 111=none, 110=1, 101=2, 011=4, etc.)
+	// Level 1: VIA1
+	// Level 2: PseudoVIA (VBlank, slot interrupts)
+	// Level 4: SCC
+	assign _cpuIPL =
+		!_sccIrq      ? 3'b011 :   // Level 4: SCC (highest priority)
+		pseudovia_irq ? 3'b101 :   // Level 2: PseudoVIA
+		!_viaIrq      ? 3'b110 :   // Level 1: VIA1
+		3'b111;                     // No interrupt
 		
 
 	reg [15:0] cpu_data;
@@ -244,17 +247,17 @@ assign cpuDataOut = selectIWM ? iwmDataOut :
 
 	assign _viaIrq = ~viaIrq;
 
-	//port A
+	// Port A - Mac LC configuration
 	assign via_pa_i = {sccWReq, ~via_pa_oe[6:0] | via_pa_o[6:0]};
 	assign snd_vol = ~via_pa_oe[2:0] | via_pa_o[2:0];
-	assign snd_alt = machineType ? 1'b0 : ~(~via_pa_oe[3] | via_pa_o[3]);
-	assign driveSel = machineType ? ~via_pa_oe[4] | via_pa_o[4] : 1'b1;
-	assign memoryOverlayOn = machineType ? SEOverlay : ~via_pa_oe[4] | via_pa_o[4];
+	assign snd_alt = 1'b0;  // LC doesn't use alternate sound buffer
+	assign driveSel = ~via_pa_oe[4] | via_pa_o[4];  // Drive select from VIA PA4
+	assign memoryOverlayOn = SEOverlay;  // LC uses hardware overlay control
 	assign SEL = ~via_pa_oe[5] | via_pa_o[5];
 	assign vid_alt = ~via_pa_oe[6] | via_pa_o[6];
 
-	//port B
-	assign via_pb_i = {1'b1, {3{machineType}} | {_hblank, mouseY2, mouseX2}, machineType ? _ADBint : mouseButton, 2'b11, rtcdat_o};
+	// Port B - Mac LC uses ADB instead of direct mouse/keyboard
+	assign via_pb_i = {1'b1, 3'b111, _ADBint, 2'b11, rtcdat_o};
 	assign snd_ena = ~via_pb_oe[7] | via_pb_o[7];
 
 	assign viaDataOut[7:0] = 8'hEF;
@@ -315,7 +318,7 @@ assign cpuDataOut = selectIWM ? iwmDataOut :
 	wire ADBListen;
 
 	reg kbdclk;
-	reg [10:0] kbdclk_count;
+	reg [7:0] kbdclk_count;  // ADB timing only needs 8 bits
 	reg kbd_transmitting, kbd_wait_receiving, kbd_receiving;
 	reg [2:0] kbd_bitcnt;
 
@@ -326,15 +329,15 @@ assign cpuDataOut = selectIWM ? iwmDataOut :
 	reg  [7:0] kbd_to_mac;
 	reg kbd_data_valid;
 
-	// Keyboard transmitter-receiver
+	// ADB Keyboard transmitter-receiver
 	always @(posedge clk32) begin
 		if (clk8_en_p) begin
 			if ((kbd_transmitting && !kbd_wait_receiving) || kbd_receiving) begin
 				kbdclk_count <= kbdclk_count + 1'd1;
-				if (kbdclk_count == (machineType ? 8'd80 : 12'd1300)) begin // ~165usec - Mac Plus / faster - ADB
+				if (kbdclk_count == 8'd80) begin  // ADB timing
 					kbdclk <= ~kbdclk;
 					kbdclk_count <= 0;
-					if (kbdclk) begin 
+					if (kbdclk) begin
 						// shift before the falling edge
 						if (kbd_transmitting) kbd_out_data <= { kbd_out_data[6:0], kbddat_i };
 						if (kbd_receiving) kbddata_o <= kbd_to_mac[7-kbd_bitcnt];
@@ -347,7 +350,7 @@ assign cpuDataOut = selectIWM ? iwmDataOut :
 		end
 	end
 
-	// Keyboard control
+	// ADB Keyboard control (Mac LC uses ADB exclusively)
 	always @(posedge clk32) begin
 		reg kbdclk_d;
 		reg ADBListenD;
@@ -358,12 +361,8 @@ assign cpuDataOut = selectIWM ? iwmDataOut :
 			kbd_data_valid <= 0;
 			ADBListenD <= 0;
 		end else if (clk8_en_p) begin
-			if (kbd_in_strobe && !machineType) begin
-				kbd_to_mac <= kbd_in_data;
-				kbd_data_valid <= 1;
-			end
-
-			if (adb_dout_strobe && machineType) begin
+			// ADB data reception
+			if (adb_dout_strobe) begin
 				kbd_to_mac <= adb_dout;
 				kbd_receiving <= 1;
 			end
@@ -372,31 +371,13 @@ assign cpuDataOut = selectIWM ? iwmDataOut :
 			adb_din_strobe <= 0;
 			kbdclk_d <= kbdclk;
 
-			// Only the Macintosh can initiate communication over the keyboard lines. On
-			// power-up of either the Macintosh or the keyboard, the Macintosh is in
-			// charge, and the external device is passive. The Macintosh signals that it's
-			// ready to begin communication by pulling the keyboard data line low.
-			if (!machineType && !kbd_transmitting && !kbd_receiving && !kbddat_i) begin
-				kbd_transmitting <= 1;
-				kbd_bitcnt <= 0;
-			end
-
 			// ADB transmission start
-			if (machineType && !kbd_transmitting && !kbd_receiving) begin
+			if (!kbd_transmitting && !kbd_receiving) begin
 				ADBListenD <= ADBListen;
 				if (!ADBListenD && ADBListen) begin
 					kbd_transmitting <= 1;
 					kbd_bitcnt <= 0;
 				end
-			end
-
-			// The last bit of the command leaves the keyboard data line low; the
-			// Macintosh then indicates it's ready to receive the keyboard's response by
-			// setting the data line high. 
-			if (kbd_wait_receiving && kbddat_i && kbd_data_valid) begin
-				kbd_wait_receiving <= 0;
-				kbd_receiving <= 1;
-				kbd_transmitting <= 0;
 			end
 
 			// send/receive bits at rising edge of the keyboard clock
@@ -405,14 +386,9 @@ assign cpuDataOut = selectIWM ? iwmDataOut :
 
 				if (kbd_bitcnt == 3'd7) begin
 					if (kbd_transmitting) begin
-						if (!machineType) begin
-							kbd_out_strobe <= 1;
-							kbd_wait_receiving <= 1;
-						end else begin
-							adb_din_strobe <= 1;
-							adb_din <= kbd_out_data;
-							kbd_transmitting <= 0;
-						end
+						adb_din_strobe <= 1;
+						adb_din <= kbd_out_data;
+						kbd_transmitting <= 0;
 					end
 					if (kbd_receiving) begin
 						kbd_receiving <= 0;

@@ -52,9 +52,15 @@ int multi_step_amount = 1024;
 
 // Machine configuration
 // ---------------------
-int cfg_machineType = 0;  // 0=Plus, 1=LC
-int cfg_cpuType = 10;      // 0=FX68K, 1=TG68K (use TG68K for verilator)
-int cfg_memSize = 1;      // 0=1MB, 1=4MB
+// Mac LC only (no longer supports Mac Plus)
+// For TG68K: cpu = {status_cpu[1], |status_cpu}
+//   cfg_cpuType=0  -> cpu="00" (68000)
+//   cfg_cpuType=1  -> cpu="01" (68010)
+//   cfg_cpuType=2  -> cpu="11" (68020)
+//   cfg_cpuType=3  -> cpu="11" (68020)
+// Mac LC needs 68020 mode (cfg_cpuType=2 or 3)
+int cfg_cpuType = 2;       // 68020 mode via TG68K
+int cfg_memSize = 1;       // 0=1MB, 1=4MB
 
 // CPU trace
 // ---------
@@ -63,7 +69,7 @@ bool cpu_trace_started = false;  // Wait for ROM load and reset
 FILE* cpu_trace_file = nullptr;
 const char* cpu_trace_filename = "cpu_trace.log";
 int cpu_trace_count = 0;
-const int cpu_trace_max = 10000;  // Stop after this many instructions
+const int cpu_trace_max = 100000;  // Stop after this many instructions
 int post_download_delay = 0;  // Delay after ROM load before tracing
 uint32_t cpu_trace_last_pc = 0xFFFFFFFF;  // For edge detection (new instruction)
 
@@ -74,6 +80,15 @@ FILE* ram_debug_file = nullptr;
 const char* ram_debug_filename = "ram_debug.log";
 int ram_debug_count = 0;
 const int ram_debug_max = 5000;  // Stop after this many RAM accesses
+
+// Peripheral debug
+// ----------------
+bool periph_debug_enable = true;  // Enable peripheral access debugging
+FILE* periph_debug_file = nullptr;
+const char* periph_debug_filename = "periph_debug.log";
+int periph_debug_count = 0;
+const int periph_debug_max = 5000;  // Stop after this many peripheral accesses
+bool periph_debug_prev_bus_control = false;  // For edge detection
 
 // Debug GUI
 // ---------
@@ -160,8 +175,7 @@ int verilate() {
 		// Set system clock in core
 		VERTOPINTERN->clk_sys = clk_sys.clk;
 
-		// Set machine configuration
-		VERTOPINTERN->cfg_machineType = cfg_machineType;
+		// Set machine configuration (Mac LC only)
 		VERTOPINTERN->cfg_cpuType = cfg_cpuType;
 		VERTOPINTERN->cfg_memSize = cfg_memSize;
 
@@ -179,25 +193,24 @@ int verilate() {
 
 			// CPU trace output - skip while ROM is downloading
 			if (cpu_trace_enable && VERTOPINTERN->debug_fetch_valid && !*bus.ioctl_download) {
-				// Access TG68K internal signals (flattened via verilator public_flat)
-				uint32_t pc = VERTOPINTERN->emu__DOT__tg68k__DOT__tg68k__DOT__exe_pc;
-				uint16_t opcode = VERTOPINTERN->emu__DOT__tg68k__DOT__tg68k__DOT__exe_opcode;
-				uint16_t sndopc = VERTOPINTERN->emu__DOT__tg68k__DOT__tg68k__DOT__sndopc;
+				// Use the debug signals from sim.v that capture actual bus transactions
+				uint32_t pc = VERTOPINTERN->debug_pc;
+				uint16_t opcode = VERTOPINTERN->debug_opcode;
 
 				// Only log when PC changes (new instruction) to avoid duplicates
 				if (pc != cpu_trace_last_pc) {
 					cpu_trace_last_pc = pc;
 
-					// Disassemble with both opcode words for complete decoding
-					unsigned short opwords[2] = { opcode, sndopc };
+					// Disassemble - for now just use single opcode word
+					unsigned short opwords[2] = { opcode, 0 };
 					const char* disasm = disassemble_68k_ext(pc, opwords, 2);
 
 					// Output to debug console
-					console.AddLog("%08X: %04X %04X  %s", pc, opcode, sndopc, disasm);
+					console.AddLog("%08X: %04X  %s", pc, opcode, disasm);
 
 					// Also write to trace file if open
 					if (cpu_trace_file) {
-						fprintf(cpu_trace_file, "%08X: %04X %04X  %s\n", pc, opcode, sndopc, disasm);
+						fprintf(cpu_trace_file, "%08X: %04X  %s\n", pc, opcode, disasm);
 						cpu_trace_count++;
 						if (cpu_trace_count >= cpu_trace_max) {
 							fprintf(stderr, "CPU trace limit reached (%d instructions)\n", cpu_trace_max);
@@ -214,18 +227,27 @@ int verilate() {
 				bool oe = VERTOPINTERN->debug_ram_oe;
 				bool selectRAM = VERTOPINTERN->debug_selectRAM;
 				bool selectROM = VERTOPINTERN->debug_selectROM;
-				// Only log CPU RAM/ROM accesses (not video/sound/floppy)
-				if ((we || oe) && (selectRAM || selectROM) && ram_debug_count < ram_debug_max) {
+				bool cpu_write = !VERTOPINTERN->debug_cpuRW;  // RW=0 means write
+				bool bus_control = VERTOPINTERN->debug_cpuBusControl;
+
+				// Log actual RAM/ROM accesses, or attempted writes during overlay (selectROM but CPU write)
+				bool is_access = (we || oe) && (selectRAM || selectROM);
+				bool is_failed_write = selectROM && cpu_write && bus_control && !selectRAM;  // Write to overlay ROM area
+
+				if ((is_access || is_failed_write) && ram_debug_count < ram_debug_max) {
 					uint32_t addr = VERTOPINTERN->debug_ram_addr;
+					uint32_t cpuAddr = VERTOPINTERN->debug_cpuAddr;
 					uint16_t din = VERTOPINTERN->debug_ram_din;
 					uint16_t dout = VERTOPINTERN->debug_ram_dout;
 					uint8_t ds = VERTOPINTERN->debug_ram_ds;
-					fprintf(ram_debug_file, "%s addr=%07X din=%04X dout=%04X ds=%d%d selRAM=%d selROM=%d\n",
-						we ? "WR" : "RD",
-						addr, din, dout,
-						(ds >> 1) & 1, ds & 1,  // ds[1], ds[0]
+
+					const char* op = we ? "WR" : (is_failed_write ? "WR-FAIL" : "RD");
+					fprintf(ram_debug_file, "%s cpuAddr=%06X ramAddr=%07X din=%04X dout=%04X ds=%d%d selRAM=%d selROM=%d\n",
+						op,
+						cpuAddr, addr, din, dout,
+						(ds >> 1) & 1, ds & 1,
 						selectRAM ? 1 : 0,
-						VERTOPINTERN->debug_selectROM ? 1 : 0);
+						selectROM ? 1 : 0);
 					ram_debug_count++;
 					if (ram_debug_count >= ram_debug_max) {
 						fprintf(stderr, "RAM debug limit reached (%d accesses)\n", ram_debug_max);
@@ -233,6 +255,49 @@ int verilate() {
 						ram_debug_file = nullptr;
 					}
 				}
+			}
+
+			// Peripheral debug output - log on falling edge of cpuBusControl
+			if (periph_debug_enable && !*bus.ioctl_download && periph_debug_file) {
+				bool bus_control = VERTOPINTERN->debug_cpuBusControl;
+				// Log on rising edge of bus control (start of CPU cycle) when a peripheral is selected
+				if (bus_control && !periph_debug_prev_bus_control) {
+					bool selectVIA = VERTOPINTERN->debug_selectVIA;
+					bool selectAriel = VERTOPINTERN->debug_selectAriel;
+					bool selectPseudoVIA = VERTOPINTERN->debug_selectPseudoVIA;
+					bool selectSCSI = VERTOPINTERN->debug_selectSCSI;
+					bool selectSCC = VERTOPINTERN->debug_selectSCC;
+					bool selectIWM = VERTOPINTERN->debug_selectIWM;
+
+					if ((selectVIA || selectAriel || selectPseudoVIA || selectSCSI || selectSCC || selectIWM)
+					    && periph_debug_count < periph_debug_max) {
+						uint32_t addr = VERTOPINTERN->debug_cpuAddr;
+						uint16_t data_in = VERTOPINTERN->debug_cpuDataIn;
+						uint16_t data_out = VERTOPINTERN->debug_cpuDataOut;
+						bool rw = VERTOPINTERN->debug_cpuRW;
+
+						const char* periph_name = selectVIA ? "VIA" :
+						                          selectAriel ? "ARIEL" :
+						                          selectPseudoVIA ? "PVIA" :
+						                          selectSCSI ? "SCSI" :
+						                          selectSCC ? "SCC" :
+						                          selectIWM ? "IWM" : "???";
+
+						fprintf(periph_debug_file, "%s %s addr=%06X data_in=%04X data_out=%04X\n",
+							rw ? "RD" : "WR",
+							periph_name,
+							addr,
+							data_in,
+							data_out);
+						periph_debug_count++;
+						if (periph_debug_count >= periph_debug_max) {
+							fprintf(stderr, "Peripheral debug limit reached (%d accesses)\n", periph_debug_max);
+							fclose(periph_debug_file);
+							periph_debug_file = nullptr;
+						}
+					}
+				}
+				periph_debug_prev_bus_control = bus_control;
 			}
 		}
 
@@ -358,11 +423,21 @@ int main(int argc, char** argv, char** env) {
 		}
 	}
 
-	// Auto-load ROM at startup based on machine type
-	const char* rom_file = cfg_machineType ? "../releases/boot1.rom" : "../releases/boot0.rom";
+	// Open peripheral debug file
+	if (periph_debug_enable) {
+		periph_debug_file = fopen(periph_debug_filename, "w");
+		if (periph_debug_file) {
+			fprintf(stderr, "Peripheral debug enabled, writing to %s\n", periph_debug_filename);
+		} else {
+			fprintf(stderr, "Failed to open peripheral debug file %s\n", periph_debug_filename);
+			periph_debug_enable = false;
+		}
+	}
+
+	// Auto-load Mac LC ROM at startup
+	const char* rom_file = "../releases/boot1.rom";
 	bus.QueueDownload(rom_file, 0, 1);  // index 0 for ROM
-	fprintf(stderr, "Machine type: %s, loading ROM: %s\n",
-		cfg_machineType ? "Mac LC" : "Mac Plus", rom_file);
+	fprintf(stderr, "Machine type: Mac LC, loading ROM: %s\n", rom_file);
 
 	// Initial eval() to establish clock state for Verilator
 	// This is needed for correct rising edge detection on the first cycle
@@ -428,8 +503,7 @@ int main(int argc, char** argv, char** env) {
 
 		// Machine configuration (display only - requires restart to change)
 		ImGui::Separator();
-		ImGui::Text("Machine: %s | CPU: TG68K | RAM: %s",
-			cfg_machineType ? "Mac LC" : "Mac Plus",
+		ImGui::Text("Machine: Mac LC | CPU: TG68K | RAM: %s",
 			cfg_memSize ? "4MB" : "1MB");
 
 		ImGui::End();

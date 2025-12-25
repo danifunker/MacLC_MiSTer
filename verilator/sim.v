@@ -66,18 +66,29 @@ module emu
 	output        debug_selectRAM,
 	output        debug_selectROM,
 
+	// Peripheral debug outputs
+	output        debug_selectVIA,
+	output        debug_selectAriel,
+	output        debug_selectPseudoVIA,
+	output        debug_selectSCSI,
+	output        debug_selectSCC,
+	output        debug_selectIWM,
+	output [23:0] debug_cpuAddr,
+	output [15:0] debug_cpuDataIn,    // Data from CPU to peripherals
+	output [15:0] debug_cpuDataOut,   // Data from peripherals to CPU
+	output        debug_cpuRW,        // 1=read, 0=write
+	output        debug_cpuBusControl,
+
 	// Machine configuration inputs
-	input         cfg_machineType,  // 0=Plus, 1=LC
 	input  [1:0]  cfg_cpuType,      // 00=FX68K, 01/10/11=TG68K variants
 	input         cfg_memSize       // 0=1MB, 1=4MB
 );
 
 	localparam SCSI_DEVS = 2;
 
-	// Configuration - directly from inputs
+	// Configuration - directly from inputs (LC-only, no machineType)
 	wire      status_mem = cfg_memSize;      // 0=1MB, 1=4MB
 	wire [1:0] status_cpu = cfg_cpuType;     // CPU type (use 01 for TG68K)
-	wire      status_mod = cfg_machineType;  // 0=Plus, 1=LC
 	wire      status_turbo = 1'b0;           // Normal speed (could expose later)
 
 	////////////////////   CLOCKS   ///////////////////
@@ -92,12 +103,14 @@ module emu
 	wire clk8;
 
 	// Reset logic
+	// NOTE: Do NOT include _cpuReset_o here! The RESET instruction drives
+	// reset_n low to reset peripherals, but should NOT reset the CPU itself.
 	reg n_reset = 0;
 	always @(posedge clk_sys) begin
 		reg [15:0] rst_cnt;
 
 		if (clk8_en_p) begin
-			if(~pll_locked || reset || ~_cpuReset_o) begin
+			if(~pll_locked || reset) begin
 				rst_cnt <= '1;
 				n_reset <= 0;
 			end
@@ -114,22 +127,21 @@ module emu
 
 	assign CE_PIXEL  = 1;
 
-	// Video Output Mux (Legacy Mac Plus vs V8 Mac LC)
-	assign VGA_R  = maclc_mode ? v8_vga_r : {8{pixelOut}};
-	assign VGA_G  = maclc_mode ? v8_vga_g : {8{pixelOut}};
-	assign VGA_B  = maclc_mode ? v8_vga_b : {8{pixelOut}};
-	wire VGA_DE = maclc_mode ? v8_de : (_vblank & _hblank);
-	assign VGA_VS = maclc_mode ? v8_vsync : vsync;
-	assign VGA_HS = maclc_mode ? v8_hsync : hsync;
-	assign VGA_HB = maclc_mode ? v8_hblank : ~_hblank;
-	assign VGA_VB = maclc_mode ? v8_vblank : ~_vblank;
+	// Video Output - Mac LC V8 video system
+	assign VGA_R  = v8_vga_r;
+	assign VGA_G  = v8_vga_g;
+	assign VGA_B  = v8_vga_b;
+	wire VGA_DE = v8_de;
+	assign VGA_VS = v8_vsync;
+	assign VGA_HS = v8_hsync;
+	assign VGA_HB = v8_hblank;
+	assign VGA_VB = v8_vblank;
 
 	wire [10:0] audio;
 	assign AUDIO_L = {audio[10:0], 5'b00000};
 	assign AUDIO_R = {audio[10:0], 5'b00000};
 
-	// set the real-world inputs to sane defaults
-	localparam configROMSize = 1'b1; // 128K ROM
+	// Mac LC memory configuration
 	wire [1:0] configRAMSize = 2'b11; // 4MB
 
 	// Serial Ports (loopback for sim)
@@ -145,11 +157,11 @@ module emu
 	wire [7:0] ariel_pixel_addr;
 	wire [23:0] ariel_palette_data;
 	wire [7:0] ariel_reg_dout;
-	wire selectAriel;
-	wire selectPseudoVIA;
+	wire selectAriel;      // From address decoder
+	wire selectPseudoVIA;  // From address decoder
+	wire selectVRAM;       // From address decoder
 	wire [7:0] pseudovia_dout;
 	wire pseudovia_irq;
-	wire maclc_mode = status_mod; // 0=Plus mode, 1=LC mode
 	wire capslock;
 
 	// interconnects
@@ -351,7 +363,6 @@ module emu
 		._cpuRW(_cpuRW),
 		._cpuAS(_cpuAS),
 		.turbo(status_turbo),
-		.configROMSize({status_mod,~status_mod}),
 		.configRAMSize(configRAMSize),
 		.memoryAddr(memoryAddr),
 		.memoryLatch(memoryLatch),
@@ -370,6 +381,9 @@ module emu
 		.selectRAM(selectRAM),
 		.selectROM(selectROM),
 		.selectSEOverlay(selectSEOverlay),
+		.selectAriel(selectAriel),
+		.selectPseudoVIA(selectPseudoVIA),
+		.selectVRAM(selectVRAM),
 		.hsync(hsync),
 		.vsync(vsync),
 		._hblank(_hblank),
@@ -377,7 +391,6 @@ module emu
 		.loadPixels(loadPixels),
 		.vid_alt(vid_alt),
 		.v8_video_addr(v8_video_addr),
-		.machineType(status_mod),
 		.memoryOverlayOn(memoryOverlayOn),
 
 		.snd_alt(snd_alt),
@@ -388,9 +401,6 @@ module emu
 		.dskReadAddrExt(dskReadAddrExt),
 		.dskReadAckExt(dskReadAckExt)
 	);
-
-	assign selectAriel = maclc_mode && (cpuAddr[23:13] == 11'h292); // 0x524xxx
-	assign selectPseudoVIA = maclc_mode && (cpuAddr[23:13] == 11'h293); // 0x526xxx
 
 	wire [1:0] diskEject;
 	wire [1:0] diskMotor, diskAct;
@@ -432,7 +442,7 @@ module emu
 	maclc_v8_video v8_video(
 		.clk_sys(clk_sys),
 		.clk8_en_p(clk8_en_p),
-		.reset(~n_reset || ~maclc_mode),
+		.reset(~n_reset),
 
 		.video_addr(v8_video_addr),
 		.video_data_in(ram_do),
@@ -461,10 +471,10 @@ module emu
 		.clk8_en_n(clk8_en_n),
 		.E_rising(E_rising),
 		.E_falling(E_falling),
-		.machineType(status_mod),
 		._systemReset(n_reset),
 		._cpuReset(_cpuReset),
 		._cpuIPL(_cpuIPL),
+		.pseudovia_irq(pseudovia_irq),
 		._cpuUDS(_cpuUDS),
 		._cpuLDS(_cpuLDS),
 		._cpuRW(_cpuRW),
@@ -581,10 +591,10 @@ module emu
 		if(ioctl_wr) begin
 			// Don't byte-swap for sim_ram (original swaps for SDRAM byte ordering)
 			dio_data <= ioctl_dout;
+			// Mac LC ROM at offset 0x40000 (512KB)
+			// Floppy disk images at higher offsets
 			dio_a <= dio_index[1:0] ? {dio_index[1:0], dio_addr[18:0]} :
-				status_mod ?
-				{3'b001, dio_addr[17:0]} :  // LC: ROM at offset 0x40000
-				{dio_index[6], dio_addr[17:0]};
+				{3'b001, dio_addr[17:0]};  // LC ROM at offset 0x40000
 			ioctl_wait <= 1;
 		end
 
@@ -603,11 +613,10 @@ module emu
 	wire download_cycle = dio_download && ioctl_wr;
 
 	// Combinational version of dio_a for download (avoids register latency)
-	// This mirrors the registered logic but is immediate
+	// Mac LC ROM at offset 0x40000 (512KB)
+	// Floppy disk images at higher offsets
 	wire [20:0] dio_a_comb = dio_index[1:0] ? {dio_index[1:0], dio_addr[18:0]} :
-	                         status_mod ?
-	                         {3'b001, dio_addr[17:0]} :  // LC: ROM at offset 0x40000
-	                         {dio_index[6], dio_addr[17:0]};
+	                         {3'b001, dio_addr[17:0]};  // LC ROM at offset 0x40000
 
 	// Address mapping for sim_ram:
 	// sim_ram uses addr[21:0] for a 4M word (8MB) array
@@ -620,7 +629,7 @@ module emu
 	//   - {3'b000, 1'b1, dio_a_comb[20:0]} gives addr[21:0] = {1, dio_a_comb[20:0]} = 0x200000 + dio_a_comb
 	wire [24:0] ram_addr = download_cycle ? {3'b000, 1'b1, dio_a_comb[20:0] } :  // ROM at 0x200000+ (bit 21 set)
 						   ~_romOE        ?
-						   {3'b000, 1'b1, 2'b00, status_mod, memoryAddr[18:1]} :  // ROM reads at 0x200000+
+						   {3'b000, 1'b1, 3'b001, memoryAddr[18:1]} :  // ROM reads at 0x200000+ offset 0x40000
 										  {3'b000, (dskReadAckInt || dskReadAckExt), memoryAddr[21:1]};  // RAM at 0x000000+
 	// Use ioctl_dout directly for download (bypass registered dio_data)
 	wire [15:0] ram_din  = download_cycle ? ioctl_dout            : memoryDataOut;
@@ -654,5 +663,18 @@ module emu
 	assign debug_ram_ds = ram_ds;
 	assign debug_selectRAM = selectRAM;
 	assign debug_selectROM = selectROM;
+
+	// Peripheral debug outputs
+	assign debug_selectVIA = selectVIA;
+	assign debug_selectAriel = selectAriel;
+	assign debug_selectPseudoVIA = selectPseudoVIA;
+	assign debug_selectSCSI = selectSCSI;
+	assign debug_selectSCC = selectSCC;
+	assign debug_selectIWM = selectIWM;
+	assign debug_cpuAddr = cpuAddr;
+	assign debug_cpuDataIn = cpuDataOut;  // CPU writes this to peripherals
+	assign debug_cpuDataOut = dataControllerDataOut;  // Peripherals send this to CPU
+	assign debug_cpuRW = _cpuRW;  // 1=read, 0=write
+	assign debug_cpuBusControl = cpuBusControl;
 
 endmodule

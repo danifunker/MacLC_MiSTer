@@ -9,29 +9,27 @@ module addrController_top(
 
 	// system config:
 	input turbo,
-	input [1:0] configROMSize,
 	input [1:0] configRAMSize,
-	input machineType,
 
 	// 68000 CPU memory interface:
 	input [23:0] cpuAddr,
 	input _cpuUDS,
 	input _cpuLDS,
-	input _cpuRW,	
+	input _cpuRW,
 	input _cpuAS,
-	
+
 	// RAM/ROM:
 	output [21:0] memoryAddr,
 	output _memoryUDS,
-	output _memoryLDS,	
+	output _memoryLDS,
 	output _romOE,
-	output _ramOE,	
-	output _ramWE,	
+	output _ramOE,
+	output _ramWE,
 	output videoBusControl,
 	output dioBusControl,
 	output cpuBusControl,
 	output memoryLatch,
-	
+
 	// peripherals:
 	output selectSCSI,
 	output selectSCC,
@@ -40,12 +38,12 @@ module addrController_top(
 	output selectRAM,
 	output selectROM,
 	output selectSEOverlay,
-	
-	// New LC Peripherals
+
+	// LC Peripherals
 	output selectAriel,
 	output selectPseudoVIA,
 	output selectVRAM,
-	
+
 	// video:
 	output hsync,
 	output vsync,
@@ -54,13 +52,13 @@ module addrController_top(
 	output loadPixels,
 	input  vid_alt,
 	input  [21:0] v8_video_addr,
-		
+
 	input  snd_alt,
 	output loadSound,
-		
+
 	// misc
 	input memoryOverlayOn,
-	
+
 	// interface to read dsk image from ram
 	input [21:0] dskReadAddrInt,
 	output dskReadAckInt,
@@ -146,8 +144,10 @@ module addrController_top(
 	assign _memoryUDS = cpuBusControl ? _cpuUDS : 1'b0;
 	assign _memoryLDS = cpuBusControl ? _cpuLDS : 1'b0;
 	
-	wire vram_cpu_access = machineType && (cpuAddr[23:18] == 6'b010101);
-	wire [21:0] vram_translated = vram_cpu_access ? (22'h340000 + cpuAddr[17:0]) : cpuAddr[21:0];
+	// VRAM is at CPU address $F40000-$FBFFFF (512KB)
+	// Translate to internal SDRAM address $340000+
+	wire vram_cpu_access = selectVRAM;
+	wire [21:0] vram_translated = vram_cpu_access ? (22'h340000 + {4'b0, cpuAddr[17:0]}) : cpuAddr[21:0];
 	wire [21:0] addrMux = sndReadAck ? audioAddr : 
 	                      videoBusControl ? videoAddr : 
 	                      vram_translated;
@@ -156,17 +156,17 @@ module addrController_top(
 
 	wire ram_access = (cpuBusControl && selectRAM) || videoBusControl || sndReadAck;
 	wire rom_access = (cpuBusControl && selectROM);
-	
-	assign macAddr[16] = rom_access && configROMSize == 2'b00 ? 1'b0 : addrMux[16]; 
-	assign macAddr[17] = ram_access && configRAMSize == 2'b00 ? 1'b0 :
-	                     rom_access && configROMSize == 2'b01 ? 1'b0 :
-	                     rom_access && configROMSize == 2'b00 ? 1'b1 : addrMux[17]; 
-	assign macAddr[18] = ram_access && configRAMSize == 2'b00 ? 1'b0 :
-	                     rom_access && configROMSize != 2'b11 ? 1'b0 : addrMux[18]; 
+
+	// Mac LC ROM is 512KB (19 bits = $80000)
+	// RAM size controlled by configRAMSize (up to 10MB)
+	// ROM needs 19 address bits (0-18), so only force bits 19-21 to 0 for ROM
+	assign macAddr[16] = addrMux[16];
+	assign macAddr[17] = ram_access && configRAMSize == 2'b00 ? 1'b0 : addrMux[17];
+	assign macAddr[18] = ram_access && configRAMSize == 2'b00 ? 1'b0 : addrMux[18];
 	assign macAddr[19] = ram_access && configRAMSize[1] == 1'b0 ? 1'b0 :
-	                     rom_access ? 1'b0 : addrMux[19]; 
+	                     rom_access ? 1'b0 : addrMux[19];
 	assign macAddr[20] = ram_access && configRAMSize != 2'b11 ? 1'b0 :
-	                     rom_access ? 1'b0 : addrMux[20]; 
+	                     rom_access ? 1'b0 : addrMux[20];
 	assign macAddr[21] = ram_access && configRAMSize != 2'b11 ? 1'b0 :
 	                     rom_access ? 1'b0 : addrMux[21]; 
 	
@@ -180,11 +180,9 @@ module addrController_top(
 		macAddr;
 
 	addrDecoder ad(
-		.configROMSize(configROMSize),
 		.address(cpuAddr),
 		._cpuAS(_cpuAS),
 		.memoryOverlayOn(memoryOverlayOn),
-		.machineType(machineType), // Added machineType
 		.selectRAM(selectRAM),
 		.selectROM(selectROM),
 		.selectSCSI(selectSCSI),
@@ -192,26 +190,29 @@ module addrController_top(
 		.selectIWM(selectIWM),
 		.selectVIA(selectVIA),
 		.selectSEOverlay(selectSEOverlay),
-		// New Outputs
 		.selectAriel(selectAriel),
 		.selectPseudoVIA(selectPseudoVIA),
 		.selectVRAM(selectVRAM)
 	);
 
-	wire [21:0] plus_video_addr;
+	// Video timing for Mac LC uses V8 video controller
+	// The videoTimer is kept for hsync/vsync/_hblank/_vblank generation
+	// but video address comes from v8_video_addr input
+	wire [21:0] plus_video_addr;  // Not used, but videoTimer generates timing signals
 
 	videoTimer vt(
 		.clk(clk),
 		.clk_en(clk8_en_p),
-		.busCycle(busCycle), 
+		.busCycle(busCycle),
 		.vid_alt(vid_alt),
-		.videoAddr(plus_video_addr), 
-		.hsync(hsync), 
-		.vsync(vsync), 
+		.videoAddr(plus_video_addr),
+		.hsync(hsync),
+		.vsync(vsync),
 		._hblank(_hblank),
-		._vblank(_vblank), 
+		._vblank(_vblank),
 		.loadPixels(loadPixels));
 
-	assign videoAddr = machineType ? v8_video_addr : plus_video_addr;
-		
+	// Mac LC uses V8 video address directly
+	assign videoAddr = v8_video_addr;
+
 endmodule
