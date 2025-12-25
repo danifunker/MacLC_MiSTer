@@ -114,7 +114,9 @@ localparam [6:0]
     div3         = 7'd87,
     div4         = 7'd88,
     div_end1     = 7'd89,
-    div_end2     = 7'd90;
+    div_end2     = 7'd90,
+    moves1       = 7'd91,
+    moves2       = 7'd92;
 
 // Opcode constants for exec bit vector
 localparam opcMOVE           = 0;
@@ -206,5 +208,6 @@ localparam alu_move          = 85;
 localparam alu_setFlags      = 86;
 localparam opcCHK2           = 87;
 localparam opcEXTB           = 88;
+localparam moves_fc          = 89;  // MOVES: use SFC/DFC for function code
 
-localparam lastOpcBit        = 88;
+localparam lastOpcBit        = 89;

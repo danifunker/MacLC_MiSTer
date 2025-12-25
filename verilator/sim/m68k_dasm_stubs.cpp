@@ -48,7 +48,7 @@ const char* disassemble_68k(unsigned int pc, unsigned short opcode_word) {
     opdata[0] = (opcode_word >> 8) & 0xFF;  /* High byte */
     opdata[1] = opcode_word & 0xFF;         /* Low byte */
 
-    m68k_disassemble_raw(dasm_buffer, pc, opdata, opdata, M68K_CPU_TYPE_68000);
+    m68k_disassemble_raw(dasm_buffer, pc, opdata, opdata, M68K_CPU_TYPE_68020);
 
     return dasm_buffer;
 }
@@ -68,7 +68,7 @@ const char* disassemble_68k_ext(unsigned int pc, const unsigned short* opwords, 
         opdata[i*2 + 1] = opwords[i] & 0xFF;
     }
 
-    m68k_disassemble_raw(dasm_buffer, pc, opdata, opdata, M68K_CPU_TYPE_68000);
+    m68k_disassemble_raw(dasm_buffer, pc, opdata, opdata, M68K_CPU_TYPE_68020);
 
     return dasm_buffer;
 }

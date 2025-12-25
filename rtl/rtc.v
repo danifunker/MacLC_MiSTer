@@ -22,8 +22,12 @@ reg  [31:0] secs;
 reg  [31:0] secs2;
 reg   [7:0] ram[20];
 reg  [24:0] clocktoseconds;
+reg   [7:0] cs_deassert_cnt;  // Counter for CS debouncing
 
 initial begin
+	dat_o = 1'b1;  // RTC data line idles high
+	ck_d = 1'b1;
+	dout = 8'hFF;
 	ram[5'h00] = 8'hA8;
 	ram[5'h01] = 8'h00;
 	ram[5'h02] = 8'h00;
@@ -54,6 +58,7 @@ always @(posedge clk) begin
 		receiving <= 1;
 		cmd_mode <= 1;
 		dat_o <= 1;
+		cs_deassert_cnt <= 0;
 	//	sec_cnt <= 0;
 	end 
 	else begin
@@ -70,19 +75,30 @@ always @(posedge clk) begin
 			secs<=secs+1;
 		end
 
+		// Mac LC ROM uses DDRB toggles for RTC clocking, which briefly deasserts CS
+		// Track clock edges regardless of CS state (CS and clock change simultaneously)
+		ck_d <= ck;
+
 		if (_cs) begin
-			bit_cnt <= 0;
-			receiving <= 1;
-			cmd_mode <= 1;
-			dat_o <= 1;
+			cs_deassert_cnt <= cs_deassert_cnt + 1'd1;
+			if (cs_deassert_cnt >= 8'd100) begin  // Only reset after sustained deselect
+				bit_cnt <= 0;
+				receiving <= 1;
+				cmd_mode <= 1;
+			end
+			// Keep dat_o as-is when deselected (don't force to 1)
 		end
 		else begin
-			ck_d <= ck;
+			cs_deassert_cnt <= 8'd0;  // Reset counter when selected
+		end
 
+		// Process clock edges even if CS just changed (both happen on same DDRB write)
+		// Only process when we were recently selected (cs_deassert_cnt low)
+		if (cs_deassert_cnt < 8'd10) begin
 			// transmit at the falling edge
 			if (ck_d & ~ck & !receiving)
 				dat_o <= dout[7-bit_cnt];
-			// receive at the rising edge of ck
+			// receive at the rising edge
 			if (~ck_d & ck) begin
 				bit_cnt <= bit_cnt + 1'd1;
 				if (receiving)

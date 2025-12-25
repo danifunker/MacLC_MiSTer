@@ -356,6 +356,10 @@ architecture logic of TG68KdotC_Kernel is
 	signal CACR					: std_logic_vector(3 downto 0);
 	signal DFC					: std_logic_vector(2 downto 0);
 	signal SFC					: std_logic_vector(2 downto 0);
+	signal moves_read			: std_logic;  -- MOVES direction: '1'=EA to reg (use SFC), '0'=reg to EA (use DFC)
+	signal moves_fc_active	: std_logic;  -- '1' when MOVES FC override is active
+	signal FC_normal			: std_logic_vector(2 downto 0);  -- Normal FC calculation
+	signal FC_moves			: std_logic_vector(2 downto 0);  -- MOVES FC (from SFC/DFC)
 	
 
 	signal set					: bit_vector(lastOpcBit downto 0);
@@ -1152,10 +1156,11 @@ PROCESS (clk, IPL, setstate, addrvalue, state, exec_write_back, set_direct_data,
 						alu_bf_ffo_offset <= bf_full_offset+bf_width+1;
 					END IF;
 					memread <= "1111";
-					FC(1) <= NOT setstate(1) OR (PCbase AND NOT setstate(0));
-					FC(0) <= setstate(1) AND (NOT PCbase OR setstate(0));
+					-- FC(1:0) normal calculation
+					FC_normal(1) <= NOT setstate(1) OR (PCbase AND NOT setstate(0));
+					FC_normal(0) <= setstate(1) AND (NOT PCbase OR setstate(0));
 					IF interrupt='1' THEN
-						FC(1 downto 0) <= "11";
+						FC_normal(1 downto 0) <= "11";
 					END IF;	
 					
 					IF state="11" THEN
@@ -1169,7 +1174,7 @@ PROCESS (clk, IPL, setstate, addrvalue, state, exec_write_back, set_direct_data,
 						addrvalue <= '0';
 					ELSIF execOPC='1' AND exec_write_back='1' THEN
 						state <= "11";
-						FC(1 downto 0) <= "01";
+						FC_normal(1 downto 0) <= "01";
 						memmask <= wbmemmask;
 						addrvalue <= '0';
 					ELSE	
@@ -1363,7 +1368,7 @@ PROCESS (clk, Reset, FlagsSR, last_data_read, OP2out, exec)
 		
 		IF rising_edge(clk) THEN
 			IF Reset='1' THEN
-				FC(2) <= '1';
+				FC_normal(2) <= '1';
 				SVmode <= '1';
 				preSVmode <= '1';
 				FlagsSR <= "00100111";
@@ -1384,7 +1389,7 @@ PROCESS (clk, Reset, FlagsSR, last_data_read, OP2out, exec)
 				IF set(changeMode)='1' THEN
 					preSVmode <= NOT preSVmode;
 					FlagsSR(5) <= NOT preSVmode;
-					FC(2) <= NOT preSVmode;
+					FC_normal(2) <= NOT preSVmode;
 				END IF;
 				IF micro_state=trap3 THEN
 					FlagsSR(7) <= '0';
@@ -1400,12 +1405,12 @@ PROCESS (clk, Reset, FlagsSR, last_data_read, OP2out, exec)
 				END IF;	
 				IF exec(to_SR)='1' THEN
 					FlagsSR(7 downto 0) <= SRin;	--SR
-					FC(2) <= SRin(5);
+					FC_normal(2) <= SRin(5);
 				ELSIF exec(update_FC)='1' THEN
-					FC(2) <= FlagsSR(5);
+					FC_normal(2) <= FlagsSR(5);
 				END IF;
 				IF interrupt='1' THEN
-					FC(2) <= '1';
+					FC_normal(2) <= '1';
 				END IF;	
 				IF cpu(1)='0' THEN
 					FlagsSR(4) <= '0';
@@ -1760,12 +1765,21 @@ PROCESS (clk, cpu, OP1out, OP2out, opcode, exe_condition, nextpass, micro_state,
 						trap_illegal <= '1';
 						trapmake <= '1';
 					END IF;
-				ELSIF opcode(11 downto 9)="111" THEN		--MOVES not in 68000
+				ELSIF opcode(11 downto 9)="111" THEN		--MOVES (68010+)
+					-- MOVES format: 0000 1110 SS EA EA EA (opcode), then extension word
+					-- Extension: A/D REG DR 0 0 0 0 0 0 0 0 0
+					-- bit 15: 0=data reg, 1=address reg
+					-- bits 14-12: register number
+					-- bit 11: 0=EA to reg (read), 1=reg to EA (write)
 					IF cpu(0)='1' AND opcode(7 downto 6)/="11" AND opcode(5 downto 4)/="00" AND (opcode(5 downto 3)/="111" OR opcode(2 downto 1)="00") THEN
 						IF SVmode='1' THEN
-							--TODO: implement MOVES
-							trap_illegal <= '1';
-							trapmake <= '1';
+							-- MOVES implementation
+							set_exec(opcMOVE) <= '1';
+							IF decodeOPC='1' THEN
+								next_micro_state <= moves1;
+								getbrief <= '1';  -- Fetch extension word
+								set(ea_build) <= '1';
+							END IF;
 						ELSE
 							trap_priv <= '1';
 							trapmake <= '1';
@@ -3996,13 +4010,38 @@ PROCESS (clk, cpu, OP1out, OP2out, opcode, exe_condition, nextpass, micro_state,
 					
 				WHEN bf1 =>
 					setstate <="10";
-	
+
+				WHEN moves1 =>
+					-- MOVES: extension word in brief, EA already built
+					-- brief(11): 0=EA to reg (read), 1=reg to EA (write)
+					-- brief(15): 0=data reg, 1=address reg
+					-- brief(14:12): register number
+					set(briefext) <= '1';
+					set_exec(moves_fc) <= '1';  -- Tell FC logic to use SFC/DFC
+					IF brief(11)='0' THEN
+						-- EA to register (read from memory with FC=SFC)
+						setstate <= "10";  -- Memory read
+						set(Regwrena) <= '1';  -- Enable register write
+					ELSE
+						-- Register to EA (write to memory with FC=DFC)
+						setstate <= "11";  -- Memory write
+						source_2ndHbits <= '1';  -- Use register specified in extension
+					END IF;
+					next_micro_state <= moves2;
+
+				WHEN moves2 =>
+					-- Complete the transfer
+					set_exec(moves_fc) <= '1';  -- Keep FC override active
+					IF exe_opcode(7 downto 6)="10" THEN  -- Long
+						set(longaktion) <= '1';
+					END IF;
+
 				WHEN OTHERS => NULL;
 			END CASE;
 	END PROCESS;
 
 -----------------------------------------------------------------------------
--- MOVEC
+-- MOVEC and MOVES support
 -----------------------------------------------------------------------------
   process (clk, SFC, DFC, VBR, CACR, brief)
   begin
@@ -4011,18 +4050,28 @@ PROCESS (clk, cpu, OP1out, OP2out, opcode, exe_condition, nextpass, micro_state,
 	  if Reset = '1' then
 		VBR <= (others => '0');
 		CACR <= (others => '0');
-	  elsif clkena_lw = '1' and exec(movec_wr) = '1' then
-		case brief(11 downto 0) is
-		  when X"000" => SFC <= reg_QA(2 downto 0); -- SFC -- 68010+
-		  when X"001" => DFC <= reg_QA(2 downto 0); -- DFC -- 68010+
-		  when X"002" => CACR <= reg_QA(3 downto 0); -- 68020+
-		  when X"800" => NULL; -- USP -- 68010+
-		  when X"801" => VBR <= reg_QA; -- 68010+
-		  when X"802" => NULL; -- CAAR -- 68020+
-		  when X"803" => NULL; -- MSP -- 68020+
-		  when X"804" => NULL; -- isP -- 68020+
-		  when others => NULL;
-		end case;
+		SFC <= "101";   -- Default to supervisor data (like 68010)
+		DFC <= "101";   -- Default to supervisor data (like 68010)
+		moves_read <= '0';
+	  elsif clkena_lw = '1' then
+		-- Track MOVES direction when entering moves1 state
+		if next_micro_state = moves1 then
+		  moves_read <= NOT brief(11);  -- brief(11)=0 means EA to reg (read)
+		end if;
+		-- Handle MOVEC register writes
+		if exec(movec_wr) = '1' then
+		  case brief(11 downto 0) is
+			when X"000" => SFC <= reg_QA(2 downto 0); -- SFC -- 68010+
+			when X"001" => DFC <= reg_QA(2 downto 0); -- DFC -- 68010+
+			when X"002" => CACR <= reg_QA(3 downto 0); -- 68020+
+			when X"800" => NULL; -- USP -- 68010+
+			when X"801" => VBR <= reg_QA; -- 68010+
+			when X"802" => NULL; -- CAAR -- 68020+
+			when X"803" => NULL; -- MSP -- 68020+
+			when X"804" => NULL; -- isP -- 68020+
+			when others => NULL;
+		  end case;
+		end if;
 	  end if;
 	end if;
 
@@ -4041,6 +4090,19 @@ PROCESS (clk, cpu, OP1out, OP2out, opcode, exe_condition, nextpass, micro_state,
 
   CACR_out <= CACR;
   VBR_out <= VBR;
+
+-----------------------------------------------------------------------------
+-- FC output mux: select between normal FC and MOVES FC (SFC/DFC)
+-----------------------------------------------------------------------------
+  -- MOVES FC override is active when exec(moves_fc) is set
+  moves_fc_active <= '1' WHEN exec(moves_fc)='1' ELSE '0';
+
+  -- FC_moves comes from SFC (read) or DFC (write) based on moves_read
+  FC_moves <= SFC WHEN moves_read='1' ELSE DFC;
+
+  -- Final FC output: use MOVES FC when active, otherwise normal FC
+  FC <= FC_moves WHEN moves_fc_active='1' ELSE FC_normal;
+
 -----------------------------------------------------------------------------
 -- Conditions
 -----------------------------------------------------------------------------

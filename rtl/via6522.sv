@@ -54,7 +54,12 @@ module via6522 (
     input  wire        cb2_i,
     output wire        cb2_t,
 
-    output wire        irq
+    output wire        irq,
+
+    // Shift register status (for CUDA interface)
+    output wire        sr_out_active,  // Shift register is actively shifting
+    output wire        sr_out_dir,     // Shift direction: 0=in, 1=out
+    output wire        sr_ext_clk      // Using external clock (CB1)
 );
     localparam [15:0] latch_reset_pattern = 16'h5550;
 
@@ -368,8 +373,10 @@ module via6522 (
         data_out <= 8'h00;
         case (addr)
             4'h0: begin // ORB
-                // Port B reads its own output register for pins set to output.
-                data_out <= (pio_i_prb & pio_i_ddrb) | (irb & ~pio_i_ddrb);
+                // Port B ALWAYS reads the actual pin level for ALL bits, unlike
+                // Port A which reads output latch for outputs. Per 6522 datasheet,
+                // ORB reads perform a read-modify-write on the actual pin state.
+                data_out <= irb;
                 if (tmr_a_output_en == 1'b1) begin
                     data_out[7] <= timer_a_out;
                 end
@@ -723,5 +730,10 @@ module via6522 (
             bit_cnt <= 3'd0;
         end
     end
+
+    // Shift register status outputs for CUDA interface
+    assign sr_out_active = shift_active;
+    assign sr_out_dir    = shift_dir;
+    assign sr_ext_clk    = (shift_clk_sel == 2'b11);  // External clock mode (CB1)
 
 endmodule
