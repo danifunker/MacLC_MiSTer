@@ -512,43 +512,55 @@ module via6522 (
     end
 
     always @(posedge clock) begin
-        if (rising == 1'b1) begin
-            if ((ren == 1'b1 || wen == 1'b1) && addr == 4'h1) begin
-                irq_flags[1] <= 1'b0;
-                if (ca2_is_output == 1'b0 && ca2_no_irq_clr == 1'b0) begin
-                    irq_flags[0] <= 1'b0;
-                end
-            end
-        end
-        if (ca1_event == 1'b1) begin
-            irq_flags[1] <= 1'b1;
-        end
-        if (ca2_event == 1'b1) begin
-            irq_flags[0] <= 1'b1;
-        end
         if (reset == 1'b1) begin
             irq_flags[1:0] <= 2'b00;
+        end else begin
+            if (rising == 1'b1) begin
+                if ((ren == 1'b1 || wen == 1'b1) && addr == 4'h1) begin
+                    irq_flags[1] <= 1'b0;
+                    if (ca2_is_output == 1'b0 && ca2_no_irq_clr == 1'b0) begin
+                        irq_flags[0] <= 1'b0;
+                    end
+                end
+            end
+            if (ca1_event == 1'b1) begin
+                irq_flags[1] <= 1'b1;
+            end
+            if (ca2_event == 1'b1) begin
+                irq_flags[0] <= 1'b1;
+            end
+            // IFR write handling
+            if (falling == 1'b1 && wen == 1'b1 && addr == 4'hD && data_in[7] == 1'b0) begin
+                if (data_in[0]) irq_flags[0] <= 1'b0;
+                if (data_in[1]) irq_flags[1] <= 1'b0;
+            end
         end
     end
 
     always @(posedge clock) begin
-        if (rising == 1'b1) begin
-            if ((ren == 1'b1 || wen == 1'b1) && addr == 4'h0) begin
-                irq_flags[4] <= 1'b0;
-                if (cb2_is_output == 1'b0 && cb2_no_irq_clr == 1'b0) begin
-                    irq_flags[3] <= 1'b0;
-                end
-            end
-        end
-        
-        if (cb1_event == 1'b1) begin
-            irq_flags[4] <= 1'b1;
-        end
-        if (cb2_event == 1'b1) begin
-            irq_flags[3] <= 1'b1;
-        end
         if (reset == 1'b1) begin
             irq_flags[4:3] <= 2'b00;
+        end else begin
+            if (rising == 1'b1) begin
+                if ((ren == 1'b1 || wen == 1'b1) && addr == 4'h0) begin
+                    irq_flags[4] <= 1'b0;
+                    if (cb2_is_output == 1'b0 && cb2_no_irq_clr == 1'b0) begin
+                        irq_flags[3] <= 1'b0;
+                    end
+                end
+            end
+            
+            if (cb1_event == 1'b1) begin
+                irq_flags[4] <= 1'b1;
+            end
+            if (cb2_event == 1'b1) begin
+                irq_flags[3] <= 1'b1;
+            end
+            // IFR write handling
+            if (falling == 1'b1 && wen == 1'b1 && addr == 4'hD && data_in[7] == 1'b0) begin
+                if (data_in[3]) irq_flags[3] <= 1'b0;
+                if (data_in[4]) irq_flags[4] <= 1'b0;
+            end
         end
     end
 
@@ -607,38 +619,53 @@ module via6522 (
     end
 
     always @(posedge clock) begin
-        if (rising == 1'b1 && (ren == 1'b1 || wen == 1'b1) && addr == 4'h4) begin
-            irq_flags[6] <= 1'b0;
-        end
-        if (timer_a_event == 1'b1) begin
-            irq_flags[6] <= 1'b1;
-        end
         if (reset == 1'b1) begin
             irq_flags[6] <= 1'b0;
+        end else begin
+            if (rising == 1'b1 && (ren == 1'b1 || wen == 1'b1) && addr == 4'h4) begin
+                irq_flags[6] <= 1'b0;
+            end
+            if (timer_a_event == 1'b1) begin
+                irq_flags[6] <= 1'b1;
+            end
+            // IFR write handling
+            if (falling == 1'b1 && wen == 1'b1 && addr == 4'hD && data_in[7] == 1'b0) begin
+                if (data_in[6]) irq_flags[6] <= 1'b0;
+            end
         end
     end
 
     always @(posedge clock) begin
-        if (rising == 1'b1 && (ren == 1'b1 || wen == 1'b1) && addr == 4'h8) begin
-            irq_flags[5] <= 1'b0;
-        end
-        if (timer_b_event == 1'b1) begin
-            irq_flags[5] <= 1'b1;
-        end
         if (reset == 1'b1) begin
             irq_flags[5] <= 1'b0;
+        end else begin
+            if (rising == 1'b1 && (ren == 1'b1 || wen == 1'b1) && addr == 4'h8) begin
+                irq_flags[5] <= 1'b0;
+            end
+            if (timer_b_event == 1'b1) begin
+                irq_flags[5] <= 1'b1;
+            end
+            // IFR write handling
+            if (falling == 1'b1 && wen == 1'b1 && addr == 4'hD && data_in[7] == 1'b0) begin
+                if (data_in[5]) irq_flags[5] <= 1'b0;
+            end
         end
     end
 
     always @(posedge clock) begin
-        if (serial_event == 1'b1) begin
-            irq_flags[2] <= 1'b1;
-        end
-        if (rising == 1'b1 && (ren == 1'b1 || wen == 1'b1) && addr == 4'hA) begin
-            irq_flags[2] <= 1'b0;
-        end
         if (reset == 1'b1) begin
             irq_flags[2] <= 1'b0;
+        end else begin
+            if (serial_event == 1'b1) begin
+                irq_flags[2] <= 1'b1;
+            end
+            if (rising == 1'b1 && (ren == 1'b1 || wen == 1'b1) && addr == 4'hA) begin
+                irq_flags[2] <= 1'b0;
+            end
+            // IFR write handling
+            if (falling == 1'b1 && wen == 1'b1 && addr == 4'hD && data_in[7] == 1'b0) begin
+                if (data_in[2]) irq_flags[2] <= 1'b0;
+            end
         end
     end
 
@@ -711,24 +738,6 @@ module via6522 (
                 end
                 default: ;
             endcase
-        end
-    end
-
-    // Separate always block for IFR write (register 0xD)
-    always @(posedge clock) begin
-        if (reset == 1'b1) begin
-            // Reset is handled in individual irq_flags blocks below
-        end else if (falling == 1'b1 && wen == 1'b1 && addr == 4'hD) begin
-            if (data_in[7] == 1'b0) begin
-                // Clear flags based on data_in mask
-                if (data_in[0]) irq_flags[0] <= 1'b0;
-                if (data_in[1]) irq_flags[1] <= 1'b0;
-                if (data_in[2]) irq_flags[2] <= 1'b0;
-                if (data_in[3]) irq_flags[3] <= 1'b0;
-                if (data_in[4]) irq_flags[4] <= 1'b0;
-                if (data_in[5]) irq_flags[5] <= 1'b0;
-                if (data_in[6]) irq_flags[6] <= 1'b0;
-            end
         end
     end
 
