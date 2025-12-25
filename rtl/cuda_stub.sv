@@ -95,15 +95,17 @@ module cuda_stub (
                     cb1_oe <= 1'b0;     // Not driving clock
                     cb2_oe <= 1'b0;     // Not driving data
                     bit_count <= 4'd0;
+                    cb1_out <= 1'b1;    // CB1 idles high
 
-                    // Detect VIA shift register becoming active
-                    if (via_sr_active && !via_sr_active_prev) begin
+                    // Detect VIA shift register active - respond any time it's high
+                    // (more robust than edge detection which can miss brief pulses)
+                    if (via_sr_active) begin
                         if (via_sr_out) begin
-                            // Host is sending to us - receive mode
+                            // Host is sending to us (shift out mode) - receive and clock
                             state <= ST_RECEIVING;
                             clk_count <= 8'd0;
                         end else begin
-                            // Host wants data from us - respond mode
+                            // Host wants data from us (shift in mode) - respond
                             state <= ST_RESPOND;
                             response_byte <= 8'h00;  // Null response
                             bit_count <= 4'd0;
@@ -112,23 +114,37 @@ module cuda_stub (
                 end
 
                 ST_RECEIVING: begin
-                    // Let the VIA's internal shift clock handle reception
-                    // Just wait for it to complete
+                    // In external clock mode (ACR mode 5/7), CUDA must drive CB1
+                    // to clock data into/out of the VIA shift register
+                    cb1_oe <= 1'b1;  // Enable CB1 output
+                    cb2_oe <= 1'b0;  // Not driving data in receive mode
+
                     clk_count <= clk_count + 1'd1;
 
-                    // After enough time for 8 bits (VIA handles clocking),
-                    // trigger the completion interrupt
-                    if (clk_count >= 8'd200) begin  // Timeout to ensure completion
-                        sr_trigger <= 1'b1;
-                        state <= ST_WAIT_DONE;
+                    // Generate clock pulses on CB1
+                    if (clk_count >= 8'd10) begin
                         clk_count <= 8'd0;
+                        cb1_out <= ~cb1_out;  // Toggle clock
+
+                        if (!cb1_out) begin  // Rising edge just occurred
+                            bit_count <= bit_count + 1'd1;
+
+                            if (bit_count >= 4'd7) begin
+                                // 8 bits complete - VIA should set SR interrupt
+                                state <= ST_WAIT_DONE;
+                                clk_count <= 8'd0;
+                            end
+                        end
                     end
                 end
 
                 ST_WAIT_DONE: begin
-                    // Brief wait after triggering
+                    // Brief wait, then release CB1 drive
+                    cb1_oe <= 1'b0;
+                    cb2_oe <= 1'b0;
+                    cb1_out <= 1'b1;  // Idle high
                     clk_count <= clk_count + 1'd1;
-                    if (clk_count >= 8'd10) begin
+                    if (clk_count >= 8'd20) begin
                         state <= ST_IDLE;
                     end
                 end
