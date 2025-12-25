@@ -52,6 +52,8 @@ module addrController_top(
 	output loadPixels,
 	input  vid_alt,
 	input  [21:0] v8_video_addr,
+	input  v8_hblank,
+	input  v8_vblank,
 
 	input  snd_alt,
 	output loadSound,
@@ -130,7 +132,8 @@ module addrController_top(
 	wire extraBusControl = (busCycle == 2'b10);
 
 	wire [21:0] videoAddr;
-	wire videoControlActive = _hblank;
+	// Use V8's blanking signals for RAM control timing
+	wire videoControlActive = !v8_hblank && !v8_vblank;
 
 	assign _romOE = ~(cpuBusControl && selectROM && _cpuRW);
 	
@@ -145,16 +148,21 @@ module addrController_top(
 	assign _memoryLDS = cpuBusControl ? _cpuLDS : 1'b0;
 	
 	// VRAM is at CPU address $F40000-$FBFFFF (512KB)
-	// Translate to internal SDRAM address $340000+
+	// Translate to internal SDRAM address $340000-$3BFFFF
+	// CPU VRAM base $F40000 has bits [19:0] = $40000, so:
+	// SDRAM addr = $340000 + (cpuAddr[19:0] - $40000) = $300000 + cpuAddr[19:0]
 	wire vram_cpu_access = selectVRAM;
-	wire [21:0] vram_translated = vram_cpu_access ? (22'h340000 + {4'b0, cpuAddr[17:0]}) : cpuAddr[21:0];
+	wire [21:0] vram_translated = vram_cpu_access ? (22'h300000 + {2'b0, cpuAddr[19:0]}) : cpuAddr[21:0];
 	wire [21:0] addrMux = sndReadAck ? audioAddr : 
 	                      videoBusControl ? videoAddr : 
 	                      vram_translated;
 	wire [21:0] macAddr;
 	assign macAddr[15:0] = addrMux[15:0];
 
-	wire ram_access = (cpuBusControl && selectRAM) || videoBusControl || sndReadAck;
+	// Note: videoBusControl is NOT included here because Mac LC has dedicated VRAM
+	// at a fixed address (0x340000) that shouldn't be masked by RAM size limits.
+	// The original Mac Plus had shared video RAM, but Mac LC's V8 VRAM is separate.
+	wire ram_access = (cpuBusControl && selectRAM) || sndReadAck;
 	wire rom_access = (cpuBusControl && selectROM);
 
 	// Mac LC ROM is 512KB (19 bits = $80000)

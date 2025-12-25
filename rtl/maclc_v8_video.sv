@@ -111,33 +111,39 @@ assign video_addr = VRAM_BASE + {v_count, 10'd0} + {11'd0, fetch_addr};
 
 reg [15:0] video_data;
 reg [15:0] pixel_shift;
-reg [3:0]  pixel_count;
+reg [3:0]  shift_count;
 
-// Latch data from VRAM
+// Latch data from VRAM - keep for 16bpp direct access
 always @(posedge clk_sys) begin
     if (video_latch && !hblank && !vblank)
         video_data <= video_data_in;
 end
 
 // --- Shift Register Logic ---
+// video_latch occurs once per 16 clocks (bus cycle period)
+// We need to output 16/bits_per_pixel pixels per word
+// So shift interval is bits_per_pixel clocks (1bpp: every clock, 4bpp: every 4 clocks)
 always @(posedge clk_sys) begin
     if (hblank || vblank) begin
         pixel_shift <= 16'd0;
-        // Pre-load logic reset
+        shift_count <= 0;
+    end else if (video_latch) begin
+        // Load new data directly when it arrives
+        pixel_shift <= video_data_in;
+        shift_count <= 1; // Start at 1 so first pixel displays on this clock
     end else begin
-        // Check if we hit the fetch boundary for the current mode
-        if ((h_count & fetch_mask) == 0) begin 
-            pixel_shift <= video_data;
-        end else begin
-            // Shift left by bits_per_pixel
-            case (bits_per_pixel)
-                5'd1:  pixel_shift <= {pixel_shift[14:0], 1'b0};
-                5'd2:  pixel_shift <= {pixel_shift[13:0], 2'b0};
-                5'd4:  pixel_shift <= {pixel_shift[11:0], 4'b0};
-                5'd8:  pixel_shift <= {pixel_shift[7:0],  8'b0};
-                5'd16: pixel_shift <= 16'd0; // Consumed instantly
-            endcase
-        end
+        shift_count <= shift_count + 1;
+
+        // Shift at the start of each new pixel period
+        // For N bits per pixel, shift every (16/pixels_per_word) = N clocks
+        // Check uses current shift_count value, shift happens at counts 4,8,12 for 4bpp etc.
+        case (bits_per_pixel)
+            5'd1:  pixel_shift <= {pixel_shift[14:0], 1'b0}; // every clock
+            5'd2:  if (shift_count[0] == 0) pixel_shift <= {pixel_shift[13:0], 2'b0}; // every 2 clocks
+            5'd4:  if (shift_count[1:0] == 0) pixel_shift <= {pixel_shift[11:0], 4'b0}; // every 4 clocks
+            5'd8:  if (shift_count[2:0] == 0) pixel_shift <= {pixel_shift[7:0],  8'b0}; // every 8 clocks
+            5'd16: ; // No shift needed, direct color from video_data
+        endcase
     end
 end
 
@@ -145,12 +151,17 @@ reg [7:0] pixel_index;
 
 // --- Pixel Extraction ---
 // We extract from the MSB (Big Endian Mac format)
+// MAME uses specific palette index patterns:
+// 1bpp: 0x7F | (bit ? 0x80 : 0) → 0x7F (white) or 0xFF (black)
+// 2bpp: 0x3F | (2-bit << 6) → 0x3F, 0x7F, 0xBF, 0xFF
+// 4bpp: 0x0F | (4-bit << 4) → 0x0F, 0x1F, 0x2F, ..., 0xFF
+// 8bpp: direct 0x00-0xFF
 always @(*) begin
     case (video_mode)
-        3'd0: pixel_index = pixel_shift[15] ? 8'hFF : 8'h00;          // 1bpp
-        3'd1: pixel_index = {6'b111111, pixel_shift[15:14]};          // 2bpp
-        3'd2: pixel_index = {4'b1111, pixel_shift[15:12]};            // 4bpp
-        3'd3: pixel_index = pixel_shift[15:8];                        // 8bpp
+        3'd0: pixel_index = {pixel_shift[15], 7'b1111111};            // 1bpp: 0x7F or 0xFF
+        3'd1: pixel_index = {pixel_shift[15:14], 6'b111111};          // 2bpp: 0x3F, 0x7F, 0xBF, 0xFF
+        3'd2: pixel_index = {pixel_shift[15:12], 4'b1111};            // 4bpp: 0x0F-0xFF
+        3'd3: pixel_index = pixel_shift[15:8];                        // 8bpp: direct
         default: pixel_index = 8'd0;
     endcase
 end

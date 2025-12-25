@@ -21,10 +21,23 @@ The project uses Intel Quartus 17.0.2 Lite Edition:
 cd verilator
 make        # Build simulator
 make clean  # Clean build artifacts
-./obj_dir/Vemu  # Run simulator (requires SDL2, OpenGL)
+./obj_dir/Vemu  # Run interactive simulator (requires SDL2, OpenGL)
 ```
 
-Note: The verilator setup may need updating for the current MacLC core.
+#### Simulator Command Line Options
+```bash
+./obj_dir/Vemu --help                    # Show all options
+./obj_dir/Vemu --screenshot 360          # Take screenshot at frame 360
+./obj_dir/Vemu --stop-at-frame 400       # Exit after frame 400
+./obj_dir/Vemu --screenshot 360 --stop-at-frame 361  # screenshot
+```
+
+Key options:
+- `--screenshot <frame>` - Save PNG screenshot at specified frame number
+- `--stop-at-frame <frame>` - Exit simulation after reaching frame count
+- `--trace` - Enable FST waveform tracing (outputs to `trace.fst`)
+
+Note: Boot takes approximately 360 frames to reach the Mac desktop.
 
 ## Architecture
 
