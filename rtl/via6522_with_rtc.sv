@@ -103,14 +103,14 @@ module via6522 (
     wire timer_b_event;
     wire timer_a_event;
 
-    // Aliases for irq_flags
-    wire ca2_flag     = irq_flags[0];
-    wire ca1_flag     = irq_flags[1];
-    wire serial_flag  = irq_flags[2];
-    wire cb2_flag     = irq_flags[3];
-    wire cb1_flag     = irq_flags[4];
-    wire timer_b_flag = irq_flags[5];
-    wire timer_a_flag = irq_flags[6];
+    // Aliases for irq_flags (for readability only - not driven)
+    // wire ca2_flag     = irq_flags[0];
+    // wire ca1_flag     = irq_flags[1];
+    // wire serial_flag  = irq_flags[2];
+    // wire cb2_flag     = irq_flags[3];
+    // wire cb1_flag     = irq_flags[4];
+    // wire timer_b_flag = irq_flags[5];
+    // wire timer_a_flag = irq_flags[6];
 
     // Aliases for ACR bits
     wire       tmr_a_output_en       = acr[7];
@@ -303,6 +303,7 @@ module via6522 (
         input [7:0] data_byte;
         reg [4:0] reg_addr;
         begin
+            reg_addr = 5'd0;  // Initialize to prevent latch
             case (rtc_state)
                 RTC_STATE_NORMAL: begin
                     if (rtc_cmd_mode) begin
@@ -701,11 +702,6 @@ module via6522 (
                 4'h9: timer_b_latch[15:8] <= data_in;
                 4'hB: acr <= data_in;
                 4'hC: pcr <= data_in;
-                4'hD: begin
-                    if (data_in[7] == 1'b0) begin
-                        irq_flags <= irq_flags & ~data_in[6:0];
-                    end
-                end
                 4'hE: begin
                     if (data_in[7] == 1'b1) begin
                         irq_mask <= irq_mask | data_in[6:0];
@@ -715,6 +711,24 @@ module via6522 (
                 end
                 default: ;
             endcase
+        end
+    end
+
+    // Separate always block for IFR write (register 0xD)
+    always @(posedge clock) begin
+        if (reset == 1'b1) begin
+            // Reset is handled in individual irq_flags blocks below
+        end else if (falling == 1'b1 && wen == 1'b1 && addr == 4'hD) begin
+            if (data_in[7] == 1'b0) begin
+                // Clear flags based on data_in mask
+                if (data_in[0]) irq_flags[0] <= 1'b0;
+                if (data_in[1]) irq_flags[1] <= 1'b0;
+                if (data_in[2]) irq_flags[2] <= 1'b0;
+                if (data_in[3]) irq_flags[3] <= 1'b0;
+                if (data_in[4]) irq_flags[4] <= 1'b0;
+                if (data_in[5]) irq_flags[5] <= 1'b0;
+                if (data_in[6]) irq_flags[6] <= 1'b0;
+            end
         end
     end
 
