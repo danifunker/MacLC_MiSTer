@@ -13,7 +13,7 @@ set_global_assignment -name VERILOG_FILE rtl/uart/txuart.v
 set_global_assignment -name VERILOG_FILE rtl/uart/rxuart.v
 set_global_assignment -name VERILOG_FILE rtl/iwm.v
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/via6522_with_rtc.sv
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/cuda_complete/cuda_complete.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cuda_complete/cuda_maclc.sv
 set_global_assignment -name VERILOG_FILE rtl/addrDecoder.v
 set_global_assignment -name VERILOG_FILE rtl/addrController_top.v
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/dataController_top.sv
