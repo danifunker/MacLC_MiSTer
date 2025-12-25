@@ -223,13 +223,19 @@ module emu
 	reg       status_mem = 1'b1;
 	reg [1:0] status_cpu = 2'b10;
 	reg       n_reset = 0;
-	wire      status_turbo = 1'b1;
+	wire      status_turbo = status[5];
+	
+	// CUDA reset output
+	wire      cuda_reset_680x0;
+	wire      cuda_nmi_680x0;
+	
 	always @(posedge clk_sys) begin
 		reg [15:0] rst_cnt;
 
 		if (clk8_en_p) begin
 			// various sources can reset the mac
-			if(~pll_locked || status[0] || buttons[1] || RESET || ~_cpuReset_o) begin
+			// NOTE: Added CUDA reset control
+			if(~pll_locked || status[0] || buttons[1] || RESET || ~_cpuReset_o || cuda_reset_680x0) begin
 				rst_cnt <= '1;
 				n_reset <= 0;
 			end
@@ -349,6 +355,40 @@ module emu
 	wire selectVRAM;       // From address decoder
 	wire [7:0] pseudovia_dout;
 	wire pseudovia_irq;
+
+	// VIA and CUDA wires
+	wire        via_sr_active;
+	wire        via_sr_out;
+	wire        via_sr_dir;
+	wire        via_sr_ext_clk;
+	wire        via_sr_read;
+	wire        via_sr_write;
+	wire [7:0]  via_portb_out;
+	wire [7:0]  via_portb_oe;
+	wire [7:0]  via_portb_in;
+	
+	// CUDA signals
+	wire        cuda_treq;
+	wire        cuda_byteack;
+	wire        cuda_cb1;
+	wire        cuda_cb2;
+	wire        cuda_cb2_oe;
+	wire        cuda_sr_irq;
+	wire [7:0]  cuda_portb;
+	wire [7:0]  cuda_portb_oe;
+	wire        adb_in = 1'b1;  // Pull-up on ADB line
+	wire        adb_out;
+	
+	// CB2 bidirectional handling
+	wire via_cb2_in;
+	wire via_cb2_out;
+	wire via_cb2_oe;
+	assign via_cb2_in = cuda_cb2_oe ? cuda_cb2 : via_cb2_out;
+
+	// Combine VIA and CUDA Port B outputs
+	assign via_portb_in = (via_portb_oe & via_portb_out) |
+	                      (cuda_portb_oe & cuda_portb) |
+	                      (~(via_portb_oe | cuda_portb_oe) & 8'hFF);
 
 	assign serialIn =  UART_RXD;
 	assign UART_TXD = serialOut;
@@ -579,6 +619,44 @@ module emu
 	wire [1:0] diskEject;
 	wire [1:0] diskMotor, diskAct;
 	
+	//==========================================================================
+	// CUDA Mac LC Implementation
+	//==========================================================================
+	cuda_maclc cuda (
+		.clk(clk_sys),
+		.clk8_en(clk8_en_p),
+		.reset(~n_reset),
+		
+		// Direct VIA signals
+		.via_tip(via_portb_in[3]),          // Port B bit 3
+		.via_byteack_in(1'b0),              // Not used
+		.cuda_treq(cuda_treq),              // Port B bit 1
+		.cuda_byteack(cuda_byteack),        // Port B bit 2
+		
+		// CB1/CB2 shift register
+		.cuda_cb1(cuda_cb1),
+		.via_cb2_in(via_cb2_in),
+		.cuda_cb2(cuda_cb2),
+		.cuda_cb2_oe(cuda_cb2_oe),
+		
+		// VIA SR events
+		.via_sr_read(via_sr_read),
+		.via_sr_write(via_sr_write),
+		.cuda_sr_irq(cuda_sr_irq),
+		
+		// Full Port B for compatibility
+		.cuda_portb(cuda_portb),
+		.cuda_portb_oe(cuda_portb_oe),
+		
+		// ADB
+		.adb_data_in(adb_in),
+		.adb_data_out(adb_out),
+		
+		// System control
+		.reset_680x0(cuda_reset_680x0),
+		.nmi_680x0(cuda_nmi_680x0)
+	);
+	
 	// Video Mode Selection Logic
 	// 0=1bpp, 1=2bpp, 2=4bpp, 3=8bpp, 4=16bpp
 	// Mapped from OSD (status[16:15]) for now:
@@ -699,7 +777,7 @@ module emu
 		.serialCTS(serialCTS),
 		.serialRTS(serialRTS),
 
-		// rtc unix ticks
+		// rtc unix ticks - now handled internally by VIA with RTC
 		.timestamp(TIMESTAMP),
 
 		// video
@@ -737,7 +815,30 @@ module emu
 		.sd_buff_addr(sd_buff_addr),
 		.sd_buff_dout(sd_buff_dout),
 		.sd_buff_din(sd_buff_din),
-		.sd_buff_wr(sd_buff_wr)
+		.sd_buff_wr(sd_buff_wr),
+		
+		// VIA shift register status for CUDA
+		.via_sr_active(via_sr_active),
+		.via_sr_out(via_sr_out),
+		.via_sr_dir(via_sr_dir),
+		.via_sr_ext_clk(via_sr_ext_clk),
+		
+		// VIA shift register control signals
+		.via_sr_read(via_sr_read),
+		.via_sr_write(via_sr_write),
+		
+		// CUDA SR interrupt
+		.cuda_sr_irq(cuda_sr_irq),
+		
+		// VIA Port B
+		.via_portb_out(via_portb_out),
+		.via_portb_oe(via_portb_oe),
+		.via_portb_in(via_portb_in),
+		
+		// VIA CB2 for shift register
+		.via_cb2_out(via_cb2_out),
+		.via_cb2_oe(via_cb2_oe),
+		.via_cb2_in(via_cb2_in)
 	);
 
 	reg disk_act;
