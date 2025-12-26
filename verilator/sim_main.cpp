@@ -39,7 +39,13 @@
 #include <iterator>
 #include <string>
 #include <iomanip>
+#include <vector>
+#include <algorithm>
 using namespace std;
+
+// stb_image_write for PNG screenshots
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "sim/stb_image_write.h"
 
 // Simulation control
 // ------------------
@@ -64,18 +70,18 @@ int cfg_memSize = 1;       // 0=1MB, 1=4MB
 
 // CPU trace
 // ---------
-bool cpu_trace_enable = true;  // Enable from boot to check ROM loading
+bool cpu_trace_enable = false;  // Will enable after startup cycles
 bool cpu_trace_started = false;  // Wait for ROM load and reset
 FILE* cpu_trace_file = nullptr;
 const char* cpu_trace_filename = "cpu_trace.log";
 int cpu_trace_count = 0;
-const int cpu_trace_max = 100000;  // Stop after this many instructions
+const int cpu_trace_max = 500000;  // Stop after this many instructions
 int post_download_delay = 0;  // Delay after ROM load before tracing
 uint32_t cpu_trace_last_pc = 0xFFFFFFFF;  // For edge detection (new instruction)
 
 // RAM debug
 // ---------
-bool ram_debug_enable = true;  // Enable RAM access debugging
+bool ram_debug_enable = false;  // Disable for speed
 FILE* ram_debug_file = nullptr;
 const char* ram_debug_filename = "ram_debug.log";
 int ram_debug_count = 0;
@@ -83,12 +89,26 @@ const int ram_debug_max = 5000;  // Stop after this many RAM accesses
 
 // Peripheral debug
 // ----------------
-bool periph_debug_enable = true;  // Enable peripheral access debugging
+bool periph_debug_enable = false;  // Disable for speed
 FILE* periph_debug_file = nullptr;
 const char* periph_debug_filename = "periph_debug.log";
 int periph_debug_count = 0;
 const int periph_debug_max = 5000;  // Stop after this many peripheral accesses
 bool periph_debug_prev_bus_control = false;  // For edge detection
+
+// Screenshot functionality
+// ------------------------
+std::vector<int> screenshot_frames;
+bool screenshot_mode = false;
+
+// Stop at frame functionality
+// ---------------------------
+int stop_at_frame = -1;
+bool stop_at_frame_enabled = false;
+
+// Headless mode (no GUI)
+// ----------------------
+bool headless = false;
 
 // Debug GUI
 // ---------
@@ -125,9 +145,9 @@ const int input_menu = 12;
 
 // Video
 // -----
-// Mac LC 13" RGB mode is 512x384
-#define VGA_WIDTH 512
-#define VGA_HEIGHT 384
+// Mac LC VGA mode (monitor_id=6) is 640x480
+#define VGA_WIDTH 640
+#define VGA_HEIGHT 480
 #define VGA_ROTATE 0
 #define VGA_SCALE_X vga_scale
 #define VGA_SCALE_Y vga_scale
@@ -316,6 +336,18 @@ int verilate() {
 
 		if (clk_sys.IsRising()) {
 			main_time++;
+			// Print progress every 10 million cycles (~300ms of simulated time at 32MHz)
+			if ((main_time % 10000000) == 0) {
+				fprintf(stderr, "Cycle %llu: PC=%08X Op=%04X\n",
+					(unsigned long long)main_time,
+					VERTOPINTERN->debug_pc,
+					VERTOPINTERN->debug_opcode);
+			}
+			// Enable trace after 600M cycles to capture post-RAM-test activity
+			if (main_time == 600000000 && !cpu_trace_enable) {
+				cpu_trace_enable = true;
+				fprintf(stderr, "*** Enabling CPU trace at cycle 600M ***\n");
+			}
 		}
 		return 1;
 	}
@@ -327,12 +359,105 @@ int verilate() {
 	return 0;
 }
 
+void show_help() {
+	printf("Mac LC Hardware Simulator\n");
+	printf("Usage: ./Vemu [options]\n\n");
+	printf("Options:\n");
+	printf("  -h, --help                    Show this help message\n");
+	printf("  --headless, --no-gui          Run without SDL/ImGui (CI/headless)\n");
+	printf("  --screenshot <frames>         Take screenshots at specified frame numbers\n");
+	printf("                                (comma-separated list, e.g., 100,200,300)\n");
+	printf("  --stop-at-frame <frame>       Exit simulation after specified frame\n");
+	printf("\n");
+	printf("Examples:\n");
+	printf("  ./Vemu                        Run simulator in windowed mode\n");
+	printf("  ./Vemu --screenshot 245       Take screenshot at frame 245\n");
+	printf("  ./Vemu --stop-at-frame 300    Stop simulation after frame 300\n");
+	printf("  ./Vemu --headless --screenshot 50 --stop-at-frame 100\n");
+	printf("                                Headless, take screenshot at frame 50, stop at 100\n");
+}
+
+void save_screenshot(int frame_number) {
+	if (!output_ptr) {
+		printf("Error: output_ptr is null, cannot save screenshot\n");
+		return;
+	}
+
+	char filename[256];
+	snprintf(filename, sizeof(filename), "screenshot_frame_%04d.png", frame_number);
+
+	// Read from the video output buffer that video.Clock() writes to
+	// The colour format is: 0xFF000000 | B << 16 | G << 8 | R (ABGR)
+	// Mac LC screen dimensions come from the video module
+
+	int width = video.output_width;
+	int height = video.output_height;
+
+	uint8_t* rgb_data = (uint8_t*)malloc(width * height * 3);
+	if (!rgb_data) {
+		printf("Error: Could not allocate memory for screenshot\n");
+		return;
+	}
+
+	for (int y = 0; y < height; y++) {
+		for (int x = 0; x < width; x++) {
+			uint32_t pixel = output_ptr[y * width + x];
+			int dst_index = (y * width + x) * 3;
+
+			// Format: 0xFF000000 | B << 16 | G << 8 | R (ABGR)
+			uint8_t b = (pixel >> 16) & 0xFF;
+			uint8_t g = (pixel >> 8) & 0xFF;
+			uint8_t r = (pixel >> 0) & 0xFF;
+
+			rgb_data[dst_index + 0] = r;
+			rgb_data[dst_index + 1] = g;
+			rgb_data[dst_index + 2] = b;
+		}
+	}
+
+	// Save as PNG using stb_image_write
+	int result = stbi_write_png(filename, width, height, 3, rgb_data, width * 3);
+
+	free(rgb_data);
+
+	if (result) {
+		printf("Screenshot saved: %s (%dx%d)\n", filename, width, height);
+	} else {
+		printf("Error: Failed to save screenshot %s\n", filename);
+	}
+}
+
 unsigned char mouse_clock = 0;
 unsigned char mouse_buttons = 0;
 unsigned char mouse_x = 0;
 unsigned char mouse_y = 0;
 
 int main(int argc, char** argv, char** env) {
+
+	// Parse command-line arguments
+	for (int i = 1; i < argc; i++) {
+		if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+			show_help();
+			return 0;
+		} else if (strcmp(argv[i], "--headless") == 0 || strcmp(argv[i], "--no-gui") == 0) {
+			headless = true;
+		} else if (strcmp(argv[i], "--screenshot") == 0 && i + 1 < argc) {
+			screenshot_mode = true;
+			std::string frames_str = argv[i + 1];
+			std::stringstream ss(frames_str);
+			std::string frame_num;
+			while (std::getline(ss, frame_num, ',')) {
+				screenshot_frames.push_back(std::stoi(frame_num));
+			}
+			printf("Screenshot mode enabled for frames: %s\n", frames_str.c_str());
+			i++;
+		} else if (strcmp(argv[i], "--stop-at-frame") == 0 && i + 1 < argc) {
+			stop_at_frame = std::stoi(argv[i + 1]);
+			stop_at_frame_enabled = true;
+			printf("Will stop at frame %d\n", stop_at_frame);
+			i++;
+		}
+	}
 
 	// Create core and initialise
 	top = new Vemu();
@@ -576,6 +701,27 @@ int main(int argc, char** argv, char** env) {
 #endif
 
 		video.UpdateTexture();
+
+		// Handle screenshots at specified frames
+		bool took_screenshot_this_frame = false;
+		if (screenshot_mode) {
+			auto it = std::find(screenshot_frames.begin(), screenshot_frames.end(), video.count_frame);
+			if (it != screenshot_frames.end()) {
+				save_screenshot(video.count_frame);
+				screenshot_frames.erase(it);
+				took_screenshot_this_frame = true;
+			}
+		}
+
+		// Check if we should stop at this frame
+		if (stop_at_frame_enabled && video.count_frame >= stop_at_frame) {
+			if (took_screenshot_this_frame) {
+				printf("Reached stop frame %d after taking screenshot, exiting...\n", stop_at_frame);
+			} else {
+				printf("Reached stop frame %d, exiting...\n", stop_at_frame);
+			}
+			break;
+		}
 
 		// Pass inputs to sim - PS2 mouse for Mac
 		mouse_buttons = 0;

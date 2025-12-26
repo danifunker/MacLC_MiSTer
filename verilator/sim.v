@@ -409,11 +409,10 @@ module emu
 	wire [1:0] diskEject;
 	wire [1:0] diskMotor, diskAct;
 
-	// Video Mode Selection - hardcoded for simulation (4bpp)
+	// Video Mode Selection - from PVIA video_config register (bits 2:0 = bpp mode)
 	wire [7:0] pvia_video_config;
-	// Force 4bpp mode for testing - ROM writes 0x40 (1bpp) due to monitor detection issue
-	wire [2:0] v8_video_mode = 3'd2; // 4bpp forced
-	// wire [2:0] v8_video_mode = pvia_video_config[2:0]; // bpp mode from ROM
+	// FORCE 4bpp mode for testing (ROM sets 1bpp which doesn't work with its palette init)
+	wire [2:0] v8_video_mode = 3'd2; // Force 4bpp mode (normally: pvia_video_config[2:0])
 
 	// Monitor ID Selection - 13" RGB
 	wire [3:0] v8_monitor_id = 4'h6;
@@ -422,6 +421,8 @@ module emu
 		.clk_sys(clk_sys),
 		.reset(~n_reset),
 		.reg_addr(cpuAddr[10:0]),
+		.uds_n(_cpuUDS),
+		.lds_n(_cpuLDS),
 		.data_in(cpuDataOut[7:0]),
 		.data_out(ariel_reg_dout),
 		.we(selectAriel && !_cpuRW && cpuBusControl),
@@ -430,6 +431,8 @@ module emu
 		.pixel_index(ariel_pixel_addr),
 		.rgb_out(ariel_palette_data)
 	);
+
+	// Debug: disabled for now
 
 	pseudovia pvia(
 		.clk_sys(clk_sys),

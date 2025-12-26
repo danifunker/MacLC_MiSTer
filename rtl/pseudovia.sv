@@ -105,10 +105,21 @@ always @(posedge clk_sys) begin
         end
 
         if (req) begin
-            // Debug: log first 20 accesses
+            // Debug: log first 20 accesses and ALL reg 0x10 accesses
             if (pvia_access_count < 20) begin
-                $display("PVIA %s: addr=%04x native=%d", we ? "WR" : "RD", addr, addr[12:8] == 5'b00000);
+                $display("PVIA %s: addr=%04x native=%d reg=%02x", we ? "WR" : "RD", addr, addr[12:8] == 5'b00000, addr[7:0]);
                 pvia_access_count <= pvia_access_count + 1;
+            end
+            // Always log reg 0x10 access (video config / monitor sense)
+            if (addr[12:8] == 5'b00000 && addr[7:0] == 8'h10) begin
+                $display("PVIA REG10 %s: data=%02x (monitor_id=%d) stored=%02x",
+                    we ? "WRITE" : "READ",
+                    we ? data_in : ((regs[8'h10] & 8'hC7) | ((monitor_id[2:0]) << 3)),
+                    monitor_id, regs[8'h10]);
+            end
+            // Log any access to addresses that might be monitor-related
+            if (addr[12:8] != 5'b00000 && pvia_access_count < 100) begin
+                $display("PVIA VIA-COMPAT %s: addr=%04x reg=%d", we ? "WR" : "RD", addr, addr[12:9]);
             end
             if (addr[12:8] == 5'b00000) begin
                 // Native mode: offset 0x00-0xFF
@@ -134,8 +145,8 @@ always @(posedge clk_sys) begin
                         8'h10: begin
                             regs[8'h10] <= data_in;
                             video_config <= data_in;
-                            $display("PVIA: Video config WRITE = %02x (bpp mode = %d)",
-                                     data_in, data_in[2:0]);
+                            $display("PVIA: Video config WRITE = %02x (bpp mode = %d) [prev=%02x]",
+                                     data_in, data_in[2:0], regs[8'h10]);
                         end
 
                         8'h12: begin
@@ -180,11 +191,13 @@ always @(posedge clk_sys) begin
                         8'h03: data_out <= regs[3];  // IFR
 
                         8'h10: begin
-                            // Video config - monitor ID in bits 6:3 (matches MAME: montype << 3)
-                            data_out <= {1'b0, monitor_id, 3'b000};
+                            // Video config read: preserve register value, overlay monitor ID in bits 5:3
+                            // MAME: data &= ~0x38; data |= (montype << 3);
+                            // Bits 5:3 = monitor_id (3 bits: 0-7), bits 2:0 = video mode
+                            data_out <= (regs[8'h10] & 8'hC7) | ((monitor_id[2:0]) << 3);
                             pvia_reg10_reads <= pvia_reg10_reads + 1;
-                            $display("PVIA: Video config READ[%0d], monitor_id=%d, returning %02x",
-                                     pvia_reg10_reads, monitor_id, {1'b0, monitor_id, 3'b000});
+                            $display("PVIA: Video config READ[%0d], reg=0x%02x monitor_id=%d, returning %02x",
+                                     pvia_reg10_reads, regs[8'h10], monitor_id, (regs[8'h10] & 8'hC7) | ((monitor_id[2:0]) << 3));
                         end
 
                         8'h12: data_out <= regs[8'h12] & 8'h7F;  // Slot IER, bit 7 always 0

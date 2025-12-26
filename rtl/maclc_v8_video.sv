@@ -125,7 +125,7 @@ end
 // So shift interval is bits_per_pixel clocks (1bpp: every clock, 4bpp: every 4 clocks)
 always @(posedge clk_sys) begin
     if (hblank || vblank) begin
-        pixel_shift <= 16'd0;
+        pixel_shift <= 16'hFFFF;  // Initialize to "black" pattern for Mac
         shift_count <= 0;
     end else if (video_latch) begin
         // Load new data directly when it arrives
