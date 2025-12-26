@@ -267,17 +267,26 @@ assign cpuDataOut = selectIWM ? iwmDataOut :
 	// - For output pins (via_pb_oe=1): what the VIA is driving (via_pb_o)
 	// - For input pins (via_pb_oe=0): external signals from CUDA
 	// CUDA provides:
-	// - Bit 1: TREQ (Transfer Request, active low)
+	// - Bit 1: TREQ (Transfer Request, active LOW - 0 means CUDA has data)
 	// - Bit 2: BYTEACK (Byte Acknowledge)
 	// VIA outputs to CUDA:
 	// - Bit 3: TIP (Transaction In Progress)
 	// - Bits 4-5: unused (tied high)
 	// - Bits 6-7: tied high
 	// - Bits 0-2: unused for Mac LC (no standalone RTC)
-	// Correct bit mapping: TREQ=bit1, BYTEACK=bit2, bits 3-7 and 0 pull high
-	wire [7:0] via_pb_external = {4'b1111, 1'b1, cuda_byteack, cuda_treq, 1'b1};
+	//
+	// TREQ polarity: cuda_treq=1 means CUDA is ready (TREQ pin should be LOW)
+	// So we invert cuda_treq when building the external value
+	wire [7:0] via_pb_external = {4'b1111, 1'b1, cuda_byteack, ~cuda_treq, 1'b1};
 	// Combine VIA outputs with CUDA inputs
-	wire [7:0] pb_pin_level = (via_pb_oe & via_pb_o) | (~via_pb_oe & via_pb_external);
+	// Standard MUX for most bits: VIA output when OE, external when input
+	wire [7:0] pb_pin_level_mux = (via_pb_oe & via_pb_o) | (~via_pb_oe & via_pb_external);
+	// TREQ (bit 1) is open-drain: CUDA can always pull it low
+	// Only high if VIA is not pulling low AND CUDA is not pulling low
+	wire pb1_via_pulling_low = via_pb_oe[1] & ~via_pb_o[1];
+	wire pb1_cuda_pulling_low = cuda_treq;  // cuda_treq=1 means CUDA pulling TREQ low
+	wire pb1_open_drain = ~(pb1_via_pulling_low | pb1_cuda_pulling_low);
+	wire [7:0] pb_pin_level = {pb_pin_level_mux[7:2], pb1_open_drain, pb_pin_level_mux[0]};
 	// CUDA can override specific bits via cuda_pb_oe
 	assign via_pb_i = (pb_pin_level & ~cuda_pb_oe) | (cuda_pb_o & cuda_pb_oe);
 	assign snd_ena = ~via_pb_oe[7] | via_pb_o[7];
@@ -314,10 +323,14 @@ assign cpuDataOut = selectIWM ? iwmDataOut :
 
 			if (selectVIA && !_cpuVMA && cpuAddrRegHi == VIA_SR_REG) begin
 				if (!via_access_prev) begin
-					if (_cpuRW)
+					if (_cpuRW) begin
 						via_sr_read <= 1'b1;
-					else
+`ifdef SIMULATION
+						$display("VIA: SR READ - CPU reading shift register");
+`endif
+					end else begin
 						via_sr_write <= 1'b1;
+					end
 				end
 				via_access_prev <= 1'b1;
 			end else begin
@@ -329,8 +342,32 @@ assign cpuDataOut = selectIWM ? iwmDataOut :
 	// CB1 from CUDA (CUDA always drives CB1 for shift register clocking)
 	wire via_cb1_in = cuda_cb1;
 
-	// Debug: Minimal VIA monitoring (commented out for now)
+	// Debug: Monitor Port B and CUDA signals
 	/* verilator lint_off STMTDLY */
+`ifdef SIMULATION
+	reg [7:0] via_pb_oe_prev;
+	reg cuda_treq_prev;
+	always @(posedge clk32) begin
+		// Log when DDRB (via_pb_oe) changes
+		if (via_pb_oe !== via_pb_oe_prev) begin
+			$display("VIA: DDRB changed: 0x%02x -> 0x%02x (bit1=%b = %s)",
+				via_pb_oe_prev, via_pb_oe, via_pb_oe[1],
+				via_pb_oe[1] ? "OUTPUT" : "INPUT");
+			via_pb_oe_prev <= via_pb_oe;
+		end
+		// Log when CUDA TREQ changes
+		if (cuda_treq !== cuda_treq_prev) begin
+			$display("VIA: cuda_treq changed: %b -> %b, via_pb_external=0x%02x, via_pb_i=0x%02x",
+				cuda_treq_prev, cuda_treq, via_pb_external, via_pb_i);
+			cuda_treq_prev <= cuda_treq;
+		end
+		// Log Port B reads (register 0)
+		if (selectVIA && !_cpuVMA && _cpuRW && cpuAddrRegHi == 4'h0 && E_falling) begin
+			$display("VIA: PortB READ - DDRB=0x%02x, PB_ext=0x%02x, PB_i=0x%02x, TREQ_bit=%b",
+				via_pb_oe, via_pb_external, via_pb_i, via_pb_i[1]);
+		end
+	end
+`endif
 	/* verilator lint_on STMTDLY */
 
 	via6522 via(

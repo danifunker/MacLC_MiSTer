@@ -61,18 +61,20 @@ module cuda_maclc (
     //==========================================================================
     // CUDA Protocol States
     //==========================================================================
-    localparam [3:0] ST_IDLE            = 4'd0;
-    localparam [3:0] ST_WAIT_CMD        = 4'd1;
-    localparam [3:0] ST_SHIFT_IN_CMD    = 4'd2;
-    localparam [3:0] ST_WAIT_LENGTH     = 4'd3;
-    localparam [3:0] ST_SHIFT_IN_LENGTH = 4'd4;
-    localparam [3:0] ST_SHIFT_IN_DATA   = 4'd5;
-    localparam [3:0] ST_PROCESS_CMD     = 4'd6;
-    localparam [3:0] ST_PREPARE_RESPONSE= 4'd7;
-    localparam [3:0] ST_WAIT_TIP_FALL   = 4'd8;
-    localparam [3:0] ST_SHIFT_OUT_LENGTH= 4'd9;
-    localparam [3:0] ST_SHIFT_OUT_DATA  = 4'd10;
-    localparam [3:0] ST_COMPLETE        = 4'd11;
+    localparam [3:0] ST_ATTENTION       = 4'd0;   // Startup: assert TREQ briefly
+    localparam [3:0] ST_IDLE            = 4'd1;
+    localparam [3:0] ST_WAIT_CMD        = 4'd2;
+    localparam [3:0] ST_SHIFT_IN_CMD    = 4'd3;
+    localparam [3:0] ST_WAIT_LENGTH     = 4'd4;
+    localparam [3:0] ST_SHIFT_IN_LENGTH = 4'd5;
+    localparam [3:0] ST_SHIFT_IN_DATA   = 4'd6;
+    localparam [3:0] ST_PROCESS_CMD     = 4'd7;
+    localparam [3:0] ST_PREPARE_RESPONSE= 4'd8;
+    localparam [3:0] ST_WAIT_SR_READ    = 4'd9;   // Wait for ROM to read VIA SR
+    localparam [3:0] ST_SHIFT_OUT_LENGTH= 4'd10;
+    localparam [3:0] ST_SHIFT_OUT_DATA  = 4'd11;
+    localparam [3:0] ST_COMPLETE        = 4'd12;
+    localparam [3:0] ST_WAIT_TIP_RISE   = 4'd13;
 
     reg [3:0] state, next_state;
 
@@ -148,7 +150,9 @@ module cuda_maclc (
     assign cuda_portb[PB_IIC_SDA]  = 1'b1;      // Pull-up
     assign cuda_portb[PB_IIC_SCL]  = 1'b1;      // Pull-up
 
-    assign cuda_portb_oe = 8'b11110111;         // All except TIP
+    // TREQ (bit 1) handled via separate cuda_treq signal in dataController
+    // TIP (bit 3) is input from VIA
+    assign cuda_portb_oe = 8'b11110101;         // All except TIP and TREQ
 
     //==========================================================================
     // PRAM Default Initialization
@@ -215,12 +219,12 @@ module cuda_maclc (
 
     always @(posedge clk) begin
         if (reset) begin
-            state <= ST_IDLE;
-            via_tip_prev <= 1'b0;
+            state <= ST_ATTENTION;  // Start with attention signal
+            via_tip_prev <= 1'b1;   // Start high (no transaction) to avoid false trigger
             via_sr_write_prev <= 1'b0;
             via_sr_read_prev <= 1'b0;
             debug_cycle <= 0;
-            prev_state <= ST_IDLE;
+            prev_state <= ST_ATTENTION;
         end else if (clk8_en) begin
             debug_cycle <= debug_cycle + 1;
             prev_state <= state;
@@ -244,9 +248,18 @@ module cuda_maclc (
         next_state = state;
 
         case (state)
+            ST_ATTENTION: begin
+                // Stay in attention state until ROM acknowledges with TIP
+                // Wait for TIP to fall (ROM response to attention)
+                if (!via_tip && via_tip_prev)
+                    next_state = ST_WAIT_CMD;
+                // No timeout - stay in attention until ROM responds
+                // (Real CUDA stays in attention indefinitely until acknowledged)
+            end
+
             ST_IDLE: begin
-                // Wait for TIP to be asserted (rising edge)
-                if (via_tip && !via_tip_prev)
+                // Wait for TIP to be asserted (TIP is active LOW, so wait for falling edge)
+                if (!via_tip && via_tip_prev)
                     next_state = ST_WAIT_CMD;
             end
 
@@ -285,31 +298,50 @@ module cuda_maclc (
             end
 
             ST_PREPARE_RESPONSE: begin
-                // After preparing response, immediately start sending
-                // (CUDA sends while TIP is still high; TIP fall ends transaction)
-                next_state = ST_SHIFT_OUT_LENGTH;
+                // After preparing response, wait for ROM to read VIA SR
+                // This signals that the VIA is ready to receive clocked data
+                next_state = ST_WAIT_SR_READ;
             end
 
-            ST_WAIT_TIP_FALL: begin
-                // This state is now used after response is complete
-                // Wait for TIP to fall to end the transaction
-                if (!via_tip && via_tip_prev)
-                    next_state = ST_IDLE;
+            ST_WAIT_SR_READ: begin
+                // Wait for ROM to read VIA SR register
+                // This triggers the VIA to be ready for external clock shift-in
+                if (via_sr_read && !via_sr_read_prev) begin
+                    // ROM has read SR, start clocking out next byte
+                    if (send_count == 0)
+                        next_state = ST_SHIFT_OUT_LENGTH;  // First byte is length
+                    else if (send_count <= send_length)
+                        next_state = ST_SHIFT_OUT_DATA;    // Data bytes
+                    else
+                        next_state = ST_COMPLETE;          // All done
+                end
             end
 
             ST_SHIFT_OUT_LENGTH: begin
-                if (byte_complete)
-                    next_state = ST_SHIFT_OUT_DATA;
+                if (byte_complete) begin
+                    // After length byte, wait for next SR read
+                    next_state = ST_WAIT_SR_READ;
+                end
             end
 
             ST_SHIFT_OUT_DATA: begin
-                if (send_count >= send_length)
-                    next_state = ST_COMPLETE;
+                if (byte_complete) begin
+                    if (send_count >= send_length)
+                        next_state = ST_COMPLETE;          // All bytes sent
+                    else
+                        next_state = ST_WAIT_SR_READ;      // Wait for next SR read
+                end
             end
 
             ST_COMPLETE: begin
-                // After sending all response bytes, wait for TIP to fall
-                next_state = ST_WAIT_TIP_FALL;
+                // After sending all response bytes, wait for TIP to be released
+                next_state = ST_WAIT_TIP_RISE;
+            end
+
+            ST_WAIT_TIP_RISE: begin
+                // Wait for TIP to be released (TIP goes HIGH) to end the transaction
+                if (via_tip && !via_tip_prev)
+                    next_state = ST_IDLE;
             end
 
             default: next_state = ST_IDLE;
@@ -319,9 +351,11 @@ module cuda_maclc (
     //==========================================================================
     // State Machine Outputs and Data Processing
     //==========================================================================
+    reg [15:0] attention_timer;  // Timer for startup attention signal
+
     always @(posedge clk) begin
         if (reset) begin
-            treq_reg <= 1'b1;           // Ready (active low on wire)
+            treq_reg <= 1'b1;           // Assert TREQ at startup (attention)
             byteack_reg <= 1'b0;
             cb1_out <= 1'b1;
             cb2_out_reg <= 1'b1;
@@ -340,14 +374,22 @@ module cuda_maclc (
             reset_680x0 <= 1'b0;
             nmi_680x0 <= 1'b0;
             adb_data_out <= 1'b1;
+            attention_timer <= 16'd0;
 
         end else if (clk8_en) begin
             cuda_sr_irq <= 1'b0;        // Pulse
             byte_complete <= 1'b0;      // Pulse
 
             case (state)
+                ST_ATTENTION: begin
+                    // Assert TREQ briefly at startup to signal CUDA presence
+                    treq_reg <= 1'b1;       // Asserted (TREQ pin LOW)
+                    byteack_reg <= 1'b0;
+                    attention_timer <= attention_timer + 1'd1;
+                end
+
                 ST_IDLE: begin
-                    treq_reg <= 1'b1;       // Ready
+                    treq_reg <= 1'b0;       // De-asserted (TREQ pin HIGH) in idle
                     byteack_reg <= 1'b0;
                     cb2_oe_reg <= 1'b0;     // Not driving CB2
                     bit_counter <= 4'h0;
@@ -356,7 +398,7 @@ module cuda_maclc (
                 end
 
                 ST_WAIT_CMD, ST_WAIT_LENGTH: begin
-                    treq_reg <= 1'b0;       // Busy
+                    treq_reg <= 1'b1;       // Asserted (TREQ pin LOW) to acknowledge TIP
                     byteack_reg <= 1'b0;
                 end
 
@@ -457,14 +499,43 @@ module cuda_maclc (
                 end
 
                 ST_PREPARE_RESPONSE: begin
-                    treq_reg <= 1'b1;       // Signal response ready (goes low on wire)
+                    treq_reg <= 1'b1;       // Signal response ready (TREQ goes LOW on wire)
                     send_count <= 4'h0;
+                    /* verilator lint_off STMTDLY */
+                    $display("CUDA: PREPARE_RESPONSE - asserting TREQ, will send %d bytes",
+                             send_length);
+                    $display("CUDA: Response data[0]=0x%02x, data[1]=0x%02x",
+                             send_data[0], send_data[1]);
+                    /* verilator lint_on STMTDLY */
+                end
+
+                ST_WAIT_SR_READ: begin
+                    // Waiting for ROM to read VIA SR
+                    // Reset shift state for next byte
                     bit_counter <= 4'h0;
-                    shift_clk_div <= 8'h0;  // Reset clock divider
-                    cb1_out <= 1'b1;        // Ensure first toggle is falling edge for load
-                    // Pre-load first byte (length) so CB2 is ready
-                    shift_out <= {4'h0, send_length};
-                    cb2_out_reg <= send_length[3]; // MSB of 4-bit length
+                    shift_clk_div <= 8'h0;
+                    cb1_out <= 1'b1;        // Start with CB1 high
+                    cb2_oe_reg <= 1'b0;     // Not driving CB2 yet
+
+                    // When ROM reads SR, prepare the byte to send
+                    if (via_sr_read && !via_sr_read_prev) begin
+                        if (send_count == 0) begin
+                            // First byte is the length
+                            shift_out <= {4'h0, send_length};
+                            cb2_out_reg <= 1'b0;  // MSB of length (always 0 since length < 16)
+                            /* verilator lint_off STMTDLY */
+                            $display("CUDA: SR read - sending LENGTH byte 0x%02x", {4'h0, send_length});
+                            /* verilator lint_on STMTDLY */
+                        end else begin
+                            // Data bytes
+                            shift_out <= send_data[send_count[2:0] - 1];
+                            cb2_out_reg <= send_data[send_count[2:0] - 1][7];
+                            /* verilator lint_off STMTDLY */
+                            $display("CUDA: SR read - sending DATA[%d] = 0x%02x",
+                                     send_count - 1, send_data[send_count[2:0] - 1]);
+                            /* verilator lint_on STMTDLY */
+                        end
+                    end
                 end
 
                 ST_SHIFT_OUT_LENGTH, ST_SHIFT_OUT_DATA: begin
@@ -475,32 +546,45 @@ module cuda_maclc (
                         shift_clk_div <= 8'h0;
                         cb1_out <= ~cb1_out;
 
-                        if (cb1_out) begin  // CB1 falling edge
-                            // Shift left to prepare next bit (unless bit 0)
-                            if (bit_counter != 4'h0) begin
-                                shift_out <= {shift_out[6:0], 1'b0};
-                            end
-                        end else begin  // CB1 rising edge
-                            // Output current MSB on CB2
+                        // CRITICAL TIMING FIX:
+                        // - CB2 data must be stable BEFORE CB1 rising edge
+                        // - VIA samples CB2 on CB1 rising edge
+                        // - So CUDA outputs new CB2 data on CB1 FALLING edge
+                        if (cb1_out) begin  // CB1 falling edge (cb1_out was 1, now goes to 0)
+                            // Output current bit on CB2 - must happen BEFORE next rising edge
                             cb2_out_reg <= shift_out[7];
+
+                            /* verilator lint_off STMTDLY */
+                            $display("CUDA: CB1 FALL - bit %d, CB2=%b, shift_out=0x%02x, state=%d",
+                                     bit_counter, shift_out[7], shift_out, state);
+                            /* verilator lint_on STMTDLY */
+
+                            // After outputting, shift to prepare next bit
+                            shift_out <= {shift_out[6:0], 1'b0};
                             bit_counter <= bit_counter + 1'd1;
 
                             if (bit_counter == 4'd7) begin
-                                // Byte complete - load next byte
+                                // Byte complete
                                 bit_counter <= 4'h0;
                                 byte_complete <= 1'b1;
-                                if (state == ST_SHIFT_OUT_DATA) begin
-                                    send_count <= send_count + 1'd1;
-                                    // Load next data byte for next iteration
-                                    shift_out <= send_data[send_count[2:0] + 1];
-                                    cb2_out_reg <= send_data[send_count[2:0] + 1][7];
-                                end else begin
-                                    // Transitioning from LENGTH to DATA, load first data byte
-                                    shift_out <= send_data[0];
-                                    cb2_out_reg <= send_data[0][7];
-                                end
                                 cuda_sr_irq <= 1'b1;
+
+                                // Increment send_count to track progress
+                                // send_count = 1 means length sent, now sending data[0]
+                                // send_count = 2 means data[0] sent, now sending data[1]
+                                // etc.
+                                send_count <= send_count + 1'd1;
+
+                                /* verilator lint_off STMTDLY */
+                                $display("CUDA: BYTE COMPLETE in state %d, send_count %d -> %d, send_length=%d",
+                                         state, send_count, send_count + 1, send_length);
+                                /* verilator lint_on STMTDLY */
                             end
+                        end else begin
+                            // On CB1 rising edge: VIA samples CB2
+                            /* verilator lint_off STMTDLY */
+                            $display("CUDA: CB1 RISE - VIA should sample CB2=%b now", cb2_out_reg);
+                            /* verilator lint_on STMTDLY */
                         end
                     end
                 end

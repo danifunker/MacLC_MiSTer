@@ -66,7 +66,7 @@ module via6522 (
     // PIO signals (replaces record type)
     reg [7:0] pio_i_pra  = 8'h00;
     reg [7:0] pio_i_ddra = 8'h00;
-    reg [7:0] pio_i_prb  = 8'h00;
+    reg [7:0] pio_i_prb  = 8'hFF;  // Default high (TIP bit 3 = 1 = not asserted)
     reg [7:0] pio_i_ddrb = 8'h00;
     reg [7:0] port_a_c = 8'h00;
     reg [7:0] port_b_c = 8'h00;
@@ -287,6 +287,9 @@ module via6522 (
             case (addr)
                 4'h0: begin // ORB
                     pio_i_prb <= data_in;
+`ifdef SIMULATION
+                    $display("VIA: ORB WRITE = 0x%02x (TIP=%b, BYTEACK=%b)", data_in, data_in[3], data_in[2]);
+`endif
                     if (cb2_no_irq_clr == 1'b0) begin
                         irq_flags[3] <= 1'b0;
                     end
@@ -469,7 +472,7 @@ module via6522 (
         if (reset == 1'b1) begin
             pio_i_pra       <= 8'h00;
             pio_i_ddra      <= 8'h00;
-            pio_i_prb       <= 8'h00;
+            pio_i_prb       <= 8'hFF;  // Default high (TIP bit 3 = 1 = not asserted)
             pio_i_ddrb      <= 8'h00;
             irq_mask        <= 7'h00;
             irq_flags       <= 7'h00;
@@ -694,9 +697,17 @@ module via6522 (
         end else if (falling == 1'b1) begin
             if (wen == 1'b1 && addr == 4'hA) begin
                 shift_reg <= data_in;
+                /* verilator lint_off STMTDLY */
+                $display("VIA: SR write = 0x%02x, ACR=0x%02x (mode=%d, dir=%b)",
+                         data_in, acr, shift_mode_control, shift_dir);
+                /* verilator lint_on STMTDLY */
             end else if (shift_dir == 1'b1 && shift_tick_f == 1'b1) begin // output
                 shift_reg <= {shift_reg[6:0], shift_reg[7]};
             end else if (shift_dir == 1'b0 && shift_tick_r == 1'b1) begin // input
+                /* verilator lint_off STMTDLY */
+                $display("VIA: SR shift IN - CB2=%b, SR 0x%02x -> 0x%02x, bit_cnt=%d, active=%b",
+                         ser_cb2_c, shift_reg, {shift_reg[6:0], ser_cb2_c}, bit_cnt, shift_active);
+                /* verilator lint_on STMTDLY */
                 shift_reg <= {shift_reg[6:0], ser_cb2_c};
             end
         end
@@ -710,6 +721,10 @@ module via6522 (
                 if (trigger_serial == 1'b1) begin
                     bit_cnt <= 3'd7;
                     shift_active <= 1'b1;
+                    /* verilator lint_off STMTDLY */
+                    $display("VIA: SR triggered - mode=%d, dir=%b, ext_clk=%b",
+                             shift_mode_control, shift_dir, (shift_clk_sel == 2'b11));
+                    /* verilator lint_on STMTDLY */
                 end
             end else begin // we're active
                 if (shift_clk_sel == 2'b00) begin
@@ -718,11 +733,21 @@ module via6522 (
                 end else if (shift_pulse == 1'b1 && shift_clock == 1'b1) begin
                     if (bit_cnt == 3'd0) begin
                         shift_active <= 1'b0;
+                        /* verilator lint_off STMTDLY */
+                        $display("VIA: SR shift complete - final SR=0x%02x", shift_reg);
+                        /* verilator lint_on STMTDLY */
                     end else begin
                         bit_cnt <= bit_cnt - 3'd1;
                     end
                 end
             end
+        end
+
+        // Debug: show when serial_event fires (IRQ)
+        if (rising == 1'b1 && serial_event == 1'b1) begin
+            /* verilator lint_off STMTDLY */
+            $display("VIA: SR IRQ fired! SR=0x%02x, IFR before=0x%02x", shift_reg, irq_flags);
+            /* verilator lint_on STMTDLY */
         end
 
         if (reset == 1'b1) begin
