@@ -81,7 +81,7 @@ V_SRC = \
 	$(RTL)/scsi.v \
 	$(RTL)/ncr5380.sv \
 	$(RTL)/scc.v \
-	$(RTL)/rtc.v \
+	$(RTL)/cuda_maclc.sv \
 	$(RTL)/uart/txuart.v \
 	$(RTL)/uart/rxuart.v
 

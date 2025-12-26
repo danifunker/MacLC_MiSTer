@@ -265,25 +265,20 @@ assign cpuDataOut = selectIWM ? iwmDataOut :
 	// Port B - Mac LC CUDA interface
 	// The VIA Port B is bidirectional. The "pin level" that the VIA reads is:
 	// - For output pins (via_pb_oe=1): what the VIA is driving (via_pb_o)
-	// - For input pins (via_pb_oe=0): external signals
-	// External signals:
-	// - Bit 7: vSync (tied high)
-	// - Bit 6: overlay (tied high)
-	// - Bit 5: TREQ from CUDA (active low)
-	// - Bits 4-3: high (VIA outputs TIP/BYTEACK to CUDA)
-	// - Bits 2-1: high (VIA outputs RTC CS/clock)
-	// - Bit 0: RTC data (bidirectional, open-drain/wired-AND)
-	wire [7:0] via_pb_external = {1'b1, 1'b1, 1'b1, 1'b1, 1'b1, 2'b11, rtcdat_o};
-	// Combine VIA outputs with external inputs based on direction
-	// For most bits: output mode uses via_pb_o, input mode uses external
-	// But bit 0 (RTC data) is OPEN-DRAIN: VIA can only pull low, RTC can also pull low
-	// When VIA drives high (1), the RTC can still pull it low
-	wire [7:0] pb_pin_level_normal = (via_pb_oe & via_pb_o) | (~via_pb_oe & via_pb_external);
-	// RTC data (bit 0): wired-AND logic - both sides can pull low
-	// If VIA drives 0, pin = 0. If VIA drives 1 (or is input), pin = rtcdat_o
-	wire rtc_data_pin = (via_pb_oe[0] && !via_pb_o[0]) ? 1'b0 : rtcdat_o;
-	wire [7:0] pb_pin_level = {pb_pin_level_normal[7:1], rtc_data_pin};
-	// CUDA drives TREQ on bit 5 (overrides everything else for that bit)
+	// - For input pins (via_pb_oe=0): external signals from CUDA
+	// CUDA provides:
+	// - Bit 1: TREQ (Transfer Request, active low)
+	// - Bit 2: BYTEACK (Byte Acknowledge)
+	// VIA outputs to CUDA:
+	// - Bit 3: TIP (Transaction In Progress)
+	// - Bits 4-5: unused (tied high)
+	// - Bits 6-7: tied high
+	// - Bits 0-2: unused for Mac LC (no standalone RTC)
+	// Correct bit mapping: TREQ=bit1, BYTEACK=bit2, bits 3-7 and 0 pull high
+	wire [7:0] via_pb_external = {4'b1111, 1'b1, cuda_byteack, cuda_treq, 1'b1};
+	// Combine VIA outputs with CUDA inputs
+	wire [7:0] pb_pin_level = (via_pb_oe & via_pb_o) | (~via_pb_oe & via_pb_external);
+	// CUDA can override specific bits via cuda_pb_oe
 	assign via_pb_i = (pb_pin_level & ~cuda_pb_oe) | (cuda_pb_o & cuda_pb_oe);
 	assign snd_ena = ~via_pb_oe[7] | via_pb_o[7];
 
@@ -291,17 +286,52 @@ assign cpuDataOut = selectIWM ? iwmDataOut :
 
 	// CUDA signals for Mac LC
 	wire       cuda_cb1;
-	wire       cuda_cb1_oe;
 	wire       cuda_cb2;
 	wire       cuda_cb2_oe;
+	wire       cuda_treq;
+	wire       cuda_byteack;
+	wire       cuda_sr_irq;
 	wire       via_sr_active;
 	wire       via_sr_dir;
 	wire       via_sr_ext_clk;
 	wire [7:0] cuda_pb_o;
 	wire [7:0] cuda_pb_oe;
 
-	// Combine CB1 from CUDA (when driving) or use internal clock
-	wire via_cb1_in = cuda_cb1_oe ? cuda_cb1 : kbdclk;
+	// VIA Shift Register read/write strobes for CUDA
+	// These pulse when CPU accesses the VIA shift register (register 0xA)
+	localparam VIA_SR_REG = 4'hA;
+	reg via_sr_read, via_sr_write;
+	reg via_access_prev;
+	always @(posedge clk32) begin
+		if (!_cpuReset) begin
+			via_sr_read <= 1'b0;
+			via_sr_write <= 1'b0;
+			via_access_prev <= 1'b0;
+		end else if (clk8_en_p) begin
+			// Generate single-cycle pulses on VIA SR access
+			via_sr_read <= 1'b0;
+			via_sr_write <= 1'b0;
+
+			if (selectVIA && !_cpuVMA && cpuAddrRegHi == VIA_SR_REG) begin
+				if (!via_access_prev) begin
+					if (_cpuRW)
+						via_sr_read <= 1'b1;
+					else
+						via_sr_write <= 1'b1;
+				end
+				via_access_prev <= 1'b1;
+			end else begin
+				via_access_prev <= 1'b0;
+			end
+		end
+	end
+
+	// CB1 from CUDA (CUDA always drives CB1 for shift register clocking)
+	wire via_cb1_in = cuda_cb1;
+
+	// Debug: Minimal VIA monitoring (commented out for now)
+	/* verilator lint_off STMTDLY */
+	/* verilator lint_on STMTDLY */
 
 	via6522 via(
 		.clock      (clk32),
@@ -343,39 +373,44 @@ assign cpuDataOut = selectIWM ? iwmDataOut :
 		.sr_ext_clk    (via_sr_ext_clk)
 	);
 
-	// CUDA stub for Mac LC ADB/power management
-	cuda_stub cuda(
+	// CUDA controller for Mac LC - handles PRAM, RTC, and ADB
+	// Mac LC uses CUDA (not standalone RTC) for PRAM and time keeping
+	cuda_maclc cuda(
 		.clk            (clk32),
 		.clk8_en        (clk8_en_p),
 		.reset          (!_cpuReset),
 
-		.via_pb_i       (via_pb_o),        // Read VIA Port B outputs
-		.cuda_pb_o      (cuda_pb_o),       // CUDA's Port B contributions
-		.cuda_pb_oe     (cuda_pb_oe),
+		// RTC timestamp initialization
+		.timestamp      (timestamp),
 
-		.via_sr_active  (via_sr_active),
-		.via_sr_out     (via_sr_dir),
-		.cuda_sr_trigger(), // Not used yet - VIA handles its own interrupt
+		// VIA Port B connections
+		.via_tip        (via_pb_o[3]),     // TIP from VIA (PB3)
+		.via_byteack_in (1'b0),            // Not used
+		.cuda_treq      (cuda_treq),       // TREQ to VIA (PB1)
+		.cuda_byteack   (cuda_byteack),    // BYTEACK to VIA (PB2)
 
-		.cuda_cb1       (cuda_cb1),
-		.cuda_cb1_oe    (cuda_cb1_oe),
-		.cuda_cb2       (cuda_cb2),
-		.cuda_cb2_oe    (cuda_cb2_oe)
-	);
+		// VIA Shift Register interface
+		.cuda_cb1       (cuda_cb1),        // Shift clock
+		.via_cb2_in     (cb2_o),           // Data from VIA
+		.cuda_cb2       (cuda_cb2),        // Data to VIA
+		.cuda_cb2_oe    (cuda_cb2_oe),     // CB2 output enable
 
-	wire _rtccs   = ~via_pb_oe[2] | via_pb_o[2];
-	wire rtcck    = ~via_pb_oe[1] | via_pb_o[1];
-	wire rtcdat_i = ~via_pb_oe[0] | via_pb_o[0];
-	wire rtcdat_o;
+		// VIA SR control signals
+		.via_sr_read    (via_sr_read),
+		.via_sr_write   (via_sr_write),
+		.cuda_sr_irq    (cuda_sr_irq),
 
-	rtc pram (
-		.clk        (clk32),
-		.reset      (!_cpuReset),
-		.timestamp  (timestamp),
-		._cs        (_rtccs),
-		.ck         (rtcck),
-		.dat_i      (rtcdat_i),
-		.dat_o      (rtcdat_o)
+		// Full Port B
+		.cuda_portb     (cuda_pb_o),
+		.cuda_portb_oe  (cuda_pb_oe),
+
+		// ADB (simplified for now)
+		.adb_data_in    (1'b1),
+		.adb_data_out   (),
+
+		// System control (not used yet)
+		.reset_680x0    (),
+		.nmi_680x0      ()
 	);
 
 	wire _ADBint;
