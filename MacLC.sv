@@ -601,15 +601,19 @@ module emu
 		.clk_sys(clk_sys),
 		.reset(~n_reset),
 		.reg_addr(cpuAddr[10:0]),
+		.uds_n(_cpuUDS),
+		.lds_n(_cpuLDS),
 		.data_in(cpuDataOut[7:0]),
 		.data_out(ariel_reg_dout),
 		.we(selectAriel && !_cpuRW && cpuBusControl),
 		.req(selectAriel && cpuBusControl),
-		
+
 		// The RAMDAC now takes the index from v8_video and returns RGB data
 		.pixel_index(ariel_pixel_addr),
 		.rgb_out(ariel_palette_data)
 	);
+
+	wire [7:0] pvia_video_config;
 
 	pseudovia pvia(
 		.clk_sys(clk_sys),
@@ -623,9 +627,8 @@ module emu
 		.slot_irq(1'b0),
 		.irq_out(pseudovia_irq),
 		.ram_config(configRAMSize),
-		.monitor_id(v8_monitor_id)
-		// NOTE: In the future, expose the 'video_config' register here
-		// to allow automatic mode switching by the OS.
+		.monitor_id(v8_monitor_id),
+		.video_config(pvia_video_config)
 	);
 
 	maclc_v8_video v8_video(
