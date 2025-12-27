@@ -35,6 +35,7 @@ module cuda_maclc (
     input         via_sr_read,      // VIA is reading SR (shift in mode)
     input         via_sr_write,     // VIA has written SR (shift out mode)
     input         via_sr_ext_clk,   // VIA is in external clock mode (ACR bits 4:2 = 11x)
+    input         via_sr_dir,       // VIA shift direction: 0=in, 1=out
     output reg    cuda_sr_irq,      // Request SR interrupt
 
     // Full port B for completeness
@@ -237,12 +238,12 @@ module cuda_maclc (
 
         case (state)
             ST_ATTENTION: begin
-                // At startup with TREQ asserted, wait for ROM to acknowledge with TIP
-                // When ROM asserts TIP, send startup response (PKT_ERROR = 0x02)
+                // At startup, wait for ROM to send probe (don't assert TREQ)
+                // When ROM asserts TIP, go to receive mode to get probe byte
                 if (!via_tip && via_tip_prev) begin
-                    next_state = ST_SEND_WAIT;  // ROM acknowledged, send startup response
+                    next_state = ST_RECV_WAIT;  // ROM starting transaction, receive probe
                     /* verilator lint_off STMTDLY */
-                    $display("CUDA: ST_ATTENTION->ST_SEND_WAIT: ROM acknowledged with TIP");
+                    $display("CUDA: ST_ATTENTION->ST_RECV_WAIT: ROM asserting TIP, ready to receive");
                     /* verilator lint_on STMTDLY */
                 end
                 else if (wait_counter >= 16'd100000)
@@ -251,50 +252,48 @@ module cuda_maclc (
 
             ST_IDLE: begin
                 // Wait for TIP to start a transaction
-                if (!via_tip && via_tip_prev)
+                // Check both falling edge and level - ROM may have already asserted TIP
+                if ((!via_tip && via_tip_prev) || (!via_tip && sr_write_seen)) begin
                     next_state = ST_RECV_WAIT;
+                    /* verilator lint_off STMTDLY */
+                    $display("CUDA: IDLE->RECV_WAIT: TIP=%b, prev=%b, sr_write_seen=%b", via_tip, via_tip_prev, sr_write_seen);
+                    /* verilator lint_on STMTDLY */
+                end
             end
 
             ST_RECV_WAIT: begin
                 // Wait for SR write (ROM sending byte)
-                // IMPORTANT: Only continue receiving if TIP is still asserted (low)
-                // ROM releases TIP between bytes to check TREQ
+                // IMPORTANT: ROM releases TIP between bytes to check TREQ
+                // We must wait for TIP to be re-asserted before clocking each byte
                 //
-                // Use combinational sr_write_now to catch SR write in same cycle
-                // (sr_write_seen uses non-blocking assignment, not visible until next cycle)
-                if (!via_tip && via_sr_write && !via_sr_write_prev) begin
-                    // TIP asserted and new SR write - receive next byte
+                // Protocol: ROM asserts TIP -> writes SR -> we clock ->
+                //           ROM toggles BYTEACK -> ROM releases TIP to check TREQ ->
+                //           ROM writes SR for next byte -> ROM re-asserts TIP -> repeat
+                //
+                // Key insight: ROM may write SR BEFORE re-asserting TIP, so we track
+                // sr_write_seen and wait for TIP assertion to start clocking
+
+                // When TIP asserted AND we have pending SR write, start receiving
+                if (!via_tip && sr_write_seen) begin
                     next_state = ST_RECV_BYTE;
                     /* verilator lint_off STMTDLY */
-                    $display("CUDA: RECV_WAIT->RECV_BYTE: sr_write edge, TIP=%b", via_tip);
+                    $display("CUDA: RECV_WAIT->RECV_BYTE: TIP asserted with pending SR write");
                     /* verilator lint_on STMTDLY */
                 end
-                else if (recv_count > 0 && !sr_write_seen && !(via_sr_write && !via_sr_write_prev) && via_tip && wait_counter >= 16'd1000) begin
-                    // TIP released, have data, no pending SR write, no SR write this cycle
+                // Also handle case where TIP and SR write happen together
+                else if (!via_tip && via_sr_write && !via_sr_write_prev) begin
+                    next_state = ST_RECV_BYTE;
+                    /* verilator lint_off STMTDLY */
+                    $display("CUDA: RECV_WAIT->RECV_BYTE: TIP and sr_write edge together");
+                    /* verilator lint_on STMTDLY */
+                end
+                // Timeout: have data, no pending SR write, and waited long enough
+                // wait_counter increments when: recv_count > 0 && !sr_write_seen && bit_counter >= 8
+                // This works regardless of TIP state
+                else if (recv_count > 0 && wait_counter >= 16'd5000) begin
                     next_state = ST_PROCESS;
                     /* verilator lint_off STMTDLY */
-                    $display("CUDA: RECV_WAIT->PROCESS: TIP released, recv_count=%d", recv_count);
-                    /* verilator lint_on STMTDLY */
-                end
-                else if (recv_count == 0 && !sr_write_seen && !(via_sr_write && !via_sr_write_prev) && via_tip && wait_counter >= 16'd1000) begin
-                    // TIP released with no data AND no pending SR write - go back to idle
-                    next_state = ST_IDLE;
-                    /* verilator lint_off STMTDLY */
-                    $display("CUDA: RECV_WAIT->IDLE: TIP released with no data");
-                    /* verilator lint_on STMTDLY */
-                end
-                else if (recv_count > 0 && !sr_write_seen && !(via_sr_write && !via_sr_write_prev) && wait_counter >= 16'd50000) begin
-                    // Timeout - process whatever we have (but not if pending SR write)
-                    next_state = ST_PROCESS;
-                    /* verilator lint_off STMTDLY */
-                    $display("CUDA: RECV_WAIT->PROCESS: timeout, recv_count=%d", recv_count);
-                    /* verilator lint_on STMTDLY */
-                end
-                else if (recv_count > 0 && via_tip && wait_counter >= 16'd100000) begin
-                    // Very long timeout - process even with pending SR write (byte was lost)
-                    next_state = ST_PROCESS;
-                    /* verilator lint_off STMTDLY */
-                    $display("CUDA: RECV_WAIT->PROCESS: long timeout, recv_count=%d, sr_write_seen=%b", recv_count, sr_write_seen);
+                    $display("CUDA: RECV_WAIT->PROCESS: packet complete, recv_count=%d, TIP=%b", recv_count, via_tip);
                     /* verilator lint_on STMTDLY */
                 end
             end
@@ -314,32 +313,39 @@ module cuda_maclc (
                 // CUDA sends to ROM:
                 // - CUDA asserts TREQ to indicate it has data
                 // - ROM asserts TIP to acknowledge
-                // - ROM changes VIA to shift IN mode (writes ACR for external clock)
-                // - ROM may read SR to clear any pending data
-                // - CUDA clocks data on CB1/CB2
+                // - ROM changes VIA to shift IN mode (writes ACR for external clock INPUT)
+                // - CUDA clocks data on CB1/CB2 immediately once VIA is ready
+                // - After 8 clocks, VIA sets SR_INT, ROM reads SR to get the byte
                 //
-                // IMPORTANT: Must wait for ROM to configure VIA before clocking!
-                // ROM sequence: assert TIP -> write ACR (mode 7) -> poll IFR
-                // We wait for via_sr_ext_clk (VIA is in external clock mode)
+                // IMPORTANT: We start clocking as soon as VIA is in external clock INPUT mode.
+                // The ROM reads SR AFTER the shift completes, not before!
+                // We wait for:
+                //   - TIP asserted (!via_tip)
+                //   - via_sr_ext_clk (VIA is in external clock mode)
+                //   - !via_sr_dir (VIA is in INPUT mode, not output)
+                //   - Small delay for VIA to be ready (wait_counter > 100)
                 if (send_count < send_length && !via_tip) begin
-                    // TIP asserted by ROM - wait for VIA to enter external clock mode
-                    if (via_sr_ext_clk) begin
+                    // TIP asserted by ROM - wait for VIA to enter external clock INPUT mode
+                    if (via_sr_ext_clk && !via_sr_dir && wait_counter > 16'd100) begin
                         next_state = ST_SEND_BYTE;
                         /* verilator lint_off STMTDLY */
-                        $display("CUDA: SEND_WAIT->SEND_BYTE: sr_ext_clk=%b, wait=%d", via_sr_ext_clk, wait_counter);
+                        $display("CUDA: SEND_WAIT->SEND_BYTE: sr_ext_clk=%b, sr_dir=%b, wait=%d", via_sr_ext_clk, via_sr_dir, wait_counter);
                         /* verilator lint_on STMTDLY */
                     end
                 end else if (send_count >= send_length) begin
                     next_state = ST_FINISH;
                 end
-                // Otherwise wait for TIP assertion and VIA external clock mode
+                // Otherwise wait for TIP assertion and VIA external clock INPUT mode
             end
 
             ST_SEND_BYTE: begin
-                // Shift out 8 bits - wait for final rising edge
+                // Shift out 8 bits - done after 8th falling edge
                 // bit_counter increments on falling edges, VIA samples on rising edges
-                // So we're done when bit_counter=8 AND cb1 is high (after final rise)
-                if (bit_counter >= 4'd8 && cb1_out) begin
+                // VIA needs exactly 8 rising edges per byte. Sequence:
+                //   cb1=0 (start) -> toggle 0: cb1=1 (rising 1) -> toggle 1: cb1=0 (falling, bit_cnt=1)
+                //   -> ... -> toggle 14: cb1=1 (rising 8) -> toggle 15: cb1=0 (falling, bit_cnt=8)
+                // At bit_counter=8 && cb1=0, we've provided exactly 8 rising edges. Stop here.
+                if (bit_counter >= 4'd8 && !cb1_out) begin
                     next_state = ST_SEND_DONE;
                     /* verilator lint_off STMTDLY */
                     $display("CUDA: ST_SEND_BYTE done - bit_counter=%d, cb1_out=%b", bit_counter, cb1_out);
@@ -348,15 +354,29 @@ module cuda_maclc (
             end
 
             ST_SEND_DONE: begin
-                // Byte sent, wait for next SR read or TIP release
-                if (via_tip)
+                // Byte sent, wait for next SR read or end of transaction
+                // IMPORTANT: ROM releases TIP between bytes to check TREQ
+                // If TREQ is still asserted (we have more data), ROM will re-assert TIP
+                // Only go to FINISH when we're done sending AND TIP is released
+                if (via_tip && send_count >= send_length) begin
+                    // TIP released AND we're done - transaction complete
                     next_state = ST_FINISH;
-                else if (via_sr_read && !via_sr_read_prev) begin
+                end
+                else if (!via_tip && via_sr_read && !via_sr_read_prev) begin
+                    // TIP asserted and ROM read SR - send next byte if available
                     if (send_count < send_length)
                         next_state = ST_SEND_BYTE;
                     else
                         next_state = ST_FINISH;
                 end
+                else if (wait_counter >= 16'd50000) begin
+                    // Timeout - ROM not responding, finish transaction
+                    next_state = ST_FINISH;
+                    /* verilator lint_off STMTDLY */
+                    $display("CUDA: SEND_DONE timeout, finishing. send_cnt=%d/%d TIP=%b", send_count, send_length, via_tip);
+                    /* verilator lint_on STMTDLY */
+                end
+                // Otherwise wait for TIP re-assertion or transaction end
             end
 
             ST_FINISH: begin
@@ -402,30 +422,17 @@ module cuda_maclc (
 
             case (state)
                 ST_ATTENTION: begin
+                    // At startup, don't assert TREQ - wait for ROM to send probe first
+                    // ROM will assert TIP and send a probe byte, we respond with PKT_ERROR
                     byteack_reg <= 1'b0;
                     recv_count <= 4'h0;
-                    treq_reg <= 1'b1;  // Assert TREQ at startup to signal CUDA presence
+                    treq_reg <= 1'b0;  // Don't assert TREQ - wait for ROM probe
+                    cb2_oe_reg <= 1'b0;  // Don't drive CB2 yet
+                    cb1_out <= 1'b0;  // Start low
                     wait_counter <= wait_counter + 1'd1;
-
-                    // When ROM asserts TIP (falling edge), prepare startup response
-                    if (!via_tip && via_tip_prev) begin
-                        // Prepare PKT_ERROR response for startup
-                        send_buf[0] <= PKT_ERROR;  // 0x02
-                        send_length <= 4'd1;
-                        send_count <= 4'd0;
-                        bit_counter <= 4'd0;
-                        shift_reg <= PKT_ERROR;
-                        cb2_out_reg <= PKT_ERROR[7];  // MSB first
-                        cb2_oe_reg <= 1'b1;  // Enable CB2 output for sending
-`ifdef SIMULATION
-                        $display("CUDA: Preparing startup response PKT_ERROR (0x02)");
-`endif
-                    end else begin
-                        send_count <= 4'h0;
-                    end
 `ifdef SIMULATION
                     if (wait_counter == 16'd0)
-                        $display("CUDA: ST_ATTENTION starting, TREQ asserted, waiting for ROM TIP=%b", via_tip);
+                        $display("CUDA: ST_ATTENTION starting, waiting for ROM probe, TIP=%b", via_tip);
 `endif
                 end
 
@@ -433,20 +440,43 @@ module cuda_maclc (
                     treq_reg <= 1'b0;       // De-assert TREQ when idle
                     byteack_reg <= 1'b0;
                     cb2_oe_reg <= 1'b0;
-                    bit_counter <= 4'h0;
                     recv_count <= 4'h0;
                     send_count <= 4'h0;
-                    wait_counter <= 16'h0;
-                    sr_write_seen <= 1'b0;  // Reset on idle
-                    // Start cb1 low so first toggle on RECV_WAIT creates auto-trigger rising edge
-                    cb1_out <= 1'b0;
+                    wait_counter <= wait_counter + 1'd1;
+                    // Only reset sr_write_seen when TIP is released
+                    // Don't reset if TIP is about to be asserted (ROM writes SR before TIP)
+                    if (via_tip)
+                        sr_write_seen <= 1'b0;
+
+                    // Continue providing CB1 clocks if VIA is in external clock mode
+                    // This clears any pending shift that was auto-triggered when ROM read SR
+                    if (via_sr_ext_clk && via_tip && bit_counter < 4'd9) begin
+                        shift_clk_div <= shift_clk_div + 1'd1;
+                        if (shift_clk_div >= 8'd16) begin
+                            shift_clk_div <= 8'h0;
+                            cb1_out <= ~cb1_out;
+                            if (!cb1_out)  // Rising edge
+                                bit_counter <= bit_counter + 1'd1;
+                        end
+                    end else begin
+                        cb1_out <= 1'b0;
+                        bit_counter <= 4'h0;
+                        shift_clk_div <= 8'h0;
+                    end
+`ifdef SIMULATION
+                    if (wait_counter[11:0] == 12'd0)
+                        $display("CUDA: IDLE wait=%d TIP=%b sr_write_seen=%b sr_ext=%b bit_cnt=%d",
+                                 wait_counter, via_tip, sr_write_seen, via_sr_ext_clk, bit_counter);
+`endif
                 end
 
                 ST_RECV_WAIT: begin
                     // CUDA must clock CB1 for VIA shift register (external clock mode)
                     // In mode 7 (external clock), CUDA provides CB1 clocks and VIA shifts data
-                    // ROM sequence: TIP asserted -> ACR configured (mode 7) -> CUDA clocks -> IFR SR bit set
-                    // Must wait for VIA to enter external clock mode before clocking
+                    //
+                    // IMPORTANT: ROM may release TIP between bytes or even during the first byte!
+                    // ROM sequence: Assert TIP -> Release TIP -> Write SR -> clock completes
+                    // We must clock whenever there's data to shift, regardless of TIP state.
                     treq_reg <= 1'b0;
                     cb2_oe_reg <= 1'b0;
 `ifdef SIMULATION
@@ -456,73 +486,113 @@ module cuda_maclc (
                                  via_tip, via_sr_ext_clk, bit_counter, cb1_out);
                     end
 `endif
-                    // Only clock when TIP asserted AND VIA is in external clock mode
-                    // AND we have seen an SR write (ROM has loaded data to shift)
-                    // This prevents clocking before ROM has written data to SR
-                    if (!via_tip && via_sr_ext_clk && sr_write_seen) begin
-                        // TIP is asserted - provide CB1 clocks
-                        // bit_counter < 8: clock and sample
-                        // bit_counter == 8 && cb1_out == 0: need one more rising edge for VIA
-                        // bit_counter == 8 && cb1_out == 1: done, wait for SR activity
-                        // Need 9 rising edges total: 1 for VIA auto-trigger + 8 for 8-bit shift
-                        // cb1_out starts low (set in ST_IDLE), first toggle creates auto-trigger rising edge
-                        // bit_counter counts 8 falling edges (CUDA samples on these)
-                        // Clock until bit_counter == 8 AND cb1_out is high (9th rising edge done)
-                        if (bit_counter < 4'd8 || (bit_counter == 4'd8 && !cb1_out)) begin
-                            // Still have bits to clock, or need final rising edge
+                    // Reset bit_counter on any SR write edge, regardless of current sr_write_seen value
+                    // This handles the case where ROM writes a new byte before sr_write_seen was set
+                    if (via_sr_write && !via_sr_write_prev) begin
+                        bit_counter <= 4'h0;
+                        shift_clk_div <= 8'h0;
+                        cb1_out <= 1'b0;  // Start low for first rising edge
+`ifdef SIMULATION
+                        $display("CUDA: RECV_WAIT resetting bit_counter for new byte");
+`endif
+                    end
+                    // Clock when VIA is in external clock mode AND we have pending data
+                    // Don't require TIP to be asserted - ROM may release it during transfer
+                    else if (via_sr_ext_clk && sr_write_seen) begin
+`ifdef SIMULATION
+                        if (bit_counter >= 4'd8)
+                            $display("CUDA: CLOCKING - bit_cnt=%d, cb1=%b, div=%d", bit_counter, cb1_out, shift_clk_div);
+`endif
+                        // VIA needs 9 rising edges total:
+                        //   Edge 0: VIA auto-triggers, bit_cnt=7
+                        //   Edge 1-7: VIA decrements bit_cnt (7→0)
+                        //   Edge 8: VIA sees bit_cnt=0, sets shift_active=0
+                        // CUDA samples on edges 0-7 (8 data bits), but must provide edge 8
+                        // for VIA to complete. So we clock until bit_counter=9.
+                        if (bit_counter < 4'd9 || (bit_counter == 4'd9 && cb1_out)) begin
+                            // Still have edges to provide
                             shift_clk_div <= shift_clk_div + 1'd1;
                             // Clock slow enough for VIA to sample on E clock edges
                             if (shift_clk_div >= 8'd16) begin
                                 shift_clk_div <= 8'h0;
                                 cb1_out <= ~cb1_out;
 
-                                if (cb1_out && bit_counter < 4'd8) begin  // Falling edge - sample CB2
-                                    shift_reg <= {shift_reg[6:0], via_cb2_in};
+                                // VIA external clock mode timing:
+                                // - VIA shifts OUT on CB1 FALLING edge (shift_tick_f)
+                                // - CB2 output is always shift_reg[7]
+                                // - We must sample BEFORE VIA rotates, so sample on RISING edge
+                                //
+                                // Edge sequence:
+                                // Rising 0: Auto-trigger, sample bit7, VIA bit_cnt=7
+                                // Rising 1: Sample bit6, VIA bit_cnt 7→6
+                                // ...
+                                // Rising 7: Sample bit0, VIA bit_cnt 1→0
+                                // Rising 8: VIA sees bit_cnt=0, shift_active→0
+                                //
+                                // Sample on rising edge (when cb1_out was low and going high)
+                                if (!cb1_out) begin  // Rising edge
                                     bit_counter <= bit_counter + 1'd1;
-
-                                    if (bit_counter == 4'd7) begin
-                                        // Byte complete
-                                        // Only store if we saw an SR write (real data, not dummy)
-                                        if (sr_write_seen) begin
+                                    if (bit_counter < 4'd8) begin
+                                        // Sample CB2 for data bits 0-7
+                                        shift_reg <= {shift_reg[6:0], via_cb2_in};
+`ifdef SIMULATION
+                                        $display("CUDA: RECV_WAIT sample bit %d = %b (CB2), SR now 0x%02x",
+                                                 bit_counter, via_cb2_in, {shift_reg[6:0], via_cb2_in});
+`endif
+                                        if (bit_counter == 4'd7) begin
+                                            // Byte complete - store it
                                             recv_buf[recv_count[3:0]] <= {shift_reg[6:0], via_cb2_in};
                                             recv_count <= recv_count + 1'd1;
                                             /* verilator lint_off STMTDLY */
                                             $display("CUDA: RECV_WAIT byte[%d] = 0x%02x", recv_count, {shift_reg[6:0], via_cb2_in});
                                             /* verilator lint_on STMTDLY */
-                                        end else begin
-                                            /* verilator lint_off STMTDLY */
-                                            $display("CUDA: RECV_WAIT dummy byte (no SR write) = 0x%02x", {shift_reg[6:0], via_cb2_in});
-                                            /* verilator lint_on STMTDLY */
+                                            // DON'T clear sr_write_seen yet - need 1 more edge for VIA
+                                            // Toggle BYTEACK to signal byte received
+                                            byteack_reg <= ~byteack_reg;
                                         end
-                                        sr_write_seen <= 1'b0;  // Wait for next SR write
+                                    end else if (bit_counter == 4'd8) begin
+                                        // Edge 8 (bit_counter=8→9): VIA completes its shift
+                                        // NOW clear sr_write_seen since we're done clocking
+                                        sr_write_seen <= 1'b0;
                                     end
                                 end
                             end
                         end else begin
-                            // 8 bits done and CB1 high - wait for next SR write or activity
-                            cb1_out <= 1'b1;
-                            // Reset bit_counter when we see a new SR write
-                            if (via_sr_write && !via_sr_write_prev) begin
-                                bit_counter <= 4'h0;
-                                shift_clk_div <= 8'h0;
-`ifdef SIMULATION
-                                $display("CUDA: RECV_WAIT sr_write edge detected, resetting bit_counter");
-`endif
-                            end
+                            // 9 edges done (8 data + 1 completion)
+                            // Hold CB1 low to avoid spurious edges when next byte starts
+                            cb1_out <= 1'b0;
                         end
                     end else begin
-                        // TIP is released - hold CB1 high
-                        cb1_out <= 1'b1;
-                        // Don't reset bit_counter here - ROM may bounce TIP between bytes
+                        // No pending data - hold CB1 low to avoid spurious edges
+                        cb1_out <= 1'b0;
                     end
 
                     // Wait counter for detecting end of transaction
-                    // Reset when TIP is asserted or on SR activity
-                    // Increment when TIP is released (sustained inactivity detection)
-                    if ((via_sr_write && !via_sr_write_prev) || (via_sr_read && !via_sr_read_prev) || !via_tip)
+                    // Reset only on SR write activity (not on TIP changes)
+                    // This allows detecting "no more bytes coming" even with TIP asserted
+                    if (via_sr_write && !via_sr_write_prev) begin
                         wait_counter <= 16'h0;
-                    else if (via_tip)  // Count when TIP is released (any recv_count)
+`ifdef SIMULATION
+                        if (wait_counter > 0)
+                            $display("CUDA: wait_counter reset from %d (sr_write edge)", wait_counter);
+`endif
+                    end
+                    else if (recv_count > 0 && !sr_write_seen && bit_counter >= 4'd9 && !cb1_out) begin
+                        // Count when: have data, no pending write, all edges done (9 + falling)
                         wait_counter <= wait_counter + 1'd1;
+`ifdef SIMULATION
+                        if (wait_counter == 16'd0 || wait_counter == 16'd1000 || wait_counter == 16'd5000)
+                            $display("CUDA: wait_counter=%d, recv_cnt=%d, sr_write_seen=%b, bit_cnt=%d, cb1=%b",
+                                     wait_counter, recv_count, sr_write_seen, bit_counter, cb1_out);
+`endif
+                    end
+`ifdef SIMULATION
+                    // Debug: trace why wait_counter isn't incrementing
+                    else if (recv_count > 0 && wait_counter < 16'd10) begin
+                        $display("CUDA: wait_counter BLOCKED - sr_write_seen=%b, bit_cnt=%d, cb1=%b, ext_clk=%b",
+                                 sr_write_seen, bit_counter, cb1_out, via_sr_ext_clk);
+                    end
+`endif
                 end
 
                 ST_RECV_BYTE: begin
@@ -571,22 +641,28 @@ module cuda_maclc (
                             case (recv_buf[1])  // Command code
                                 CUDA_AUTOPOLL: begin
                                     autopoll_enabled <= recv_buf[2][0];
-                                    // Response: [ERROR_PKT] to acknowledge
+                                    // Response: [ERROR_PKT][OK status]
+                                    // Simplified response - ROM may expect just 2 bytes
                                     send_buf[0] <= PKT_ERROR;
-                                    send_length <= 4'd1;
+                                    send_buf[1] <= 8'h00;  // OK status
+                                    send_length <= 4'd2;
                                     /* verilator lint_off STMTDLY */
                                     $display("CUDA: AUTOPOLL %s", recv_buf[2][0] ? "enabled" : "disabled");
                                     /* verilator lint_on STMTDLY */
                                 end
 
                                 CUDA_GET_TIME: begin
-                                    // Response: [ERROR_PKT][time bytes...]
+                                    // Response: [ERROR_PKT][GET_TIME][time bytes...] per MAME
                                     send_buf[0] <= PKT_ERROR;
-                                    send_buf[1] <= rtc_seconds[31:24];
-                                    send_buf[2] <= rtc_seconds[23:16];
-                                    send_buf[3] <= rtc_seconds[15:8];
-                                    send_buf[4] <= rtc_seconds[7:0];
-                                    send_length <= 4'd5;
+                                    send_buf[1] <= CUDA_GET_TIME;  // Echo command
+                                    send_buf[2] <= rtc_seconds[31:24];
+                                    send_buf[3] <= rtc_seconds[23:16];
+                                    send_buf[4] <= rtc_seconds[15:8];
+                                    send_buf[5] <= rtc_seconds[7:0];
+                                    send_length <= 4'd6;
+`ifdef SIMULATION
+                                    $display("CUDA: GET_TIME returning 0x%08x", rtc_seconds);
+`endif
                                 end
 
                                 CUDA_SET_TIME: begin
@@ -661,6 +737,12 @@ module cuda_maclc (
                     else if (!via_tip)  // Only count when TIP is asserted
                         wait_counter <= wait_counter + 1'd1;
 
+`ifdef SIMULATION
+                    if (wait_counter[9:0] == 10'd0 && wait_counter > 0)
+                        $display("CUDA: SEND_WAIT wait=%d TIP=%b sr_ext=%b sr_dir=%b sr_read=%b",
+                                 wait_counter, via_tip, via_sr_ext_clk, via_sr_dir, via_sr_read);
+`endif
+
                     // Prepare byte to send
                     if (send_count < send_length) begin
                         shift_reg <= send_buf[send_count[3:0]];
@@ -674,8 +756,8 @@ module cuda_maclc (
                 ST_SEND_BYTE: begin
                     cb2_oe_reg <= 1'b1;
 
-                    // Continue clocking until bit_counter=8 AND cb1 is high (final rising edge done)
-                    if (!(bit_counter >= 4'd8 && cb1_out)) begin
+                    // Continue clocking until bit_counter=8 AND cb1 is low (8th falling edge done)
+                    if (!(bit_counter >= 4'd8 && !cb1_out)) begin
                         shift_clk_div <= shift_clk_div + 1'd1;
 
                         // Clock slow enough for VIA to sample on E clock edges
@@ -689,12 +771,25 @@ module cuda_maclc (
                                 if (bit_counter < 4'd8) begin
                                     bit_counter <= bit_counter + 1'd1;
 `ifdef SIMULATION
-                                    $display("CUDA: ST_SEND_BYTE falling edge - bit_counter %d -> %d, cb1_out=%b", bit_counter, bit_counter + 1, cb1_out);
+                                    $display("CUDA: ST_SEND_BYTE falling edge - bit_counter %d, shift_reg=0x%02x, cb2=%b",
+                                             bit_counter, shift_reg, cb2_out_reg);
 `endif
                                 end
-                                if (bit_counter > 0 && bit_counter < 4'd8) begin
+                                // Update CB2 for the NEXT rising edge (VIA samples on rising)
+                                // At falling N, we prepare cb2 for VIA sample N+1
+                                // VIA sample 0 uses initial cb2 (from SEND_DONE)
+                                // VIA sample 1 uses cb2 from falling 0 = shift_reg[6] after 0 shifts
+                                // ...but we haven't shifted yet at falling 0!
+                                // The key: cb2 for sample N+1 = original_byte[7-N-1]
+                                // So at falling N, cb2 = shift_reg[6] (which is original[6-N] after N shifts)
+                                // This gives: sample 0=bit7, sample 1=bit6, ... sample 7=bit0
+                                // But with current shift_reg update timing, shift_reg has been
+                                // shifted N times at falling N, so shift_reg[6] = original[6-N+1] = original[7-N]
+                                // which is one off. The fix: use shift_reg[7] instead of [6]
+                                if (bit_counter < 4'd8) begin
+                                    // Shift and update CB2 for next sample
                                     shift_reg <= {shift_reg[6:0], 1'b0};
-                                    cb2_out_reg <= shift_reg[6];
+                                    cb2_out_reg <= shift_reg[6];  // Next bit to send
                                 end
                             end
                         end
@@ -710,18 +805,30 @@ module cuda_maclc (
                     // Use prev_state to detect first cycle in this state
                     if (prev_state == ST_SEND_BYTE) begin
                         send_count <= send_count + 1'd1;
+                        wait_counter <= 16'h0;  // Reset wait counter on entry
                         // Prepare next byte if needed, or de-assert TREQ if done
                         if (send_count + 1 < send_length) begin
                             shift_reg <= send_buf[send_count[3:0] + 1];
                             cb2_out_reg <= send_buf[send_count[3:0] + 1][7];
+`ifdef SIMULATION
+                            $display("CUDA: SEND_DONE byte %d sent, preparing byte %d", send_count, send_count + 1);
+`endif
                         end else begin
                             // All bytes sent - de-assert TREQ immediately
                             // ROM checks TREQ between bytes to know if more data is coming
                             treq_reg <= 1'b0;
 `ifdef SIMULATION
-                            $display("CUDA: SEND_DONE - all bytes sent, de-asserting TREQ");
+                            $display("CUDA: SEND_DONE - all %d bytes sent, de-asserting TREQ", send_count + 1);
 `endif
                         end
+                    end else begin
+                        // Wait for TIP re-assertion (ROM releases TIP to check TREQ)
+                        wait_counter <= wait_counter + 1'd1;
+`ifdef SIMULATION
+                        if (wait_counter[10:0] == 11'd0)
+                            $display("CUDA: SEND_DONE wait=%d TIP=%b TREQ=%b send_cnt=%d/%d sr_read=%b",
+                                     wait_counter, via_tip, treq_reg, send_count, send_length, via_sr_read);
+`endif
                     end
                 end
 

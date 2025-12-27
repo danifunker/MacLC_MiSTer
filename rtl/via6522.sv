@@ -348,8 +348,12 @@ module via6522 (
                     irq_flags[5] <= 1'b0;
                 end
                     
-                4'hA: begin // Serial port
+                4'hA: begin // Serial port (SR write)
                     irq_flags[2] <= 1'b0;
+`ifdef SIMULATION
+                    $display("VIA: SR WRITE = 0x%02x (shift_active=%b, shift_mode=%d)",
+                             data_in, shift_active, shift_mode_control);
+`endif
                 end
                     
                 4'hB: begin // ACR (Auxiliary Control Register)
@@ -397,7 +401,13 @@ module via6522 (
                 if (tmr_a_output_en == 1'b1) begin
                     data_out[7] <= timer_a_out;
                 end
-// ORB read debug disabled - too verbose during boot polling
+`ifdef SIMULATION
+                // Log ORB reads during shift register activity - shows TREQ value ROM sees
+                if (shift_active) begin
+                    $display("VIA: ORB READ = 0x%02x (TREQ(PB3)=%b, TIP(PB5)=%b) [SR active, bit_cnt=%d]",
+                             irb, irb[3], irb[5], bit_cnt);
+                end
+`endif
             end
             4'h1: begin // ORA
                 data_out <= ira;
@@ -437,7 +447,13 @@ module via6522 (
             end
             4'hD: begin // IFR
                 data_out <= {irq_out, irq_flags};
-// IFR read debug disabled - too verbose during boot polling
+`ifdef SIMULATION
+                // Log IFR reads during shift register activity - shows when ROM sees SR complete
+                if (shift_active || irq_flags[2]) begin
+                    $display("VIA: IFR READ = 0x%02x (SR_bit=%b, IRQ=%b) [SR active=%b, bit_cnt=%d]",
+                             {irq_out, irq_flags}, irq_flags[2], irq_out, shift_active, bit_cnt);
+                end
+`endif
             end
             4'hE: begin // IER
                 data_out <= {1'b1, irq_mask};
