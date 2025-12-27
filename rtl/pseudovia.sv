@@ -105,22 +105,7 @@ always @(posedge clk_sys) begin
         end
 
         if (req) begin
-            // Debug: log first 20 accesses and ALL reg 0x10 accesses
-            if (pvia_access_count < 20) begin
-                $display("PVIA %s: addr=%04x native=%d reg=%02x", we ? "WR" : "RD", addr, addr[12:8] == 5'b00000, addr[7:0]);
-                pvia_access_count <= pvia_access_count + 1;
-            end
-            // Always log reg 0x10 access (video config / monitor sense)
-            if (addr[12:8] == 5'b00000 && addr[7:0] == 8'h10) begin
-                $display("PVIA REG10 %s: data=%02x (monitor_id=%d) stored=%02x",
-                    we ? "WRITE" : "READ",
-                    we ? data_in : ((regs[8'h10] & 8'hC7) | ((monitor_id[2:0]) << 3)),
-                    monitor_id, regs[8'h10]);
-            end
-            // Log any access to addresses that might be monitor-related
-            if (addr[12:8] != 5'b00000 && pvia_access_count < 100) begin
-                $display("PVIA VIA-COMPAT %s: addr=%04x reg=%d", we ? "WR" : "RD", addr, addr[12:9]);
-            end
+// PVIA access logging disabled - too verbose
             if (addr[12:8] == 5'b00000) begin
                 // Native mode: offset 0x00-0xFF
                 if (we) begin

@@ -282,13 +282,23 @@ module via6522 (
         irq_flags <= irq_flags |
                      irq_events;
 
+`ifdef SIMULATION
+        // Debug: trace when serial_event gets captured into irq_flags
+        if (irq_events[2] == 1'b1) begin
+            $display("VIA: IRQ event serial! irq_events=0x%02x, irq_flags before=0x%02x, will be 0x%02x, rising=%b, falling=%b",
+                     irq_events, irq_flags, irq_flags | irq_events, rising, falling);
+        end
+`endif
+
         // Writes
         if (wen == 1'b1 && falling == 1'b1) begin
+// VIA write debug disabled - too verbose during boot
             case (addr)
                 4'h0: begin // ORB
                     pio_i_prb <= data_in;
 `ifdef SIMULATION
-                    $display("VIA: ORB WRITE = 0x%02x (TIP=%b, BYTEACK=%b)", data_in, data_in[3], data_in[2]);
+                    // Mac LC V8 protocol: PB5=TIP(SYS_SESSION), PB4=BYTEACK(VIA_FULL), PB3=TREQ(XCVR_SESSION)
+                    $display("VIA: ORB WRITE = 0x%02x (TIP(PB5)=%b, BYTEACK(PB4)=%b)", data_in, data_in[5], data_in[4]);
 `endif
                     if (cb2_no_irq_clr == 1'b0) begin
                         irq_flags[3] <= 1'b0;
@@ -344,6 +354,10 @@ module via6522 (
                     
                 4'hB: begin // ACR (Auxiliary Control Register)
                     acr <= data_in;
+`ifdef SIMULATION
+                    $display("VIA: ACR WRITE = 0x%02x (shift_mode=%d, shift_dir=%b, ext_clk=%b)",
+                             data_in, data_in[4:2], data_in[4], (data_in[3:2] == 2'b11));
+`endif
                 end
                     
                 4'hC: begin // PCR (Peripheral Control Register)
@@ -383,6 +397,7 @@ module via6522 (
                 if (tmr_a_output_en == 1'b1) begin
                     data_out[7] <= timer_a_out;
                 end
+// ORB read debug disabled - too verbose during boot polling
             end
             4'h1: begin // ORA
                 data_out <= ira;
@@ -422,6 +437,7 @@ module via6522 (
             end
             4'hD: begin // IFR
                 data_out <= {irq_out, irq_flags};
+// IFR read debug disabled - too verbose during boot polling
             end
             4'hE: begin // IER
                 data_out <= {1'b1, irq_mask};
@@ -622,6 +638,7 @@ module via6522 (
     reg        ser_cb2_c = 1'b0;
     reg [2:0]  bit_cnt = 3'd0;
     reg        shift_pulse;
+    reg        shift_active_prev_rising = 1'b0;  // For detecting shift completion
 
     always @(*) begin
         case (shift_clk_sel)
@@ -640,7 +657,8 @@ module via6522 (
 
         if (shift_active == 1'b0) begin
             // Mode 0 still loads the shift register to external pulse (MMBEEB SD-Card interface uses this)
-            if (shift_mode_control == 3'b000) begin
+            // External clock mode (shift_clk_sel == 2'b11) also pulses without trigger - needed for CUDA
+            if (shift_mode_control == 3'b000 || shift_clk_sel == 2'b11) begin
                 shift_pulse = shift_clock & ~shift_clock_d;
             end else begin
                 shift_pulse = 1'b0;
@@ -651,14 +669,16 @@ module via6522 (
     always @(posedge clock) begin
         ser_cb2_c <= cb2_i;
         if (rising == 1'b1) begin
-            if (shift_active == 1'b0) begin
+            // In external clock mode (shift_clk_sel == 2'b11), always follow cb1_i
+            // This allows the 8th shift to complete even as shift_active goes low
+            if (shift_clk_sel == 2'b11) begin
+                shift_clock <= cb1_i;
+            end else if (shift_active == 1'b0) begin
                 if (shift_mode_control == 3'b000) begin
                     shift_clock <= cb1_i;
                 end else begin
                     shift_clock <= 1'b1;
                 end
-            end else if (shift_clk_sel == 2'b11) begin
-                shift_clock <= cb1_i;
             end else if (shift_pulse == 1'b1) begin
                 shift_clock <= ~shift_clock;
             end
@@ -703,20 +723,40 @@ module via6522 (
                 /* verilator lint_on STMTDLY */
             end else if (shift_dir == 1'b1 && shift_tick_f == 1'b1) begin // output
                 shift_reg <= {shift_reg[6:0], shift_reg[7]};
-            end else if (shift_dir == 1'b0 && shift_tick_r == 1'b1) begin // input
+            end else if (shift_mode_control != 3'b000 && shift_dir == 1'b0 && shift_tick_r == 1'b1) begin // input (only when mode != 0)
+                // In external clock mode (mode 3), always shift on CB1 rising edge
+                // The shift_active flag controls IRQ generation, not the actual shifting
+                // Per 6522 datasheet: "shift register counter is disabled" in mode 3
                 /* verilator lint_off STMTDLY */
-                $display("VIA: SR shift IN - CB2=%b, SR 0x%02x -> 0x%02x, bit_cnt=%d, active=%b",
-                         ser_cb2_c, shift_reg, {shift_reg[6:0], ser_cb2_c}, bit_cnt, shift_active);
+                $display("VIA: SR shift IN - CB2=%b (cb2_i=%b), SR 0x%02x -> 0x%02x, mode=%d, ext_clk=%b",
+                         ser_cb2_c, cb2_i, shift_reg, {shift_reg[6:0], cb2_i}, shift_mode_control, (shift_clk_sel == 2'b11));
                 /* verilator lint_on STMTDLY */
-                shift_reg <= {shift_reg[6:0], ser_cb2_c};
+                shift_reg <= {shift_reg[6:0], cb2_i};
             end
         end
     end
 
-    // tell people that we're ready!
-    assign serial_event = shift_tick_r & ~shift_active & rising & serport_en;
+    // Tell people that we're ready!
+    // FIX: In external clock mode, shift_active goes low on falling, but shift_tick_r
+    // happens on rising. By the next rising, shift_tick_r is gone. So we detect the
+    // falling edge of shift_active instead - when it transitions from 1 to 0.
+    // shift_active_prev_rising samples shift_active on rising, so when shift_active
+    // goes low (on falling), the next rising sees prev=1, current=0 -> edge detected.
+    assign serial_event = (shift_active_prev_rising & ~shift_active) & rising & serport_en;
     always @(posedge clock) begin
+        // Sample shift_active on rising edge for edge detection
+        if (rising == 1'b1) begin
+            shift_active_prev_rising <= shift_active;
+        end
+
         if (falling == 1'b1) begin
+`ifdef SIMULATION
+            // Debug: show state when checking trigger
+            if (addr == 4'hA && (ren == 1'b1 || wen == 1'b1)) begin
+                $display("VIA: SR access check - trigger_serial=%b, shift_active=%b, mode=%d, wen=%b, ren=%b",
+                         trigger_serial, shift_active, shift_mode_control, wen, ren);
+            end
+`endif
             if (shift_active == 1'b0 && shift_mode_control != 3'b000) begin
                 if (trigger_serial == 1'b1) begin
                     bit_cnt <= 3'd7;
@@ -725,8 +765,18 @@ module via6522 (
                     $display("VIA: SR triggered - mode=%d, dir=%b, ext_clk=%b",
                              shift_mode_control, shift_dir, (shift_clk_sel == 2'b11));
                     /* verilator lint_on STMTDLY */
+                end else if (shift_clk_sel == 2'b11 && shift_pulse == 1'b1 && shift_clock == 1'b1) begin
+                    // External clock mode: auto-start on CB1 rising edge without SR trigger
+                    // This is needed for CUDA/Egret which expects VIA to be "always listening"
+                    bit_cnt <= 3'd7;
+                    shift_active <= 1'b1;
+                    /* verilator lint_off STMTDLY */
+                    $display("VIA: SR auto-triggered by CB1 in ext clock mode - mode=%d, dir=%b",
+                             shift_mode_control, shift_dir);
+                    /* verilator lint_on STMTDLY */
                 end
             end else begin // we're active
+// SHIFT active debug disabled - too verbose
                 if (shift_clk_sel == 2'b00) begin
                     shift_active <= shift_dir;
                     // when '1' we're active, but for mode 000 we go inactive.
@@ -738,6 +788,9 @@ module via6522 (
                         /* verilator lint_on STMTDLY */
                     end else begin
                         bit_cnt <= bit_cnt - 3'd1;
+                        /* verilator lint_off STMTDLY */
+                        $display("VIA: SR bit_cnt decremented to %d", bit_cnt - 3'd1);
+                        /* verilator lint_on STMTDLY */
                     end
                 end
             end
@@ -752,6 +805,7 @@ module via6522 (
 
         if (reset == 1'b1) begin
             shift_active <= 1'b0;
+            shift_active_prev_rising <= 1'b0;
             bit_cnt <= 3'd0;
         end
     end

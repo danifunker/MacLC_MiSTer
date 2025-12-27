@@ -2,30 +2,46 @@
 
 ## Completed Fixes
 
-### 1. CB2 Timing (cuda_maclc.sv)
-CUDA now outputs CB2 data on CB1 falling edge (instead of rising edge), giving proper setup time for VIA to sample. This matches the MAME reference implementation.
+### 1. Port B Pin Mappings (cuda_maclc.sv)
+Mac LC V8 protocol uses different port B assignments than Mac Plus:
+- PB3: XCVR_SESSION = TREQ from CUDA (input to VIA)
+- PB4: VIA_FULL = BYTEACK from VIA (output to CUDA)
+- PB5: SYS_SESSION = TIP from VIA (output to CUDA)
 
-### 2. ST_WAIT_SR_READ State (cuda_maclc.sv)
-Added proper handshaking where CUDA waits for ROM to read VIA SR before clocking out response data. This prevents CUDA from sending data before the VIA is ready to receive.
+### 2. CB2 Timing (cuda_maclc.sv)
+CUDA outputs CB2 data on CB1 falling edge (instead of rising edge), giving proper setup time for VIA to sample.
 
-### 3. TREQ Open-Drain Behavior (dataController_top.sv)
-Fixed Port B logic so CUDA can pull TREQ low even when VIA has the bit configured as output. This implements proper wired-AND behavior for the open-drain TREQ signal.
+### 3. First Bit Timing Fix (cuda_maclc.sv)
+Added condition to NOT shift on the first falling edge (bit_counter == 0). The initial cb2_out_reg is already set to bit 7 in ST_WAIT_SR_READ, and VIA needs to sample bit 7 on the first RISING edge.
 
-### 4. TIP Polarity (cuda_maclc.sv)
-Fixed CUDA to detect TIP falling edge (1->0) for transaction start, not rising edge. TIP is active-low in the Apple CUDA protocol.
+### 4. Byte Complete Timing (cuda_maclc.sv)
+Fixed the clocking to stop after the 8th rising edge. Condition: `!(cb1_out == 1'b1 && bit_counter >= 4'd8)` ensures we complete the 8th rising edge but no more.
 
-### 5. VIA PRB Initialization (via6522.sv)
-Changed VIA's Port B Output Register reset value from 0x00 to 0xFF to prevent false TIP assertion at startup. This stops CUDA from falsely detecting a transaction start at power-on.
+### 5. CB2 Output Enable Timing (cuda_maclc.sv)
+Keep cb2_oe_reg=1 in ST_COMPLETE and ST_WAIT_TIP_RISE until TIP actually rises. This ensures VIA sees the correct CB2 value even if its E_falling shift happens several clk8_en cycles after CB1 rises.
 
-### 6. CUDA TREQ Initialization (cuda_maclc.sv)
-Fixed treq_reg to start de-asserted (0) in idle state, and asserted (1) during attention and acknowledgment phases.
+### 6. VIA CB2 Sampling (via6522.sv)
+Changed VIA to use cb2_i directly instead of ser_cb2_c for shift register input. This avoids timing issues where ser_cb2_c might have an old value due to different clock phases.
 
-### 7. CUDA Attention Signal (cuda_maclc.sv)
-Added ST_ATTENTION state where CUDA asserts TREQ at startup to signal its presence to the ROM. This is the standard CUDA power-on behavior.
+### 7. VIA PRB Initialization (via6522.sv)
+Changed VIA's Port B Output Register reset value from 0x00 to 0xFF to prevent false TIP assertion at startup.
 
-## State Machine Updates
+### 8. TREQ Open-Drain Behavior (dataController_top.sv)
+Fixed Port B logic so CUDA can pull TREQ low even when VIA has the bit configured as output.
 
-The CUDA state machine now has these states:
+## Current Status: Working!
+
+The CUDA/VIA serial communication is now functioning correctly:
+1. CUDA sends startup message (0x02) via VIA shift register
+2. VIA correctly receives all 8 bits
+3. SR IRQ fires with correct value (0x02)
+4. ROM acknowledges and releases TIP
+5. CUDA returns to idle state
+6. System shows Mac startup gray screen at frame 600
+
+## State Machine
+
+The CUDA state machine:
 - ST_ATTENTION (0) - Startup: assert TREQ to signal presence
 - ST_IDLE (1) - Wait for TIP falling edge
 - ST_WAIT_CMD (2) - Wait for command byte
@@ -41,31 +57,33 @@ The CUDA state machine now has these states:
 - ST_COMPLETE (12) - Transaction complete
 - ST_WAIT_TIP_RISE (13) - Wait for TIP to be released
 
-## Current Status
-
-The ROM now correctly sees TREQ=0 (active) during CUDA attention phase. However, the ROM doesn't respond by asserting TIP low to acknowledge.
-
-Analysis shows the ROM is performing I2C communication first (toggling bits 4-5 in Port B writes with values 0xd9/0xe9/0xf9) and appears to be stuck in an I2C loop before reaching CUDA initialization code.
-
-## Port B Bit Assignments (Mac LC)
+## Port B Bit Assignments (Mac LC V8)
 
 - Bit 0: 5V Sense (input)
-- Bit 1: TREQ - Transfer Request from CUDA (input, active LOW)
-- Bit 2: BYTEACK - Byte Acknowledge (bidirectional)
-- Bit 3: TIP - Transaction In Progress from CPU (output, active LOW)
-- Bit 4: VIA_CLK / I2C related
-- Bit 5: VIA_DATA / I2C related
+- Bit 1: Unused
+- Bit 2: Unused
+- Bit 3: TREQ/XCVR_SESSION - Transfer Request from CUDA (input to VIA, active LOW)
+- Bit 4: BYTEACK/VIA_FULL - Byte Acknowledge (output to CUDA)
+- Bit 5: TIP/SYS_SESSION - Transaction In Progress (output to CUDA, active LOW)
 - Bit 6: I2C SDA
 - Bit 7: I2C SCL
-
-## Next Steps
-
-1. Investigate I2C interface - ROM may be waiting for I2C response before proceeding to CUDA
-2. Check if additional hardware initialization is required
-3. Verify CUDA protocol matches Mac LC specific requirements (vs other Mac models)
 
 ## Files Modified
 
 - `rtl/cuda_maclc.sv` - Major state machine updates, timing fixes, polarity corrections
-- `rtl/via6522.sv` - Added debugging, fixed PRB initialization to 0xFF
-- `rtl/dataController_top.sv` - Added debugging, fixed TREQ open-drain behavior
+- `rtl/via6522.sv` - CB2 sampling fix, PRB initialization to 0xFF
+- `rtl/dataController_top.sv` - Debug output, TREQ open-drain behavior
+
+## Serial Transfer Timing Diagram
+
+```
+CB1:    ____/‾‾‾‾\____/‾‾‾‾\____/‾‾‾‾\____/‾‾‾‾\____  (8 cycles)
+CB2:    [b7][b6 ][b5 ][b4 ][b3 ][b2 ][b1 ][b0 ]      (MSB first)
+            ^     ^     ^     ^     ^     ^     ^     ^
+            R0    R1    R2    R3    R4    R5    R6    R7  (VIA samples on rising)
+```
+
+- CB2 is set to bit 7 before first rising edge
+- CB2 is updated on falling edges for bits 6-0
+- VIA samples CB2 on rising edges
+- After 8th rising edge, CUDA stops clocking

@@ -262,31 +262,26 @@ assign cpuDataOut = selectIWM ? iwmDataOut :
 	assign SEL = ~via_pa_oe[5] | via_pa_o[5];
 	assign vid_alt = ~via_pa_oe[6] | via_pa_o[6];
 
-	// Port B - Mac LC CUDA interface
-	// The VIA Port B is bidirectional. The "pin level" that the VIA reads is:
-	// - For output pins (via_pb_oe=1): what the VIA is driving (via_pb_o)
-	// - For input pins (via_pb_oe=0): external signals from CUDA
-	// CUDA provides:
-	// - Bit 1: TREQ (Transfer Request, active LOW - 0 means CUDA has data)
-	// - Bit 2: BYTEACK (Byte Acknowledge)
-	// VIA outputs to CUDA:
-	// - Bit 3: TIP (Transaction In Progress)
-	// - Bits 4-5: unused (tied high)
-	// - Bits 6-7: tied high
-	// - Bits 0-2: unused for Mac LC (no standalone RTC)
+	// Port B - Mac LC Egret/CUDA interface (V8 protocol)
+	// From MAME v8.cpp and maclc.cpp:
+	// - PB3: XCVR_SESSION/TREQ from Egret/CUDA (input to VIA - 0 means CUDA has data)
+	// - PB4: VIA_FULL/BYTEACK to Egret/CUDA (output from VIA)
+	// - PB5: SYS_SESSION/TIP to Egret/CUDA (output from VIA)
+	// - PB0: +5V sense (always 1)
+	// - PB1-2, PB6-7: tied high
 	//
-	// TREQ polarity: cuda_treq=1 means CUDA is ready (TREQ pin should be LOW)
+	// TREQ polarity: cuda_treq=1 means CUDA is asserting TREQ (pin LOW = has data)
 	// So we invert cuda_treq when building the external value
-	wire [7:0] via_pb_external = {4'b1111, 1'b1, cuda_byteack, ~cuda_treq, 1'b1};
+	wire [7:0] via_pb_external = {2'b11, 2'b11, ~cuda_treq, 3'b111};
 	// Combine VIA outputs with CUDA inputs
 	// Standard MUX for most bits: VIA output when OE, external when input
 	wire [7:0] pb_pin_level_mux = (via_pb_oe & via_pb_o) | (~via_pb_oe & via_pb_external);
-	// TREQ (bit 1) is open-drain: CUDA can always pull it low
+	// TREQ (bit 3) is open-drain: CUDA can always pull it low
 	// Only high if VIA is not pulling low AND CUDA is not pulling low
-	wire pb1_via_pulling_low = via_pb_oe[1] & ~via_pb_o[1];
-	wire pb1_cuda_pulling_low = cuda_treq;  // cuda_treq=1 means CUDA pulling TREQ low
-	wire pb1_open_drain = ~(pb1_via_pulling_low | pb1_cuda_pulling_low);
-	wire [7:0] pb_pin_level = {pb_pin_level_mux[7:2], pb1_open_drain, pb_pin_level_mux[0]};
+	wire pb3_via_pulling_low = via_pb_oe[3] & ~via_pb_o[3];
+	wire pb3_cuda_pulling_low = cuda_treq;  // cuda_treq=1 means CUDA pulling TREQ low
+	wire pb3_open_drain = ~(pb3_via_pulling_low | pb3_cuda_pulling_low);
+	wire [7:0] pb_pin_level = {pb_pin_level_mux[7:4], pb3_open_drain, pb_pin_level_mux[2:0]};
 	// CUDA can override specific bits via cuda_pb_oe
 	assign via_pb_i = (pb_pin_level & ~cuda_pb_oe) | (cuda_pb_o & cuda_pb_oe);
 	assign snd_ena = ~via_pb_oe[7] | via_pb_o[7];
@@ -342,17 +337,39 @@ assign cpuDataOut = selectIWM ? iwmDataOut :
 	// CB1 from CUDA (CUDA always drives CB1 for shift register clocking)
 	wire via_cb1_in = cuda_cb1;
 
+	// Debug: track CB2 signal for VIA shift register
+`ifdef SIMULATION
+	reg cuda_cb1_prev;
+	always @(posedge clk32) begin
+		cuda_cb1_prev <= cuda_cb1;
+		// Print when CB1 rises (when VIA will shift)
+		if (cuda_cb1 && !cuda_cb1_prev) begin
+			$display("DC: CB1 RISE - cuda_cb2_oe=%b, cuda_cb2=%b, final_cb2_i=%b",
+			         cuda_cb2_oe, cuda_cb2, (cuda_cb2_oe ? cuda_cb2 : 1'b1));
+		end
+	end
+`endif
+
 	// Debug: Monitor Port B and CUDA signals
 	/* verilator lint_off STMTDLY */
 `ifdef SIMULATION
-	reg [7:0] via_pb_oe_prev;
-	reg cuda_treq_prev;
+	reg [7:0] via_pb_oe_prev = 8'h00;
+	reg cuda_treq_prev = 1'b0;
+	reg [7:0] treq_log_counter = 8'd0;
 	always @(posedge clk32) begin
+		// Log cuda_treq periodically during startup
+		if (treq_log_counter < 8'd50 && clk8_en_p) begin
+			treq_log_counter <= treq_log_counter + 1'd1;
+			$display("CUDA DEBUG: treq=%b, treq_prev=%b, pb3_open_drain=%b, via_pb_i=0x%02x",
+				cuda_treq, cuda_treq_prev, pb3_open_drain, via_pb_i);
+		end
 		// Log when DDRB (via_pb_oe) changes
 		if (via_pb_oe !== via_pb_oe_prev) begin
-			$display("VIA: DDRB changed: 0x%02x -> 0x%02x (bit1=%b = %s)",
-				via_pb_oe_prev, via_pb_oe, via_pb_oe[1],
-				via_pb_oe[1] ? "OUTPUT" : "INPUT");
+			$display("VIA: DDRB changed: 0x%02x -> 0x%02x (PB3=%b=%s, PB4=%b=%s, PB5=%b=%s)",
+				via_pb_oe_prev, via_pb_oe,
+				via_pb_oe[3], via_pb_oe[3] ? "OUT" : "IN",
+				via_pb_oe[4], via_pb_oe[4] ? "OUT" : "IN",
+				via_pb_oe[5], via_pb_oe[5] ? "OUT" : "IN");
 			via_pb_oe_prev <= via_pb_oe;
 		end
 		// Log when CUDA TREQ changes
@@ -361,11 +378,7 @@ assign cpuDataOut = selectIWM ? iwmDataOut :
 				cuda_treq_prev, cuda_treq, via_pb_external, via_pb_i);
 			cuda_treq_prev <= cuda_treq;
 		end
-		// Log Port B reads (register 0)
-		if (selectVIA && !_cpuVMA && _cpuRW && cpuAddrRegHi == 4'h0 && E_falling) begin
-			$display("VIA: PortB READ - DDRB=0x%02x, PB_ext=0x%02x, PB_i=0x%02x, TREQ_bit=%b",
-				via_pb_oe, via_pb_external, via_pb_i, via_pb_i[1]);
-		end
+		// PortB READ logging disabled - too verbose during polling
 	end
 `endif
 	/* verilator lint_on STMTDLY */
@@ -411,7 +424,10 @@ assign cpuDataOut = selectIWM ? iwmDataOut :
 	);
 
 	// CUDA controller for Mac LC - handles PRAM, RTC, and ADB
-	// Mac LC uses CUDA (not standalone RTC) for PRAM and time keeping
+	// Mac LC uses Egret protocol with V8 chip:
+	// - PB3: TREQ from CUDA (input to VIA)
+	// - PB4: BYTEACK from VIA (output to CUDA)
+	// - PB5: TIP from VIA (output to CUDA)
 	cuda_maclc cuda(
 		.clk            (clk32),
 		.clk8_en        (clk8_en_p),
@@ -420,11 +436,11 @@ assign cpuDataOut = selectIWM ? iwmDataOut :
 		// RTC timestamp initialization
 		.timestamp      (timestamp),
 
-		// VIA Port B connections
-		.via_tip        (via_pb_o[3]),     // TIP from VIA (PB3)
-		.via_byteack_in (1'b0),            // Not used
-		.cuda_treq      (cuda_treq),       // TREQ to VIA (PB1)
-		.cuda_byteack   (cuda_byteack),    // BYTEACK to VIA (PB2)
+		// VIA Port B connections (Mac LC V8 protocol)
+		.via_tip        (via_pb_o[5]),     // TIP from VIA (PB5 = SYS_SESSION)
+		.via_byteack_in (via_pb_o[4]),     // BYTEACK from VIA (PB4 = VIA_FULL)
+		.cuda_treq      (cuda_treq),       // TREQ to VIA (PB3 = XCVR_SESSION)
+		.cuda_byteack   (cuda_byteack),    // Not used in V8 protocol
 
 		// VIA Shift Register interface
 		.cuda_cb1       (cuda_cb1),        // Shift clock
@@ -435,6 +451,7 @@ assign cpuDataOut = selectIWM ? iwmDataOut :
 		// VIA SR control signals
 		.via_sr_read    (via_sr_read),
 		.via_sr_write   (via_sr_write),
+		.via_sr_ext_clk (via_sr_ext_clk),
 		.cuda_sr_irq    (cuda_sr_irq),
 
 		// Full Port B

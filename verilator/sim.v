@@ -411,8 +411,8 @@ module emu
 
 	// Video Mode Selection - from PVIA video_config register (bits 2:0 = bpp mode)
 	wire [7:0] pvia_video_config;
-	// FORCE 4bpp mode for testing (ROM sets 1bpp which doesn't work with its palette init)
-	wire [2:0] v8_video_mode = 3'd2; // Force 4bpp mode (normally: pvia_video_config[2:0])
+	// Use actual video mode from pseudovia (ROM configures this via register 0x10)
+	wire [2:0] v8_video_mode = pvia_video_config[2:0];
 
 	// Monitor ID Selection - 13" RGB
 	wire [3:0] v8_monitor_id = 4'h6;
