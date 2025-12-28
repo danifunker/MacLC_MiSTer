@@ -146,16 +146,14 @@ wire [8:0]  ram_addr = cpu_addr[8:0] - 9'h50;
 // Bit 2 (I): Keyboard power switch
 // Bit 1-0: PSU control
 
-wire [7:0] pa_in = {
-    pa_out[7],        // Bit 7: readback
-    adb_data_in,      // Bit 6: ADB data in
-    1'b1,             // Bit 5: system type = Egret controls power
-    pa_out[4],        // Bit 4: DFAC latch readback
-    pa_out[3],        // Bit 3: reset readback
-    1'b1,             // Bit 2: keyboard power (not pressed)
-    1'b1,             // Bit 1: PSU
-    1'b1              // Bit 0: control panel
-};
+// Port A input - match MAME's pa_r() behavior
+// For the firmware's port test to pass, all bits must read back from the latch
+// when used as inputs (DDR=0). The test writes a value and reads it back,
+// expecting the same value regardless of DDR setting.
+// IMPORTANT: Even bit 6 (ADB data in) must read from latch during port test.
+// TODO: Later we can add proper ADB handling where bit 6 reflects actual ADB state
+// after initialization is complete.
+wire [7:0] pa_in = pa_latch;  // All bits read back from latch for port test compatibility
 
 always @(*) begin
     adb_data_out = pa_out[7];
@@ -438,7 +436,15 @@ always @(posedge clk) begin
                               cycle_count, cpu_addr, cpu_dout);
                 4'h6: $display("EGRET[%0d] PC=%04x: Port C DDR write = 0x%02x",
                               cycle_count, cpu_addr, cpu_dout);
+                default: $display("EGRET[%0d] PC=%04x: Port write addr=%x data=%02x",
+                              cycle_count, cpu_addr, cpu_addr[3:0], cpu_dout);
             endcase
+        end
+
+        // Log ALL port accesses (read or write) to addresses 0x01 and 0x05
+        if (port_cs && (cpu_addr[3:0] == 4'h1 || cpu_addr[3:0] == 4'h5)) begin
+            $display("EGRET[%0d]: Port B access addr=%04x wr=%b din=%02x dout=%02x",
+                     cycle_count, cpu_addr, cpu_wr, cpu_din, cpu_dout);
         end
 
         // Log Port B output changes
@@ -480,8 +486,8 @@ always @(posedge clk) begin
                      cycle_count, cpu_din_r, pa_out, pa_in, pa_ddr);
         end
 
-        // Log first 50 CPU cycles
-        if (cycle_count < 50) begin
+        // Log first 500 CPU cycles
+        if (cycle_count < 500) begin
             $display("EGRET_CPU[%0d]: addr=%04x din=%02x dout=%02x wr=%b rom=%b ram=%b port=%b state=%x",
                      cycle_count, cpu_addr, cpu_din, cpu_dout, cpu_wr,
                      rom_cs, ram_cs, port_cs, cpu_state);

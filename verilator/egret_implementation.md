@@ -2,7 +2,7 @@
 
 ## Overview
 
-Mac LC uses **Egret** (not CUDA) as its ADB/PRAM/RTC microcontroller. This document tracks the implementation of the real Egret using the jt6805 68HC05 CPU core and the actual Egret ROM (341s0850).
+Mac LC uses **Egret** (not CUDA) as its ADB/PRAM/RTC microcontroller. This document tracks the implementation of the real Egret using the m68hc05_core CPU (from OpenCores) and the actual Egret ROM (341S0851).
 
 ## Implementation Status
 
@@ -10,27 +10,69 @@ Mac LC uses **Egret** (not CUDA) as its ADB/PRAM/RTC microcontroller. This docum
 
 | Component | File | Status |
 |-----------|------|--------|
-| Egret ROM extraction | `rtl/egret_rom.bin`, `rtl/egret_rom.hex` | Done |
-| jt6805 CPU core | `rtl/jt6805/*.v` | Copied from Apple II MiSTer |
-| Egret module | `rtl/egret.sv` | Created, same interface as cuda_maclc.sv |
-| Build integration | `verilator/Makefile` | Added jt6805 files + USE_EGRET_CPU define |
+| Egret ROM extraction | `rtl/egret/341s0851.bin`, `rtl/egret/egret_rom.hex` | Done |
+| m68hc05_core CPU | `rtl/egret/m68hc05_core.sv` | Converted from OpenCores VHDL |
+| Egret wrapper | `rtl/egret/egret_wrapper.sv` | Created, same interface as cuda_maclc.sv |
+| Build integration | `verilator/Makefile` | Added m68hc05_core + USE_EGRET_CPU define |
 | Switching mechanism | `rtl/dataController_top.sv` | `ifdef USE_EGRET_CPU` added |
 | Verilator build | - | Builds successfully |
+| Port A readback | `rtl/egret/egret_wrapper.sv` | Fixed - returns latch for port test |
 
-### Current Behavior
+### Current Issue: Port B DDR Never Written
 
-- CPU is executing from ROM (debug shows reads from ROM addresses)
-- Reset vector at 0x1FFE correctly points to 0x0F71 (startup code)
-- System boots but VIA/Egret communication may have issues
+The Egret firmware never writes to Port B DDR (`PB_ddr` stays 0x00), which means:
+- CB1 cannot be driven as output (VIA clock)
+- CB2 cannot be driven as output (VIA data)
+- VIA shift register communication fails
+
+**Root Cause Analysis:**
+
+The firmware's startup loop at 0x0F71-0x0F7E has a problem:
+```
+0F71: LDA #$F0       ; DDR value for port test
+0F73: BSR $0F3E      ; Port test subroutine
+0F75: LDA #$0F       ; Second DDR value
+0F77: BSR $0F3E      ; Port test again
+0F79: DECX           ; Decrement loop counter
+0F7A: STX $96        ; Store counter
+0F7C: CPX #$00       ; Compare with 0
+0F7E: BPL $0F71      ; Loop if N=0 (X >= 0 signed)
+0F80: CLRA           ; Fall through if X went negative
+0F81: SWI            ; Software interrupt (restarts at 0x0F71)
+```
+
+**The Problem:** X register is never initialized before this loop!
+- Both MAME and our CPU initialize X=0 on reset
+- After first loop iteration: DECX makes X=0xFF
+- CPX #0 with X=0xFF sets N=1 (0xFF is negative in signed)
+- BPL doesn't branch, falls through to SWI
+- SWI vector is also 0x0F71, so it loops forever
+
+The port initialization code at 0x123E (which writes Port B DDR) is never reached.
+
+**Comparison with MAME:**
+- MAME's m6805.cpp line 435: `m_x = 0` on reset (same as us!)
+- MAME's m68hc05e1.cpp also uses this base class
+- Both ROMs (341s0850 and 341s0851) have identical code at 0x0F71
 
 ## Memory Map (68HC05)
 
 | Address Range | Size | Description |
 |---------------|------|-------------|
 | 0x0000-0x000F | 16B | I/O Registers (Ports A, B, C, DDR, Timer) |
-| 0x0010-0x010F | 256B | Internal RAM |
-| 0x0F00-0x1FFF | 4352B | ROM (Egret firmware 341s0850) |
+| 0x0050-0x01FF | 432B | Internal RAM |
+| 0x0F00-0x1FFF | 4KB | ROM (Egret firmware 341S0851, wraps every 4KB) |
 | 0x1FF8-0x1FFF | 8B | Interrupt vectors |
+
+### Interrupt Vectors (from ROM)
+| Address | Vector | Handler |
+|---------|--------|---------|
+| 0xFFF8 | IRQ | 0x1E10 |
+| 0xFFFA | Timer | 0x1E7F |
+| 0xFFFC | SWI | 0x0F71 |
+| 0xFFFE | Reset | 0x0F71 |
+
+Note: SWI and Reset both point to 0x0F71!
 
 ## Port Mapping (from MAME egret.cpp)
 
@@ -63,169 +105,89 @@ Mac LC uses **Egret** (not CUDA) as its ADB/PRAM/RTC microcontroller. This docum
 | 3 | O | 680x0 reset |
 | 2-0 | O | IPL2-0 |
 
-## MAME Trace Analysis (egret.txt)
+## Firmware Analysis
 
-### Startup Sequence (first ~5000 instructions)
-1. **0x0F71**: RSP (Reset Stack Pointer)
-2. **0x0F72-0x0F81**: Initialize I/O ports from table at 0x0F6A
-3. **0x0F83-0x0F97**: Clear RAM ($90-$D6, $0100-$01FF)
-4. **0x0F99-0x0FAF**: Set up internal variables
-5. **0x0FB0**: CLI (enable interrupts)
-6. **0x0FB1-0x0FC8**: Configure ports, timers
-7. **0x0FFE+**: Initialize VIA communication
-
-### Key Port Initialization (from trace lines 154-161)
+### Reset Entry (0x0F71)
+The reset vector points to 0x0F71, which starts with:
 ```
-123E: lda   #$F7
-1240: sta   $02        ; Port C DDR = 0xF7
-1242: lda   #$92
-1244: sta   $01        ; Port B = 0x92 (1001_0010)
-                       ;   bit 7 = 1: DFAC clock high
-                       ;   bit 4 = 1: CB1 high
-                       ;   bit 1 = 1: TREQ inactive (active low)
-1246: clr   $00        ; Port A = 0x00
-1248: bclr  3, $00     ; Clear Port A bit 3 (reset pulse off)
-124A: bclr  3, $02     ; Clear Port C bit 3
-124C: bset  3, $06     ; Set Port C DDR bit 3
+0F71: A6 F0    LDA #$F0      ; NOT RSP as old docs claimed!
+0F73: AD C9    BSR $0F3E     ; Call port test
 ```
 
-### VIA Handshake Sequence (from trace)
-1. Egret sets TREQ low (`bclr 1, $01`) to request transfer
-2. Egret waits for TIP low from VIA (`brclr 3, $01`)
-3. Egret clocks CB1 and reads/writes CB2 for each bit
-4. After 8 bits, Egret sets TREQ high (`bset 1, $01`)
-5. Wait for VIA to release TIP
+**Note:** Previous documentation incorrectly stated RSP at 0x0F71. Both ROM versions have LDA #$F0.
 
-### First VIA Transaction (trace lines 4797-4829)
-```
-1640: jsr   $1549
-1549: bclr  1, $01      ; Assert TREQ (active low)
-154B: ldx   #$04
-154D: jsr   $1DD1       ; Short delay
-      ... (delay loop)
-1550: bclr  4, $01      ; CB1 low  (clock pulse 1)
-1552: bset  4, $01      ; CB1 high
-1554: bclr  4, $01      ; CB1 low  (clock pulse 2)
-1556: bset  4, $01      ; CB1 high
-      ... (8 clock pulses total)
-156E: bset  4, $01      ; CB1 high (last pulse)
-1570: jsr   $1149       ; Check status
-```
-This is Egret's initial "attention" sequence - it asserts TREQ and sends
-8 clock pulses to signal the VIA that it wants to communicate.
+### Port Test Subroutine (0x0F3E)
+Uses X register as port base address:
+- X=0: Tests Port A
+- X=1: Tests Port B
+- X=2: Tests Port C
 
-### VIA Communication Pattern (from trace)
-The Egret clocks CB1 and reads CB2 to receive bytes from VIA:
+The subroutine writes a test pattern to the port and reads it back to verify I/O.
+
+### Port Initialization (0x123E) - Never Reached!
+This code should initialize Port B DDR but is never executed:
 ```
-14EF: bclr  4, $01    ; CB1 low (clock low)
-14F1: bset  4, $01    ; CB1 high (clock high)
-14F3: brset 5, $01, $14F6  ; Read CB2 (data bit)
-... (repeat 8 times for each bit)
+123E: LDA #$F7
+1240: STA $02        ; Port C DDR = 0xF7
+1242: LDA #$92
+1244: STA $01        ; Port B = 0x92
 ```
 
-### Key Port B Test Points
-- `brset/brclr 0, $01` - Test +5V sense
-- `brset/brclr 3, $01` - Test TIP from VIA
-- `brset/brclr 6, $01` - Test DFAC data
-- `bclr/bset 4, $01` - Toggle CB1 (clock)
-- `brset 5, $01` - Read CB2 (data)
+### Main Loop (0x1ACE)
+The Egret does reach its main loop but without proper port initialization:
+```
+1ACE: JSR $1E4E      ; RTC update routine
+1AD1: BRCLR 4,$A2,.. ; Check flags
+...                  ; Loop waiting for VIA events
+```
 
-## Debug Plan
+## Current Simulation Behavior
 
-### Phase 1: Verify CPU Execution
-1. **Add wider debug logging in egret.sv**
-   - Log all addresses, not just 0x0F00-0x0F10
-   - Log Port B changes
-   - Compare with MAME trace
-
-2. **Check reset vector reading**
-   - Verify CPU reads from 0x1FFE-0x1FFF
-   - Verify it jumps to 0x0F71
-
-### Phase 2: Verify Port I/O
-1. **Compare port initialization**
-   - MAME shows: `sta $07` (Port B DDR = 0x92)
-   - MAME shows: `sta $01` (Port B = 0x92)
-   - Check if our egret.sv outputs match
-
-2. **Verify Port B inputs**
-   - TIP (bit 3) should reflect VIA PB5
-   - VIA_FULL (bit 2) should be high
-   - +5V sense (bit 0) should be high
-
-### Phase 3: VIA Communication
-1. **TREQ signal**
-   - Egret asserts TREQ (bit 1 low) to request transfer
-   - VIA should see this on PB3
-
-2. **CB1/CB2 clocking**
-   - Egret drives CB1 (bit 4) for external clock mode
-   - Egret reads/writes CB2 (bit 5) for data
-
-3. **Timing**
-   - Check clock divider (should be ~4MHz from 8MHz)
-   - Compare instruction timing with MAME
-
-### Phase 4: Integration Test
-1. Boot simulation for 360+ frames
-2. Check if Egret completes initialization
-3. Verify VIA interrupt handling
-4. Test PRAM read/write
+1. Port A tests pass (all 4 iterations)
+2. X wraps from 0 to 0xFF after first loop
+3. Falls through to SWI, restarts at 0x0F71
+4. Eventually enters main loop at 0x1ACE (unclear how)
+5. Port B DDR remains 0x00 - CB1/CB2 cannot be driven
+6. 68020 is released via auto-timer at cycle ~8192
+7. VIA TIP toggles but no actual data transfer
 
 ## Key Differences: Our Implementation vs MAME
 
 | Aspect | Our Implementation | MAME |
 |--------|-------------------|------|
-| CPU | jt6805 (jtcores) | Custom 68HC05 emulator |
-| Clock | 4MHz (8MHz/2) | 4.194MHz (32.768kHz * 128) |
-| Port B mapping | Need to verify | Confirmed working |
-| Interrupts | Timer only | Timer + external |
+| CPU | m68hc05_core (OpenCores) | M68HC05E1 device |
+| Clock | 8MHz (cen=1 always) | 4.194MHz (32.768kHz * 128) |
+| Port A read | Returns latch (for test) | Returns (latch & DDR) | (input & ~DDR) |
+| Port B DDR | Never written (0x00) | Should be 0x92 |
+| X on reset | 0x00 | 0x00 (same!) |
 
-## Files Modified
+## Files
 
 ```
-rtl/
-├── egret.sv           # New Egret implementation
-├── egret_rom.bin      # Extracted ROM binary
-├── egret_rom.hex      # ROM in hex format for $readmemh
-├── dataController_top.sv  # Added ifdef switching
-└── jt6805/            # CPU core files
-    ├── jt6805.v
-    ├── jt6805_alu.v
-    ├── jt6805_ctrl.v
-    ├── jt6805_regs.v
-    ├── 6805.vh
-    ├── 6805_param.vh
-    └── 6805.uc
+rtl/egret/
+├── egret_wrapper.sv    # Main wrapper with port handling
+├── m68hc05_core.sv     # CPU core (from OpenCores)
+├── 341s0850.bin        # Egret ROM v1.01 (earlier)
+├── 341s0851.bin        # Egret ROM v1.01 (later) - ACTIVE
+├── 344s0100.bin        # Egret ROM v1.00
+├── egret_rom.hex       # Converted from 341s0851.bin
+└── convert_firmware.py # ROM conversion script
 
 verilator/
-└── Makefile           # Added jt6805 and USE_EGRET_CPU
-```
-
-## Switching Between Implementations
-
-**Use real Egret CPU (default for simulation):**
-```makefile
-V_DEFINE = ... +define+USE_EGRET_CPU=1 ...
-```
-
-**Use state machine (cuda_maclc.sv):**
-```makefile
-V_DEFINE = ... # Remove +define+USE_EGRET_CPU=1
+└── Makefile            # USE_EGRET_CPU define
 ```
 
 ## Next Steps
 
-1. Add comprehensive debug logging to egret.sv
-2. Run simulation and compare Port B behavior with MAME trace
-3. Fix any Port B input/output mismatches
-4. Verify TREQ/TIP handshaking with VIA
-5. Test CB1/CB2 shift register clocking
-6. Debug any VIA interrupt issues
+1. **Investigate firmware entry path** - How does MAME's Egret reach 0x123E?
+2. **Check if port model difference matters** - MAME combines latch+input, we return latch only
+3. **Compare with MAME runtime trace** - Run MAME with debug logging
+4. **Consider patching reset vector** - Point to 0x0F6D where X is initialized to 2
+5. **Alternative: Initialize X in CPU** - Change m68hc05_core to set X=2 on reset
 
 ## References
 
-- MAME source: `src/mame/apple/egret.cpp`
-- Egret ROM: 341s0850 (4352 bytes)
-- jt6805 source: jtcores/modules/jt680x
+- MAME source: `mame/src/mame/apple/egret.cpp`
+- MAME CPU: `mame/src/devices/cpu/m6805/m68hc05e1.cpp`
+- Egret ROM: 341S0851 (4352 bytes with 256-byte header)
 - 68HC05 datasheet for instruction timing
