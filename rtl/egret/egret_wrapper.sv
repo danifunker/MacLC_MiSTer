@@ -385,6 +385,14 @@ always @(posedge clk) begin
         intram[16'hAC - 16'h50] = timestamp[23:16];  // Seconds bits 23-16
         intram[16'hAD - 16'h50] = timestamp[15:8];   // Seconds bits 15-8
         intram[16'hAE - 16'h50] = timestamp[7:0];    // Seconds bits 7-0
+        // DEBUG: Show what was loaded
+        $display("EGRET_PRAM: RAM[$94] = 0x%02x (should have bit 3 set, i.e., >= 0x08)", 
+                 intram[16'h94 - 16'h50]);
+        $display("EGRET_PRAM: RAM[$AB-$AE] RTC = %02x %02x %02x %02x (timestamp input = %d)", 
+                 intram[16'hAB - 16'h50], intram[16'hAC - 16'h50],
+                 intram[16'hAD - 16'h50], intram[16'hAE - 16'h50],
+                 timestamp);
+        $display("EGRET_PRAM: PRAM source byte[0x24] = 0x%02x", pram[8'h24]);
     end
 end
 
@@ -419,6 +427,10 @@ end
 always @(*) begin
     if (ram_cs) begin
         ram_dout = intram[ram_addr];
+        if (ram_addr == 9'h44 && cpu_wr) begin  // $94 - $50 = $44, cpu_wr=1 means READ
+            $display("EGRET_RAM[%0d]: READ RAM[$94] = 0x%02x, PC=%04x", 
+                     cycle_count, intram[ram_addr], cpu_addr);
+        end
     end else begin
         ram_dout = 8'h00;
     end
@@ -504,8 +516,10 @@ always @(posedge clk) begin
         if (timer_counter == 16'd2000) begin
             timer_irq <= 1'b0;  // Assert IRQ (active-low)
             timer_counter <= 16'd0;
+            $display("TIMER[%0d]: IRQ asserted (timer_irq=0)", cycle_count);  // ADD THIS
         end else if (timer_counter == 16'd10) begin
             timer_irq <= 1'b1;  // Deassert after 10 cycles
+            $display("TIMER[%0d]: IRQ deasserted (timer_irq=1)", cycle_count);  // ADD THIS
         end
     end
 end

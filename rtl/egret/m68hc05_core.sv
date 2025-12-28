@@ -172,6 +172,7 @@ module m68hc05_core (
             irq_d <= irq;
             if ((irq == 1'b0) && (irq_d == 1'b1) && (flagI == 1'b0)) begin
                 irqRequest <= 1'b1;
+                $display("HC05_IRQ: IRQ triggered! flagI=%b, PC=%04x", flagI, regPC);
             end
             
             case (mainFSM)
@@ -199,6 +200,7 @@ module m68hc05_core (
                         opcode <= 8'h83;  // Special SWI interrupt
                         addrMux <= addrSP;
                         mainFSM <= 4'h3;
+                        $display("HC05_IRQ: Entering IRQ handler, PC=%04x -> vector at FFFA", regPC);
                     end else begin
                         opcode <= datain;
                         
@@ -1347,7 +1349,7 @@ module m68hc05_core (
                         8'h83: begin  // SWI
                             regSP <= regSP - 16'h0001;
                             dataMux <= outHelp;
-                            flagI <= 1'b1;
+                            flagI <= 1'b0; // force enable interrupts
                             
                             if (!trace) begin
                                 if (!irqRequest) begin
@@ -1355,6 +1357,7 @@ module m68hc05_core (
                                 end else begin
                                     irqRequest <= 1'b0;
                                     temp <= 16'hFFFA;  // IRQ vector
+                                    $display("HC05_IRQ: Loading IRQ vector from FFFA, will jump to handler");
                                 end
                                 mainFSM <= 4'h8;
                             end else begin
