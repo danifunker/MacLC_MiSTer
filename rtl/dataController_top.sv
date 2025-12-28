@@ -423,11 +423,56 @@ assign cpuDataOut = selectIWM ? iwmDataOut :
 		.sr_ext_clk    (via_sr_ext_clk)
 	);
 
-	// CUDA controller for Mac LC - handles PRAM, RTC, and ADB
-	// Mac LC uses Egret protocol with V8 chip:
-	// - PB3: TREQ from CUDA (input to VIA)
-	// - PB4: BYTEACK from VIA (output to CUDA)
-	// - PB5: TIP from VIA (output to CUDA)
+	// Egret/CUDA controller for Mac LC - handles PRAM, RTC, and ADB
+	// Mac LC uses Egret (not CUDA) with V8 chip:
+	// - PB3: TREQ from Egret (input to VIA)
+	// - PB4: BYTEACK from VIA (output to Egret)
+	// - PB5: TIP from VIA (output to Egret)
+	//
+	// Define USE_EGRET_CPU to use real 68HC05 CPU + Egret ROM (341s0850)
+	// Otherwise uses state machine implementation (cuda_maclc.sv)
+
+`ifdef USE_EGRET_CPU
+	egret egret_inst(
+		.clk            (clk32),
+		.clk8_en        (clk8_en_p),
+		.reset          (!_cpuReset),
+
+		// RTC timestamp initialization
+		.timestamp      (timestamp),
+
+		// VIA Port B connections (Mac LC V8 protocol)
+		.via_tip        (via_pb_o[5]),     // TIP from VIA (PB5 = SYS_SESSION)
+		.via_byteack_in (via_pb_o[4]),     // BYTEACK from VIA (PB4 = VIA_FULL)
+		.cuda_treq      (cuda_treq),       // TREQ to VIA (PB3 = XCVR_SESSION)
+		.cuda_byteack   (cuda_byteack),    // Not used in Egret
+
+		// VIA Shift Register interface
+		.cuda_cb1       (cuda_cb1),        // Shift clock
+		.via_cb2_in     (cb2_o),           // Data from VIA
+		.cuda_cb2       (cuda_cb2),        // Data to VIA
+		.cuda_cb2_oe    (cuda_cb2_oe),     // CB2 output enable
+
+		// VIA SR control signals
+		.via_sr_read    (via_sr_read),
+		.via_sr_write   (via_sr_write),
+		.via_sr_ext_clk (via_sr_ext_clk),
+		.via_sr_dir     (via_sr_dir),
+		.cuda_sr_irq    (cuda_sr_irq),
+
+		// Full Port B
+		.cuda_portb     (cuda_pb_o),
+		.cuda_portb_oe  (cuda_pb_oe),
+
+		// ADB (not implemented yet)
+		.adb_data_in    (1'b1),
+		.adb_data_out   (),
+
+		// System control
+		.reset_680x0    (),
+		.nmi_680x0      ()
+	);
+`else
 	cuda_maclc cuda(
 		.clk            (clk32),
 		.clk8_en        (clk8_en_p),
@@ -467,6 +512,7 @@ assign cpuDataOut = selectIWM ? iwmDataOut :
 		.reset_680x0    (),
 		.nmi_680x0      ()
 	);
+`endif
 
 	wire _ADBint;
 	wire ADBST0 = ~via_pb_oe[4] | via_pb_o[4];

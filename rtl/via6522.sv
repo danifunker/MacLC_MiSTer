@@ -374,10 +374,15 @@ module via6522 (
                     
                 4'hE: begin // IER
                     if (data_in[7] == 1'b1) begin // set
-                        irq_mask <= irq_mask |
-                                    data_in[6:0];
+                        irq_mask <= irq_mask | data_in[6:0];
+`ifdef SIMULATION
+                        $display("VIA: IER SET = 0x%02x, mask now 0x%02x", data_in, irq_mask | data_in[6:0]);
+`endif
                     end else begin // clear
                         irq_mask <= irq_mask & ~data_in[6:0];
+`ifdef SIMULATION
+                        $display("VIA: IER CLEAR = 0x%02x, mask now 0x%02x", data_in, irq_mask & ~data_in[6:0]);
+`endif
                     end
                 end
                 

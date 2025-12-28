@@ -80,7 +80,12 @@ module cuda_maclc (
     localparam [7:0] CUDA_GET_AUTO_RATE = 8'h16;
     localparam [7:0] CUDA_SET_DEV_LIST  = 8'h19;
     localparam [7:0] CUDA_GET_DEV_LIST  = 8'h1A;
+    localparam [7:0] CUDA_SET_ONE_SEC   = 8'h1B;  // Set one-second interrupt mode
+    localparam [7:0] CUDA_SET_PWR_MSG   = 8'h21;  // Set power messages
     localparam [7:0] CUDA_GET_SET_IIC   = 8'h22;
+    localparam [7:0] CUDA_WAKEUP        = 8'h23;  // Enable/disable wakeup
+    localparam [7:0] CUDA_TIMER_TICKLE  = 8'h24;  // Timer tickle
+    localparam [7:0] CUDA_COMBINED_IIC  = 8'h25;  // Combined format IIC
 
     //==========================================================================
     // Port B Bit Definitions (Mac LC V8 protocol)
@@ -450,7 +455,10 @@ module cuda_maclc (
 
                     // Continue providing CB1 clocks if VIA is in external clock mode
                     // This clears any pending shift that was auto-triggered when ROM read SR
-                    if (via_sr_ext_clk && via_tip && bit_counter < 4'd9) begin
+                    // VIA trigger_serial (from SR read) sets bit_cnt=7, shift_active=1.
+                    // Then 8 CB1 edges complete the shift (7 decrements + 1 completion).
+                    // We must provide exactly 8 edges - more will trigger another shift!
+                    if (via_sr_ext_clk && via_tip && bit_counter < 4'd8) begin
                         shift_clk_div <= shift_clk_div + 1'd1;
                         if (shift_clk_div >= 8'd16) begin
                             shift_clk_div <= 8'h0;
@@ -458,7 +466,18 @@ module cuda_maclc (
                             if (!cb1_out)  // Rising edge
                                 bit_counter <= bit_counter + 1'd1;
                         end
+                    end else if (via_tip && bit_counter >= 4'd8) begin
+                        // Finished leftover clocking (bit_counter >= 8) - hold CB1 low
+                        // DON'T reset bit_counter to 0 here, or we'll start clocking again!
+                        // It will be reset when we enter a new transaction (RECV_BYTE or SEND_BYTE)
+                        cb1_out <= 1'b0;
+                        shift_clk_div <= 8'h0;
+                    end else if (!via_tip) begin
+                        // TIP asserted - new transaction starting
+                        // Don't reset bit_counter, let RECV_WAIT handle it
+                        cb1_out <= 1'b0;
                     end else begin
+                        // TIP de-asserted, not in cleanup mode - reset for next transaction
                         cb1_out <= 1'b0;
                         bit_counter <= 4'h0;
                         shift_clk_div <= 8'h0;
@@ -562,9 +581,19 @@ module cuda_maclc (
                             // Hold CB1 low to avoid spurious edges when next byte starts
                             cb1_out <= 1'b0;
                         end
-                    end else begin
-                        // No pending data - hold CB1 low to avoid spurious edges
+                    end
+                    // NOTE: Leftover clocking (for spurious shifts) is handled in ST_IDLE,
+                    // NOT here. RECV_WAIT should only clock when sr_write_seen is true,
+                    // meaning ROM has actually written a byte to send. Otherwise, we just
+                    // wait for the ROM to configure VIA properly for the new transaction.
+                    else begin
+                        // No pending data and no leftover shift - hold CB1 low
                         cb1_out <= 1'b0;
+`ifdef SIMULATION
+                        if (wait_counter[10:0] == 11'd0)
+                            $display("CUDA: RECV_WAIT no-clock: ext=%b dir=%b recv=%d bit=%d sr_ws=%b",
+                                     via_sr_ext_clk, via_sr_dir, recv_count, bit_counter, sr_write_seen);
+`endif
                     end
 
                     // Wait counter for detecting end of transaction
@@ -689,12 +718,98 @@ module cuda_maclc (
                                     send_length <= 4'd1;
                                 end
 
-                                default: begin
-                                    // Unknown command - just acknowledge
+                                CUDA_SEND_DFAC: begin
+                                    // Send data to Digital Filter Audio Chip (I2C)
+                                    // Just acknowledge - we don't have actual DFAC hardware
                                     send_buf[0] <= PKT_ERROR;
-                                    send_length <= 4'd1;
+                                    send_buf[1] <= 8'h00;  // OK status
+                                    send_length <= 4'd2;
+`ifdef SIMULATION
+                                    $display("CUDA: SEND_DFAC (I2C audio) - acknowledged");
+`endif
+                                end
+
+                                CUDA_GET_DEV_LIST: begin
+                                    // Return ADB device list (empty - no devices)
+                                    send_buf[0] <= PKT_ERROR;
+                                    send_buf[1] <= CUDA_GET_DEV_LIST;  // Echo command
+                                    send_buf[2] <= 8'h00;  // No devices (bitmap)
+                                    send_buf[3] <= 8'h00;
+                                    send_length <= 4'd4;
+`ifdef SIMULATION
+                                    $display("CUDA: GET_DEV_LIST - returning empty device list");
+`endif
+                                end
+
+                                CUDA_SET_DEV_LIST: begin
+                                    // Set ADB device list - acknowledge
+                                    send_buf[0] <= PKT_ERROR;
+                                    send_buf[1] <= 8'h00;
+                                    send_length <= 4'd2;
+`ifdef SIMULATION
+                                    $display("CUDA: SET_DEV_LIST - acknowledged");
+`endif
+                                end
+
+                                CUDA_SET_ONE_SEC: begin
+                                    // Set one-second interrupt mode
+                                    // Just acknowledge - we handle RTC internally
+                                    send_buf[0] <= PKT_ERROR;
+                                    send_buf[1] <= 8'h00;
+                                    send_length <= 4'd2;
+`ifdef SIMULATION
+                                    $display("CUDA: SET_ONE_SECOND_MODE = %d", recv_buf[2]);
+`endif
+                                end
+
+                                CUDA_SET_AUTO_RATE: begin
+                                    // Set autopoll rate
+                                    send_buf[0] <= PKT_ERROR;
+                                    send_buf[1] <= 8'h00;
+                                    send_length <= 4'd2;
+`ifdef SIMULATION
+                                    $display("CUDA: SET_AUTO_RATE = %d", recv_buf[2]);
+`endif
+                                end
+
+                                CUDA_GET_AUTO_RATE: begin
+                                    // Get autopoll rate
+                                    send_buf[0] <= PKT_ERROR;
+                                    send_buf[1] <= CUDA_GET_AUTO_RATE;
+                                    send_buf[2] <= 8'h0B;  // Default rate
+                                    send_length <= 4'd3;
+`ifdef SIMULATION
+                                    $display("CUDA: GET_AUTO_RATE - returning 0x0B");
+`endif
+                                end
+
+                                CUDA_SET_IPL: begin
+                                    // Set interrupt priority level
+                                    send_buf[0] <= PKT_ERROR;
+                                    send_buf[1] <= 8'h00;
+                                    send_length <= 4'd2;
+`ifdef SIMULATION
+                                    $display("CUDA: SET_IPL = %d", recv_buf[2]);
+`endif
+                                end
+
+                                CUDA_GET_SET_IIC: begin
+                                    // I2C read/write
+                                    send_buf[0] <= PKT_ERROR;
+                                    send_buf[1] <= 8'h00;
+                                    send_length <= 4'd2;
+`ifdef SIMULATION
+                                    $display("CUDA: GET_SET_IIC - acknowledged");
+`endif
+                                end
+
+                                default: begin
+                                    // Unknown command - just acknowledge with OK
+                                    send_buf[0] <= PKT_ERROR;
+                                    send_buf[1] <= 8'h00;  // Return OK to not block boot
+                                    send_length <= 4'd2;
                                     /* verilator lint_off STMTDLY */
-                                    $display("CUDA: Unknown CUDA cmd 0x%02x", recv_buf[1]);
+                                    $display("CUDA: Unknown CUDA cmd 0x%02x - returning OK", recv_buf[1]);
                                     /* verilator lint_on STMTDLY */
                                 end
                             endcase

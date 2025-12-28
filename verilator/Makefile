@@ -5,11 +5,12 @@ TOP = --top-module emu
 RTL = ../rtl
 V_INC = +incdir+$(RTL)
 
-V_DEFINE = +define+debug=1 +define+SIMULATION=1   -CFLAGS "-I../sim/imgui -I../sim/vinc -I../sim/ -g "  --timescale-override 1ps/1ps -Wno-TIMESCALEMOD \
-	-I../$(RTL) \
-	-I../$(RTL)/fx68k \
-	-I../$(RTL)/tg68k \
-	-I../$(RTL)/uart \
+V_DEFINE = +define+debug=1 +define+SIMULATION=1 +define+USE_EGRET_CPU=1  -CFLAGS "-I../sim/imgui -I../sim/vinc -I../sim/ -g "  --timescale-override 1ps/1ps -Wno-TIMESCALEMOD \
+	-I$(RTL) \
+	-I$(RTL)/fx68k \
+	-I$(RTL)/tg68k \
+	-I$(RTL)/uart \
+	-I$(RTL)/jt6805 \
         --timing
 # Suppress common warnings that don't affect simulation correctness
 V_DEFINE += -Wno-WIDTH -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-IMPLICIT -Wno-PINMISSING -Wno-UNUSEDSIGNAL -Wno-UNOPTFLAT -Wno-CASEINCOMPLETE -Wno-UNSIGNED -Wno-CMPCONST -Wno-LATCH -Wno-UNDRIVEN -Wno-MISINDENT -Wno-COMBDLY -Wno-INITIALDLY -Wno-SYNCASYNCNET
@@ -82,6 +83,11 @@ V_SRC = \
 	$(RTL)/ncr5380.sv \
 	$(RTL)/scc.v \
 	$(RTL)/cuda_maclc.sv \
+	$(RTL)/egret.sv \
+	$(RTL)/jt6805/jt6805.v \
+	$(RTL)/jt6805/jt6805_alu.v \
+	$(RTL)/jt6805/jt6805_ctrl.v \
+	$(RTL)/jt6805/jt6805_regs.v \
 	$(RTL)/uart/txuart.v \
 	$(RTL)/uart/rxuart.v
 
