@@ -162,9 +162,13 @@ end
 // Bit 1 (O): VIA XCEIVER SESSION = TREQ to VIA
 // Bit 0 (I): +5V sense
 
-// VIA_FULL: HIGH when VIA SR has data that Egret hasn't clocked out yet
-// LOW when VIA SR is idle or empty - allows Egret to proceed
-wire via_full = via_sr_active;
+// VIA_FULL: Directly from VIA Port B bit 4 output (via_byteack_in)
+// In MAME, this comes from VIA PB4 writes by the 68000, not SR hardware status
+// The 68000 sets PB4=0 when ready for data, PB4=1 when busy
+// Note: via_byteack_in is active-high from VIA output latch, but Egret
+// sees VIA_FULL as active-high (1 = VIA has data/busy)
+// At reset, VIA ORB defaults to 0xFF, so PB4=1 (VIA_FULL=1, busy)
+wire via_full = via_byteack_in;
 
 wire [7:0] pb_in = {
     pb_out[7],        // Bit 7: DFAC clock readback
@@ -348,6 +352,8 @@ jt6805 u_cpu (
 reg [7:0] pb_out_prev, pb_latch_prev, pb_ddr_prev;
 reg [7:0] pa_out_prev;
 reg       via_tip_prev;
+reg       via_full_prev;
+reg       via_byteack_prev;
 reg [31:0] cycle_count;
 reg [31:0] clk_count;
 reg [12:0] last_pc;
@@ -381,6 +387,8 @@ always @(posedge clk) begin
         pb_ddr_prev <= 0;
         pa_out_prev <= 0;
         via_tip_prev <= 1;
+        via_full_prev <= 1;
+        via_byteack_prev <= 1;
         last_pc <= 0;
         treq_prev <= 1;
     end else if (cen) begin
@@ -388,7 +396,21 @@ always @(posedge clk) begin
         pb_out_prev <= pb_out;
         pa_out_prev <= pa_out;
         via_tip_prev <= via_tip;
+        via_full_prev <= via_full;
+        via_byteack_prev <= via_byteack_in;
         treq_prev <= ~pb_out[1];
+
+        // Log VIA_FULL changes (key handshake signal from VIA PB4)
+        if (via_full != via_full_prev) begin
+            $display("EGRET[%0d]: *** VIA_FULL changed: %b -> %b (via_byteack_in=%b, via_tip=%b) ***",
+                     cycle_count, via_full_prev, via_full, via_byteack_in, via_tip);
+        end
+
+        // Log via_byteack_in changes (VIA PB4 output)
+        if (via_byteack_in != via_byteack_prev) begin
+            $display("EGRET[%0d]: via_byteack_in changed: %b -> %b",
+                     cycle_count, via_byteack_prev, via_byteack_in);
+        end
 
         // Log Port B and C latch/DDR writes (key for VIA interface and 68000 control)
         if (port_cs && cpu_wr) begin

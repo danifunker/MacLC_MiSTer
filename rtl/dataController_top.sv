@@ -446,6 +446,37 @@ assign cpuDataOut = selectIWM ? iwmDataOut :
 		end
 		// PortB READ logging disabled - too verbose during polling
 	end
+
+	// Log 68000 VIA register writes (helps compare with MAME trace)
+	reg [31:0] via_access_count = 0;
+	always @(posedge clk32) begin
+		if (!_cpuReset) begin
+			via_access_count <= 0;
+		end else if (clk8_en_p) begin
+			via_access_count <= via_access_count + 1;
+			// Log VIA writes (especially ORB, ACR, IER for Egret handshake)
+			if (selectVIA && !_cpuVMA && !_cpuRW) begin
+				case (cpuAddrRegHi)
+					4'h0: $display("68K_VIA[%0d]: ORB WRITE = 0x%02x (TIP=%b, BYTEACK=%b, TREQ_in=%b)",
+						via_access_count, cpuDataIn[15:8], cpuDataIn[13], cpuDataIn[12], cpuDataIn[11]);
+					4'h2: $display("68K_VIA[%0d]: DDRB WRITE = 0x%02x", via_access_count, cpuDataIn[15:8]);
+					4'hA: $display("68K_VIA[%0d]: SR WRITE = 0x%02x", via_access_count, cpuDataIn[15:8]);
+					4'hB: $display("68K_VIA[%0d]: ACR WRITE = 0x%02x (shift_mode=%d)",
+						via_access_count, cpuDataIn[15:8], cpuDataIn[12:10]);
+					4'hE: $display("68K_VIA[%0d]: IER WRITE = 0x%02x (%s)",
+						via_access_count, cpuDataIn[15:8], cpuDataIn[15] ? "SET" : "CLEAR");
+				endcase
+			end
+			// Log VIA reads (especially SR)
+			if (selectVIA && !_cpuVMA && _cpuRW) begin
+				case (cpuAddrRegHi)
+					4'h0: ; // ORB read - too verbose
+					4'hA: $display("68K_VIA[%0d]: SR READ", via_access_count);
+					4'hD: $display("68K_VIA[%0d]: IFR READ = 0x%02x", via_access_count, viaDataOut[15:8]);
+				endcase
+			end
+		end
+	end
 `endif
 	/* verilator lint_on STMTDLY */
 

@@ -18,20 +18,19 @@ Mac LC uses **Egret** (not CUDA) as its ADB/PRAM/RTC microcontroller. This docum
 | Verilator build | - | Builds successfully |
 | Egret-controlled 68000 reset | `rtl/dataController_top.sv` | Egret Port C bit 3 controls 68000 |
 | ROM addressing fix | `rtl/egret.sv` | Fixed 12-bit truncation bug |
-| VIA_FULL signal | `rtl/egret.sv` | Connected to `via_sr_active` |
+| VIA_FULL signal | `rtl/egret.sv` | Connected to `via_byteack_in` (VIA PB4 output) |
 | CB1 clocking | `rtl/egret.sv`, `rtl/via6522.sv` | Working - bytes transfer |
+| Debug logging | `rtl/egret.sv`, `rtl/dataController_top.sv` | 68000 VIA writes + Egret state |
 
 ### Current Behavior (as of 2024-12-27)
 
 - Egret CPU executes from ROM correctly
 - Reset vector at 0x1FFE correctly points to 0x0F71 (startup code)
 - Egret controls 68000 reset via Port C bit 3
-- 68000 released from reset at ~cycle 7.1M (after Egret sets Port C bit 3)
-- Egret reaches main loop at 0x1034
-- CB1 clocking works - 10 falling edges observed
-- VIA shift register completes (bit_cnt 7→0)
-- SR IRQ fires correctly
-- Screen still blank - handshake not completing fully
+- 68000 released from reset at ~cycle 57M (after Egret sets Port C bit 3)
+- Egret reaches main loop at 0x1047
+- VIA_FULL correctly tracks VIA PB4 output (via_byteack_in)
+- **Current issue**: At 0x12C2, TIP check fails (TIP=0), causing branch to 0x132B abort path
 
 ## Key Fixes Made
 
@@ -48,30 +47,38 @@ wire egretReset = (egretBootCounter < 10'd256);
 `endif
 ```
 
-### 2. VIA_FULL Signal Fix
-VIA_FULL (Port B bit 2) was incorrectly tied high. Now connected to `via_sr_active`:
+### 2. VIA_FULL Signal Fix (Updated 2024-12-27)
+VIA_FULL (Port B bit 2) now correctly uses `via_byteack_in` to match MAME behavior:
 ```systemverilog
-// VIA_FULL: HIGH when VIA SR has data, LOW when idle
-wire via_full = via_sr_active;
+// VIA_FULL: Directly from VIA Port B bit 4 output (via_byteack_in)
+// In MAME, this comes from VIA PB4 writes by the 68000, not SR hardware status
+wire via_full = via_byteack_in;
 
 wire [7:0] pb_in = {
     ...
-    via_full,         // Bit 2: VIA_FULL (0 = buffer empty/ready)
+    via_full,         // Bit 2: VIA_FULL (from VIA PB4)
     ...
 };
 ```
 
-This fix allowed the Egret to:
-- Exit startup delay loops at 0x1DE8
-- Pass TIP/VIA_FULL checks at 0x12AC-0x12AF
-- Reach main loop at 0x1034
-- Proceed to CB1 clocking at 0x14C8
+**Why this matters**: In MAME's v8.cpp, via_out_b() sends PB4 to Egret's set_via_full():
+```cpp
+void v8_device::via_out_b(u8 data) {
+    write_pb4(BIT(data, 4));  // -> Egret set_via_full()
+    write_pb5(BIT(data, 5));  // -> Egret set_sys_session() (TIP)
+}
+```
 
 ### 3. ROM Addressing Fix
 Fixed 12-bit truncation bug in ROM offset calculation:
 ```systemverilog
 wire [12:0] rom_offset = cpu_addr - 13'h0F00;  // Use full 13-bit offset
 ```
+
+### 4. Debug Logging (Added 2024-12-27)
+Added comprehensive debug logging for both Egret and 68000 VIA interactions:
+- Egret: VIA_FULL changes, TIP changes, address 0x12C2 checks
+- 68000: VIA ORB/DDRB/SR/ACR/IER writes with decoded values
 
 ## Memory Map (68HC05)
 
@@ -102,8 +109,8 @@ wire [12:0] rom_offset = cpu_addr - 13'h0F00;  // Use full 13-bit offset
 | 6 | I/O | DFAC data (I2C SDA) | Tied high |
 | 5 | I/O | CB2 - Shift register data | Connected to VIA CB2 |
 | 4 | O | CB1 - Shift register clock | Connected to VIA CB1 |
-| 3 | I | TIP from VIA (SYS_SESSION) | Connected to VIA PB5 |
-| 2 | I | VIA_FULL | Connected to `via_sr_active` |
+| 3 | I | TIP from VIA (SYS_SESSION) | Connected to VIA PB5 output |
+| 2 | I | VIA_FULL | Connected to `via_byteack_in` (VIA PB4) |
 | 1 | O | TREQ to VIA (XCVR_SESSION) | Output to VIA PB3 |
 | 0 | I | +5V sense | Tied high |
 
@@ -138,7 +145,7 @@ wire [12:0] rom_offset = cpu_addr - 13'h0F00;  // Use full 13-bit offset
 
 ### VIA Communication at 0x12C2
 ```
-0x12C2: brclr 3, $01, $132B  ; If TIP=0 (asserted), abort
+0x12C2: brclr 3, $01, $132B  ; If TIP=0 (asserted), abort to $132B
 0x12C5: clr $B5              ; TIP=1 (idle), continue
 0x12C7: jsr $14C8            ; Start CB1 clocking
 ```
@@ -151,33 +158,44 @@ wire [12:0] rom_offset = cpu_addr - 13'h0F00;  // Use full 13-bit offset
 ... (repeat 8 times)
 ```
 
-## Debug Observations
+## MAME Trace Analysis
 
-### What's Working
-- Egret executes ROM code correctly
-- Egret releases 68000 from reset via Port C bit 3
-- TIP signal transitions (1→0→1) observed
-- VIA_FULL properly reflects `via_sr_active`
-- CB1 clocking happens (10 falling edges)
-- VIA SR bit_cnt decrements 7→6→5→4→3→2→1→0
-- VIA SR IRQ fires
+### Key Finding from egret.txt (4.2M lines)
+MAME's Egret also loops through 0x12C2 → 0x132B many times before succeeding:
+- Lines 347, 397, 447, ... show repeated `12C2: brclr 3, $01, $132B` → `132B: sec`
+- First success at line 4480: `12C2: brclr` → `12C5: clr $B5` (TIP was HIGH)
 
-### Current Issue
-The 68000 is polling ORB showing:
-- TREQ(PB3)=0 (Egret requesting transfer)
-- TIP(PB5)=1 (VIA not responding)
-- SR active, bit_cnt=7
+This confirms that Egret polling at 0x12C2 and aborting to 0x132B is **normal behavior** during startup. The 68000 eventually writes to VIA ORB to set TIP high (PB5=1), which allows Egret to proceed.
 
-This suggests a handshake deadlock after the initial byte transfer.
+### Expected Handshake Sequence
+1. Egret releases 68000 from reset (Port C bit 3)
+2. 68000 boots, initializes VIA
+3. 68000 writes to VIA ORB setting PB5=1 (TIP high)
+4. Egret's 0x12C2 check passes, proceeds to 0x12C5
+5. Egret starts CB1 clocking to transfer data
+
+## Current Issue (2024-12-27)
+
+At 0x12C2, Egret checks TIP (pb_in[3]) and finds it LOW (0), causing branch to abort path 0x132B.
+
+**Debug output shows:**
+```
+EGRET: *** 0x12C2 brclr 3,$01 - TIP check: pb_in[3]=0 (TIP=0) ***
+EGRET: *** 0x132B - brclr jumped here (TIP was low) ***
+```
+
+This repeats indefinitely. Unlike MAME, TIP never goes HIGH in our simulation.
+
+**Hypothesis**: The 68000 is not writing to VIA ORB to set PB5 (TIP) high, or our VIA is not correctly outputting PB5.
 
 ## Files Modified
 
 ```
 rtl/
-├── egret.sv              # Egret implementation with VIA_FULL fix
+├── egret.sv              # Egret with via_byteack_in for VIA_FULL + debug logging
 ├── egret_rom.bin         # Extracted ROM binary
 ├── egret_rom.hex         # ROM in hex format
-├── dataController_top.sv # Egret reset control, via_sr_active connection
+├── dataController_top.sv # Egret reset control + 68000 VIA debug logging
 └── jt6805/               # CPU core files
 
 verilator/
@@ -199,16 +217,17 @@ V_DEFINE = ... # Remove +define+USE_EGRET_CPU=1
 
 ## Next Steps
 
-1. Debug why 68000 handshake doesn't complete after first byte
-2. Compare VIA ORB writes between MAME and our simulation
-3. Check if TREQ is being released correctly after byte transfer
-4. Investigate if additional SR interrupts are needed
-5. Look at MAME trace to understand expected handshake sequence
+1. **Debug 68000 VIA writes**: Check if 68000 writes to VIA ORB to set PB5 (TIP) high
+2. **Compare VIA output**: Verify via_pb_o[5] (TIP) is being set correctly
+3. **Check VIA DDRB**: Ensure PB5 is configured as output in the VIA
+4. **Trace timing**: Compare simulation timing with MAME to find when TIP should change
 
 ## References
 
-- MAME source: `src/mame/apple/egret.cpp`
+- MAME source: `src/mame/apple/egret.cpp`, `src/mame/apple/v8.cpp`
 - Egret ROM: 341s0850 (4352 bytes)
 - jt6805 source: jtcores/modules/jt680x
 - 68HC05 datasheet for instruction timing
-- MAME trace file: `egret.txt` (67,570+ instruction trace)
+- MAME trace files:
+  - `egret.txt` (4.2M lines - Egret CPU trace)
+  - `mame_maclcboot.txt` (144MB - 68000 CPU trace)
