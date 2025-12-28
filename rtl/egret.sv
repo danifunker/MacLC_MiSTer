@@ -292,7 +292,7 @@ end
 // ============================================================================
 always @(posedge clk) begin
     if (rom_cs && rom_offset < ROM_SIZE) begin
-        rom_dout <= rom[rom_offset[11:0]];
+        rom_dout <= rom[rom_offset];  // Use full 13-bit offset (ROM is 4352 bytes)
     end else begin
         rom_dout <= 8'hFF;
     end
@@ -340,19 +340,128 @@ jt6805 u_cpu (
 // Debug
 // ============================================================================
 `ifdef SIMULATION
-reg [7:0] pb_out_prev;
+reg [7:0] pb_out_prev, pb_latch_prev, pb_ddr_prev;
+reg [7:0] pa_out_prev;
+reg       via_tip_prev;
+reg [31:0] cycle_count;
+reg [31:0] clk_count;
+reg [12:0] last_pc;
+reg        treq_prev;
+
+// Debug: check if clk8_en is working (independent counter, NOT reset affected)
+reg [31:0] raw_clk_count = 0;
+reg reset_prev = 1;
 always @(posedge clk) begin
-    if (cen && !reset) begin
+    raw_clk_count <= raw_clk_count + 1;
+    reset_prev <= reset;
+
+    // Log when reset changes state
+    if (reset != reset_prev) begin
+        $display("EGRET_CLK[%0d]: RESET %s", raw_clk_count, reset ? "ASSERTED" : "RELEASED");
+    end
+
+    // Log first few cycles and any time clk8_en is high
+    if (raw_clk_count < 50 || (raw_clk_count < 2000 && clk8_en)) begin
+        $display("EGRET_CLK[%0d]: reset=%b clk8_en=%b cen=%b cen_div=%b",
+                 raw_clk_count, reset, clk8_en, cen, cen_div);
+    end
+end
+
+always @(posedge clk) begin
+    if (reset) begin
+        cycle_count <= 0;
+        clk_count <= 0;
+        pb_out_prev <= 8'hFF;
+        pb_latch_prev <= 0;
+        pb_ddr_prev <= 0;
+        pa_out_prev <= 0;
+        via_tip_prev <= 1;
+        last_pc <= 0;
+        treq_prev <= 1;
+    end else if (cen) begin
+        cycle_count <= cycle_count + 1;
         pb_out_prev <= pb_out;
-        // Log Port B changes (VIA interface)
-        if (pb_out != pb_out_prev) begin
-            $display("EGRET: Port B = 0x%02x (CB1=%b CB2=%b TREQ=%b) TIP=%b",
-                     pb_out, pb_out[4], pb_out[5], ~pb_out[1], via_tip);
+        pa_out_prev <= pa_out;
+        via_tip_prev <= via_tip;
+        treq_prev <= ~pb_out[1];
+
+        // Log Port B and C latch/DDR writes (key for VIA interface and 68000 control)
+        if (port_cs && cpu_wr) begin
+            case (cpu_addr[3:0])
+                4'h1: $display("EGRET[%0d] PC=%04x: Port B LATCH write = 0x%02x (was 0x%02x)",
+                              cycle_count, cpu_addr, cpu_dout, pb_latch);
+                4'h2: $display("EGRET[%0d] PC=%04x: Port C LATCH write = 0x%02x (bit3=%b -> reset_680x0 will be %b)",
+                              cycle_count, cpu_addr, cpu_dout, cpu_dout[3], ~cpu_dout[3]);
+                4'h5: $display("EGRET[%0d] PC=%04x: Port B DDR write = 0x%02x",
+                              cycle_count, cpu_addr, cpu_dout);
+                4'h6: $display("EGRET[%0d] PC=%04x: Port C DDR write = 0x%02x",
+                              cycle_count, cpu_addr, cpu_dout);
+            endcase
         end
-        // Log CPU address for debugging
-        if (cpu_addr >= 13'h0F00 && cpu_addr < 13'h0F10) begin
-            $display("EGRET: CPU addr=0x%04x din=0x%02x dout=0x%02x wr=%b",
-                     cpu_addr, cpu_din, cpu_dout, cpu_wr);
+
+        // Log Port B output changes (directly directly affects VIA)
+        if (pb_out != pb_out_prev) begin
+            $display("EGRET[%0d]: PB OUT 0x%02x->0x%02x (CB1=%b CB2=%b TREQ=%b) TIP_in=%b",
+                     cycle_count, pb_out_prev, pb_out,
+                     pb_out[4], pb_out[5], ~pb_out[1], via_tip);
+        end
+
+        // Log TREQ transitions specifically (key handshake signal)
+        if ((~pb_out[1]) != treq_prev) begin
+            if (~pb_out[1])
+                $display("EGRET[%0d]: *** TREQ ACTIVE (requesting transfer) ***", cycle_count);
+            else
+                $display("EGRET[%0d]: *** TREQ INACTIVE ***", cycle_count);
+        end
+
+        // Log TIP input changes from VIA
+        if (via_tip != via_tip_prev) begin
+            $display("EGRET[%0d]: TIP from VIA changed: %b -> %b",
+                     cycle_count, via_tip_prev, via_tip);
+        end
+
+        // Log CB1 clock edges (shift register clocking)
+        if (pb_out[4] != pb_out_prev[4]) begin
+            $display("EGRET[%0d]: CB1 %s edge (CB2_out=%b CB2_in=%b)",
+                     cycle_count, pb_out[4] ? "RISING" : "FALLING",
+                     pb_out[5], via_cb2_in);
+        end
+
+        // Track program counter (from ROM fetches)
+        if (rom_cs && !cpu_wr) begin
+            last_pc <= cpu_addr;
+        end
+
+        // Log first 50 CPU cycles to verify execution
+        if (cycle_count < 50) begin
+            $display("EGRET_CPU[%0d]: addr=%04x din=%02x dout=%02x wr=%b rom=%b ram=%b port=%b",
+                     cycle_count, cpu_addr, cpu_din, cpu_dout, cpu_wr,
+                     rom_cs, ram_cs, port_cs);
+        end
+        // Also log periodically after that
+        if (cycle_count[7:0] == 0 && cycle_count > 0 && cycle_count < 1000) begin
+            $display("EGRET_CPU[%0d]: addr=%04x running", cycle_count, cpu_addr);
+        end
+
+        // Log key ROM addresses (from MAME trace analysis)
+        // 0x1244 = Port B init, 0x1549 = TREQ assert, 0x1550+ = CB1 clocking
+        if (cpu_addr == 13'h1244 || cpu_addr == 13'h1549 ||
+            cpu_addr == 13'h1550 || cpu_addr == 13'h1640) begin
+            $display("EGRET[%0d]: *** KEY ADDRESS 0x%04x ***", cycle_count, cpu_addr);
+        end
+    end
+end
+
+// Periodic status (every ~1M cycles)
+reg [19:0] status_timer;
+always @(posedge clk) begin
+    if (reset) begin
+        status_timer <= 0;
+    end else if (cen) begin
+        status_timer <= status_timer + 1;
+        if (status_timer == 0) begin
+            $display("EGRET STATUS: PC~%04x PB_out=%02x PB_ddr=%02x TREQ=%b TIP=%b CB1=%b CB2=%b",
+                     last_pc, pb_out, pb_ddr, ~pb_out[1], via_tip, pb_out[4], pb_out[5]);
         end
     end
 end

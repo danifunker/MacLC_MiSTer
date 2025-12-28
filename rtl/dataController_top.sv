@@ -129,24 +129,90 @@ module dataController_top(
 	end
 	
 	// CPU reset generation
-	// For initial CPU reset, RESET and HALT must be asserted for at least 100ms = 800,000 clocks of clk8
+	// Mac LC boot sequence: Egret controls when 68000 comes out of reset via Port C bit 3
+	// We also need a minimum reset time for the 68000 (100ms = 800,000 clocks of clk8)
+	// The 68000 reset is released when:
+	//   1. The minimum reset time has passed
+	//   2. _systemReset is not asserted
+	//   3. Egret has released reset_680x0 (Port C bit 3 = 1)
+
 	reg [19:0] resetDelay; // 20 bits = 1 million
-	wire isResetting = resetDelay != 0;
+	wire minResetPassed = (resetDelay == 0);
+
+	// Egret controls 68000 reset via Port C bit 3
+`ifdef USE_EGRET_CPU
+	wire egret_reset_680x0;  // 1 = hold 68000 in reset, 0 = release
+`endif
 
 	initial begin
 		// force a reset when the FPGA configuration is completed
 		resetDelay <= 20'hFFFFF;
 	end
-	
+
 	always @(posedge clk32 or negedge _systemReset) begin
 		if (_systemReset == 1'b0) begin
 			resetDelay <= 20'hFFFFF;
 		end
-		else if (clk8_en_p && isResetting) begin
+		else if (clk8_en_p && !minResetPassed) begin
 			resetDelay <= resetDelay - 1'b1;
 		end
 	end
-	assign _cpuReset = isResetting ? 1'b0 : 1'b1;
+
+`ifdef USE_EGRET_CPU
+	// With real Egret: 68000 reset is controlled by Egret (but respect minimum time)
+	assign _cpuReset = (minResetPassed && !egret_reset_680x0) ? 1'b1 : 1'b0;
+`else
+	// Without Egret: just use the timer
+	assign _cpuReset = minResetPassed ? 1'b1 : 1'b0;
+`endif
+
+	// Egret reset generation - Egret needs to start BEFORE the 68000
+	// The real Egret starts very early and controls when the 68000 comes out of reset
+	// Count up from boot, release Egret after 256 clk8 cycles regardless of _systemReset
+	reg [9:0] egretBootCounter = 0;
+	wire egretReset = (egretBootCounter < 10'd256);
+
+	always @(posedge clk32) begin
+		if (egretBootCounter < 10'd512) begin  // Stop counting once well past threshold
+			if (clk8_en_p)
+				egretBootCounter <= egretBootCounter + 1'b1;
+		end
+	end
+
+`ifdef SIMULATION
+	reg [31:0] dc_debug_count = 0;
+	reg egretReset_prev = 1;
+`ifdef USE_EGRET_CPU
+	reg egret_reset_680x0_prev = 1;
+	reg cpuReset_prev = 0;
+`endif
+	always @(posedge clk32) begin
+		dc_debug_count <= dc_debug_count + 1;
+		egretReset_prev <= egretReset;
+		if (egretReset != egretReset_prev) begin
+			$display("DC[%0d]: egretReset %s (egretBootCounter=%0d)",
+			         dc_debug_count, egretReset ? "ASSERTED" : "RELEASED", egretBootCounter);
+		end
+`ifdef USE_EGRET_CPU
+		egret_reset_680x0_prev <= egret_reset_680x0;
+		cpuReset_prev <= _cpuReset;
+		// Track when Egret releases/asserts 68000 reset
+		if (egret_reset_680x0 != egret_reset_680x0_prev) begin
+			$display("DC[%0d]: Egret %s 68000 reset (minResetPassed=%b, _cpuReset=%b)",
+			         dc_debug_count,
+			         egret_reset_680x0 ? "ASSERTS" : "RELEASES",
+			         minResetPassed, _cpuReset);
+		end
+		// Track when 68000 actually comes out of reset
+		if (_cpuReset != cpuReset_prev) begin
+			$display("DC[%0d]: *** 68000 reset %s *** (egret_reset=%b, minResetPassed=%b)",
+			         dc_debug_count,
+			         _cpuReset ? "RELEASED" : "ASSERTED",
+			         egret_reset_680x0, minResetPassed);
+		end
+`endif
+	end
+`endif
 	
 	// interconnects
 	wire SEL;
@@ -436,7 +502,7 @@ assign cpuDataOut = selectIWM ? iwmDataOut :
 	egret egret_inst(
 		.clk            (clk32),
 		.clk8_en        (clk8_en_p),
-		.reset          (!_cpuReset),
+		.reset          (egretReset),  // Egret uses shorter reset than 68000
 
 		// RTC timestamp initialization
 		.timestamp      (timestamp),
@@ -468,8 +534,8 @@ assign cpuDataOut = selectIWM ? iwmDataOut :
 		.adb_data_in    (1'b1),
 		.adb_data_out   (),
 
-		// System control
-		.reset_680x0    (),
+		// System control - Egret controls 68000 reset via Port C bit 3
+		.reset_680x0    (egret_reset_680x0),
 		.nmi_680x0      ()
 	);
 `else

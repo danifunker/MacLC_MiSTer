@@ -687,6 +687,21 @@ module via6522 (
         end
     end
 
+    // Debug: track CB1 input edges
+`ifdef SIMULATION
+    reg cb1_i_prev;
+    always @(posedge clock) begin
+        if (reset) cb1_i_prev <= 1'b1;
+        else if (rising) begin
+            cb1_i_prev <= cb1_i;
+            if (cb1_i != cb1_i_prev && shift_clk_sel == 2'b11) begin
+                $display("VIA: CB1_i %s (ext_clk mode) - shift_active=%b bit_cnt=%d SR=0x%02x",
+                         cb1_i ? "RISING" : "FALLING", shift_active, bit_cnt, shift_reg);
+            end
+        end
+    end
+`endif
+
     always @(posedge clock) begin
         ser_cb2_c <= cb2_i;
         if (rising == 1'b1) begin
