@@ -509,7 +509,7 @@ assign cpuDataOut = selectIWM ? iwmDataOut :
 
 		// VIA Port B connections (Mac LC V8 protocol)
 		.via_tip        (via_pb_o[5]),     // TIP from VIA (PB5 = SYS_SESSION)
-		.via_byteack_in (via_pb_o[4]),     // BYTEACK from VIA (PB4 = VIA_FULL)
+		.via_byteack_in (via_sr_active),     // BYTEACK from VIA (PB4 = VIA_FULL)
 		.cuda_treq      (cuda_treq),       // TREQ to VIA (PB3 = XCVR_SESSION)
 		.cuda_byteack   (cuda_byteack),    // Not used in Egret
 

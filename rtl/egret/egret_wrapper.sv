@@ -171,27 +171,113 @@ end
 // Bit 1 (O): VIA XCEIVER SESSION = TREQ to VIA
 // Bit 0 (I): +5V sense
 
-// Port B input - return latch for port test compatibility (like Port A)
-// The firmware's port test writes a pattern and reads it back expecting same value
-wire [7:0] pb_in = pb_latch;
+// Port B input - Use synchronized signals from VIA
+// Bit 5 (CB2) must read actual data from VIA during shift operations
+// Other bits read back from latch for port test compatibility
+wire [7:0] pb_in = {pb_latch[7:6], via_cb2_in_stable, via_tip_stable, via_byteack_in_stable, pb_latch[1:0]};
+
+// Clock domain crossing synchronizers for VIA signals
+reg [2:0] via_tip_sync;
+reg [2:0] via_cb2_in_sync;
+reg [2:0] via_sr_read_sync;
+reg [2:0] via_sr_write_sync;
+reg [2:0] via_byteack_in_sync;
+
+// Simulate initial VIA TIP signal to kick-start communication
+reg via_tip_sim;
+reg [7:0] via_tip_sim_counter;
+
+always @(posedge clk) begin
+    if (reset) begin
+        via_tip_sync <= 3'b111;
+        via_cb2_in_sync <= 3'b000;
+        via_byteack_in_sync <= 3'b000;
+        via_sr_read_sync <= 3'b000;
+        via_sr_write_sync <= 3'b000;
+        via_tip_sim <= 1'b1;
+        via_tip_sim_counter <= 8'd0;
+    end else if (cen) begin
+        // Override TIP for initial handshake
+        if (via_tip_sim_counter < 8'd200) begin
+            via_tip_sim_counter <= via_tip_sim_counter + 8'd1;
+            if (via_tip_sim_counter == 8'd100) via_tip_sim <= 1'b0;  // Pull TIP low
+            if (via_tip_sim_counter == 8'd150) via_tip_sim <= 1'b1;  // Release TIP
+        end
+        
+        via_tip_sync <= {via_tip_sync[1:0], (via_tip_sim_counter < 8'd200) ? via_tip_sim : via_tip};
+        via_cb2_in_sync <= {via_cb2_in_sync[1:0], via_cb2_in};
+        via_byteack_in_sync <= {via_byteack_in_sync[1:0], via_byteack_in};        
+        via_sr_read_sync <= {via_sr_read_sync[1:0], via_sr_read};
+        via_sr_write_sync <= {via_sr_write_sync[1:0], via_sr_write};
+    end
+end
+
+wire via_tip_stable = via_tip_sync[2];
+wire via_cb2_in_stable = via_cb2_in_sync[2];
+wire via_byteack_in_stable = via_byteack_in_sync[2];
 
 // Handshake initialization: Force TREQ LOW after 68020 boots to break deadlock
 reg [15:0] handshake_timer;
 reg handshake_done;
 reg force_treq;
 
+// Handshake initialization state machine
+// CRITICAL: XCVR_SESSION (TREQ) must be LOW before CB1 clocking starts (per MAME)
+typedef enum logic [2:0] {
+    INIT_WAIT,    // Wait for stable power
+    INIT_ASSERT,  // Assert TREQ (XCVR_SESSION)
+    INIT_DELAY,   // Hold TREQ before allowing clocking
+    RUNNING       // Normal operation
+} init_state_t;
+
+init_state_t init_state;
+
 always @(posedge clk) begin
     if (reset) begin
         handshake_timer <= 0;
         handshake_done <= 0;
         force_treq <= 0;
-    end else if (cen && !handshake_done) begin
-        handshake_timer <= handshake_timer + 1;
-        if (handshake_timer == 16'h3000) force_treq <= 1'b1;
-        if (handshake_timer == 16'h3800) begin
-            force_treq <= 1'b0;
-            handshake_done <= 1'b1;
-        end
+        init_state <= INIT_WAIT;
+    end else if (cen) begin
+        case (init_state)
+            INIT_WAIT: begin
+                if (handshake_timer == 16'h2000) begin
+                    init_state <= INIT_ASSERT;
+                    force_treq <= 1'b1; // Assert TREQ (XCVR_SESSION LOW)
+                    `ifdef SIMULATION
+                    $display("EGRET_INIT[%0d]: XCVR_SESSION asserted (TREQ LOW)", handshake_timer);
+                    `endif
+                end else begin
+                    handshake_timer <= handshake_timer + 1;
+                end
+            end
+            
+            INIT_ASSERT: begin
+                if (handshake_timer == 16'h2800) begin
+                    init_state <= INIT_DELAY;
+                    `ifdef SIMULATION
+                    $display("EGRET_INIT[%0d]: Entering delay phase", handshake_timer);
+                    `endif
+                end
+                handshake_timer <= handshake_timer + 1;
+            end
+            
+            INIT_DELAY: begin
+                if (handshake_timer == 16'h3800) begin
+                    force_treq <= 1'b0;
+                    handshake_done <= 1'b1;
+                    init_state <= RUNNING;
+                    `ifdef SIMULATION
+                    $display("EGRET_INIT[%0d]: Entering RUNNING state", handshake_timer);
+                    `endif
+                end
+                handshake_timer <= handshake_timer + 1;
+            end
+            
+            RUNNING: begin
+                // Normal operation - Egret controls TREQ
+            end
+        endcase
     end
 end
 
@@ -349,12 +435,36 @@ end
 assign cpu_din = cpu_din_r;
 
 // ============================================================================
+// Timer for HC05 IRQ generation
+// HC05 needs periodic timer interrupts (typically ~1ms)
+// ============================================================================
+reg [15:0] timer_counter;
+reg timer_irq;
+
+always @(posedge clk) begin
+    if (reset) begin
+        timer_counter <= 16'd0;
+        timer_irq <= 1'b1;  // Inactive (active-low)
+    end else if (cen) begin
+        timer_counter <= timer_counter + 16'd1;
+        
+        // Generate IRQ pulse every ~2000 cycles (~500us at 4MHz)
+        if (timer_counter == 16'd2000) begin
+            timer_irq <= 1'b0;  // Assert IRQ (active-low)
+            timer_counter <= 16'd0;
+        end else if (timer_counter == 16'd10) begin
+            timer_irq <= 1'b1;  // Deassert after 10 cycles
+        end
+    end
+end
+
+// ============================================================================
 // CPU instantiation - m68hc05_core
 // ============================================================================
 m68hc05_core u_cpu (
     .clk(clk),
     .rst(~reset),      // m68hc05_core uses active-low reset
-    .irq(1'b1),        // No external IRQ for now
+    .irq(timer_irq),   // Timer-generated IRQ
     .addr(cpu_addr),
     .wr(cpu_wr),
     .datain(cpu_din),
@@ -398,7 +508,7 @@ always @(posedge clk) begin
         cycle_count <= cycle_count + 1;
         pb_out_prev <= pb_out;
         pa_out_prev <= pa_out;
-        via_tip_prev <= via_tip;
+        via_tip_prev <= via_tip_stable;
         treq_prev <= ~pb_out[1];
         reset_680x0_prev <= reset_680x0;
 
@@ -441,7 +551,7 @@ always @(posedge clk) begin
         if (pb_out != pb_out_prev) begin
             $display("EGRET[%0d]: PB OUT 0x%02x->0x%02x (CB1=%b CB2=%b TREQ=%b) TIP_in=%b",
                      cycle_count, pb_out_prev, pb_out,
-                     pb_out[4], pb_out[5], ~pb_out[1], via_tip);
+                     pb_out[4], pb_out[5], ~pb_out[1], via_tip_stable);
         end
 
         // Log TREQ transitions
@@ -453,9 +563,9 @@ always @(posedge clk) begin
         end
 
         // Log TIP input changes from VIA
-        if (via_tip != via_tip_prev) begin
+        if (via_tip_stable != via_tip_prev) begin
             $display("EGRET[%0d]: TIP from VIA changed: %b -> %b",
-                     cycle_count, via_tip_prev, via_tip);
+                     cycle_count, via_tip_prev, via_tip_stable);
         end
 
         // Log CB1 clock edges
@@ -494,7 +604,7 @@ always @(posedge clk) begin
         status_timer <= status_timer + 1;
         if (status_timer == 0) begin
             $display("EGRET STATUS: PC~%04x PB_out=%02x PB_ddr=%02x TREQ=%b TIP=%b CB1=%b CB2=%b state=%x",
-                     last_pc, pb_out, pb_ddr, ~pb_out[1], via_tip, pb_out[4], pb_out[5], cpu_state);
+                     last_pc, pb_out, pb_ddr, ~pb_out[1], via_tip_stable, pb_out[4], pb_out[5], cpu_state);
         end
     end
 end
