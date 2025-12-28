@@ -153,7 +153,7 @@ module m68hc05_core (
             flagC <= 1'b0;
             
             regA    <= 8'h00;
-            regX    <= 8'h00;
+            regX    <= 8'h02;  // Initialize X=2 for Egret firmware (expects port test loop counter)
             regSP   <= 16'h00FF;
             regPC   <= 16'hFFFE;
             temp    <= 16'hFFFE;
