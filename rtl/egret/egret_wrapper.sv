@@ -117,6 +117,11 @@ initial begin
 `else
     $readmemh("rtl/egret/egret_rom.hex", rom);
 `endif
+    
+    // Initialize RAM to zeros (critical for proper Egret firmware operation)
+    for (int i = 0; i < 448; i = i + 1) begin
+        intram[i] = 8'h00;
+    end
 end
 
 // Address decoding

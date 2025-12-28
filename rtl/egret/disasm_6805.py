@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-Simple 68HC05 disassembler for Egret ROM
-Plain hex format (one byte per line)
+Comprehensive 68HC05 disassembler for Egret ROM
 """
 
 # 68HC05 instruction set
@@ -161,71 +160,73 @@ def read_plain_hex(filename):
                 try:
                     data.append(int(line, 16))
                 except ValueError:
-                    pass  # Skip invalid lines
+                    pass
     return bytearray(data)
 
 def disassemble_instr(rom, pc):
-    """Disassemble one instruction"""
+    """Disassemble one instruction, return (mnemonic, size, target_addr)"""
     if pc >= len(rom):
-        return "???", 1
+        return "???", 1, None
         
     opcode = rom[pc]
     
     if opcode not in OPCODES:
-        return f"db      ${opcode:02x}", 1
+        return f"db      ${opcode:02x}", 1, None
     
     mnem, bit, mode = OPCODES[opcode]
+    target = None
     
     if mode == "impl":
-        return mnem, 1
+        return mnem, 1, None
     elif mode == "imm":
         if pc + 1 >= len(rom):
-            return f"db ${opcode:02x}", 1
+            return f"db ${opcode:02x}", 1, None
         operand = rom[pc + 1]
-        return f"{mnem}    #${operand:02x}", 2
+        return f"{mnem}    #${operand:02x}", 2, None
     elif mode == "direct":
         if pc + 1 >= len(rom):
-            return f"db ${opcode:02x}", 1
+            return f"db ${opcode:02x}", 1, None
         operand = rom[pc + 1]
         if bit is not None:
-            return f"{mnem}    {bit},${operand:02x}", 2
-        return f"{mnem}    ${operand:02x}", 2
+            return f"{mnem}    {bit},${operand:02x}", 2, None
+        return f"{mnem}    ${operand:02x}", 2, None
     elif mode == "ext":
         if pc + 2 >= len(rom):
-            return f"db ${opcode:02x}", 1
+            return f"db ${opcode:02x}", 1, None
         addr = (rom[pc + 1] << 8) | rom[pc + 2]
-        return f"{mnem}    ${addr:04x}", 3
+        target = addr
+        return f"{mnem}    ${addr:04x}", 3, target
     elif mode == "rel":
         if pc + 1 >= len(rom):
-            return f"db ${opcode:02x}", 1
+            return f"db ${opcode:02x}", 1, None
         offset = rom[pc + 1]
         if offset >= 128:
             offset = offset - 256
         target = (pc + 2 + offset) & 0xFFFF
-        return f"{mnem}    ${target:04x}", 2
+        return f"{mnem}    ${target:04x}", 2, target
     elif mode == "bit_rel":
         if pc + 2 >= len(rom):
-            return f"db ${opcode:02x}", 1
+            return f"db ${opcode:02x}", 1, None
         direct = rom[pc + 1]
         offset = rom[pc + 2]
         if offset >= 128:
             offset = offset - 256
         target = (pc + 3 + offset) & 0xFFFF
-        return f"{mnem}    {bit},${direct:02x},${target:04x}", 3
+        return f"{mnem}    {bit},${direct:02x},${target:04x}", 3, target
     elif mode == "idx":
         if pc + 1 >= len(rom):
-            return f"db ${opcode:02x}", 1
+            return f"db ${opcode:02x}", 1, None
         offset = rom[pc + 1]
-        return f"{mnem}    ${offset:02x},x", 2
+        return f"{mnem}    ${offset:02x},x", 2, None
     elif mode == "idx1":
-        return f"{mnem}    ,x", 1
+        return f"{mnem}    ,x", 1, None
     elif mode == "idx2":
         if pc + 1 >= len(rom):
-            return f"db ${opcode:02x}", 1
+            return f"db ${opcode:02x}", 1, None
         offset = rom[pc + 1]
-        return f"{mnem}    ${offset:02x},x", 2
+        return f"{mnem}    ${offset:02x},x", 2, None
     
-    return "???", 1
+    return "???", 1, None
 
 def disassemble_range(rom, start, count=20):
     """Disassemble count instructions from start"""
@@ -233,19 +234,81 @@ def disassemble_range(rom, start, count=20):
     for _ in range(count):
         if pc >= len(rom):
             break
-        instr, size = disassemble_instr(rom, pc)
+        instr, size, target = disassemble_instr(rom, pc)
         data_bytes = " ".join(f"{rom[pc+i]:02x}" for i in range(min(size, len(rom)-pc)))
         print(f"{pc:04x}  {data_bytes:12s}  {instr}")
         pc += size
 
+def find_references_to(rom, target_addr):
+    """Find all instructions that reference a given address"""
+    refs = []
+    pc = 0
+    while pc < len(rom):
+        instr, size, target = disassemble_instr(rom, pc)
+        if target == target_addr:
+            refs.append(pc)
+        pc += size
+    return refs
+
+def disassemble_function(rom, start_addr, max_instr=50):
+    """Disassemble a function until RTS/RTI"""
+    pc = start_addr
+    for _ in range(max_instr):
+        if pc >= len(rom):
+            break
+        instr, size, target = disassemble_instr(rom, pc)
+        data_bytes = " ".join(f"{rom[pc+i]:02x}" for i in range(min(size, len(rom)-pc)))
+        print(f"{pc:04x}  {data_bytes:12s}  {instr}")
+        
+        # Stop at RTS/RTI
+        if rom[pc] in [0x80, 0x81]:  # RTI, RTS
+            break
+        pc += size
+
 if __name__ == "__main__":
+    import sys
+    
     rom = read_plain_hex("egret_rom.hex")
     
     print(f"ROM size: {len(rom)} bytes")
-    print(f"Reset vector: 0x{(rom[0xFFE] << 8) | rom[0xFFF]:04x}\n")
+    reset_vec = (rom[0xFFE] << 8) | rom[0xFFF]
+    print(f"Reset vector: 0x{reset_vec:04x}")
+    print(f"IRQ vector: 0x{(rom[0xFFA] << 8) | rom[0xFFB]:04x}")
+    print(f"SWI vector: 0x{(rom[0xFFC] << 8) | rom[0xFFD]:04x}\n")
     
-    print("=== Stuck address range 0x0f5b-0x0f65 ===")
-    disassemble_range(rom, 0x0f5b, 20)
-    
-    print("\n=== Reset vector handler at 0x0f71 ===")
-    disassemble_range(rom, 0x0f71, 15)
+    if len(sys.argv) > 1:
+        # Custom address range
+        start = int(sys.argv[1], 16)
+        count = int(sys.argv[2]) if len(sys.argv) > 2 else 30
+        print(f"=== Disassembly at 0x{start:04x} ===")
+        disassemble_range(rom, start, count)
+    else:
+        # Default analysis
+        print("=== Reset handler at 0x0f71 ===")
+        disassemble_function(rom, 0x0f71, 30)
+        
+        print("\n=== Subroutine at 0x0f3e (called from reset) ===")
+        disassemble_function(rom, 0x0f3e, 20)
+        
+        print("\n=== Stuck loop area 0x0f5b-0x0f65 ===")
+        disassemble_range(rom, 0x0f5b, 15)
+        
+        print("\n=== Finding all references to 0x0f5f (infinite loop) ===")
+        refs = find_references_to(rom, 0x0f5f)
+        if refs:
+            print(f"Found {len(refs)} references:")
+            for ref in refs:
+                instr, size, _ = disassemble_instr(rom, ref)
+                data_bytes = " ".join(f"{rom[ref+i]:02x}" for i in range(size))
+                print(f"  {ref:04x}  {data_bytes:12s}  {instr}")
+        else:
+            print("No direct references found")
+        
+        print("\n=== Finding all references to 0x0f62 (bra to loop) ===")
+        refs = find_references_to(rom, 0x0f62)
+        if refs:
+            print(f"Found {len(refs)} references:")
+            for ref in refs:
+                instr, size, _ = disassemble_instr(rom, ref)
+                data_bytes = " ".join(f"{rom[ref+i]:02x}" for i in range(size))
+                print(f"  {ref:04x}  {data_bytes:12s}  {instr}")
