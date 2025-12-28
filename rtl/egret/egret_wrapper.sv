@@ -179,11 +179,31 @@ wire [7:0] pb_in = {
     1'b1              // Bit 0: +5V sense
 };
 
+// Handshake initialization: Force TREQ LOW after 68020 boots to break deadlock
+reg [15:0] handshake_timer;
+reg handshake_done;
+reg force_treq;
+
+always @(posedge clk) begin
+    if (reset) begin
+        handshake_timer <= 0;
+        handshake_done <= 0;
+        force_treq <= 0;
+    end else if (cen && !handshake_done) begin
+        handshake_timer <= handshake_timer + 1;
+        if (handshake_timer == 16'h3000) force_treq <= 1'b1;
+        if (handshake_timer == 16'h3800) begin
+            force_treq <= 1'b0;
+            handshake_done <= 1'b1;
+        end
+    end
+end
+
 // Output assignments
 assign cuda_cb1    = pb_out[4];
 assign cuda_cb2    = pb_out[5];
 assign cuda_cb2_oe = pb_ddr[5];
-assign cuda_treq   = ~pb_out[1];  // Active low (invert)
+assign cuda_treq   = force_treq ? 1'b0 : ~pb_out[1];  // Force LOW during init
 assign cuda_byteack = 1'b0;       // Not used in Egret
 
 assign cuda_portb    = pb_out;
@@ -319,8 +339,8 @@ reg [7:0] cpu_din_r;
 always @(*) begin
     if (port_cs) begin
         case (cpu_addr[3:0])
-            4'h0: cpu_din_r = pa_out;
-            4'h1: cpu_din_r = pb_out;
+            4'h0: cpu_din_r = pa_in;
+            4'h1: cpu_din_r = pb_in;
             4'h2: cpu_din_r = {4'hF, pc_out};
             default: cpu_din_r = 8'hFF;
         endcase
