@@ -113,18 +113,7 @@ reg  [7:0] rom_dout;
 initial begin
 `ifdef SIMULATION
     $readmemh("../rtl/egret/egret_rom.hex", rom);
-    $display("============================================");
-    $display("EGRET ROM: Loading from ../rtl/egret/egret_rom.hex");
-    $display("EGRET ROM: First 16 bytes: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x", 
-             rom[0], rom[1], rom[2], rom[3], rom[4], rom[5], rom[6], rom[7],
-             rom[8], rom[9], rom[10], rom[11], rom[12], rom[13], rom[14], rom[15]);
-    $display("EGRET ROM: Reset vector area (0xFFE-0xFFF): %02x %02x (should point to start address)", 
-             rom[12'hFFE], rom[12'hFFF]);
-    $display("EGRET ROM: Code at 0x0F0F (if that's where reset points): %02x %02x %02x %02x",
-             rom[12'hF0F], rom[12'hF10], rom[12'hF11], rom[12'hF12]);
-    $display("EGRET ROM: Last 4 bytes: %02x %02x %02x %02x",
-             rom[12'hFFC], rom[12'hFFD], rom[12'hFFE], rom[12'hFFF]);
-    $display("============================================");
+    $display("EGRET ROM: Loaded %0d bytes from ../rtl/egret/egret_rom.hex", ROM_SIZE);
 `else
     $readmemh("rtl/egret/egret_rom.hex", rom);
 `endif
@@ -153,14 +142,14 @@ wire [8:0]  ram_addr = cpu_addr[8:0] - 9'h50;
 // Bit 1-0: PSU control
 
 wire [7:0] pa_in = {
-    pa_out[7],        // Bit 7: readback (output)
-    adb_data_in,      // Bit 6: ADB data in (input - keep as is for now)
-    1'b0,             // Bit 5: system type = 0 (CHANGED)
-    pa_out[4],        // Bit 4: DFAC latch readback (output)
-    pa_out[3],        // Bit 3: reset readback (output)
-    1'b0,             // Bit 2: keyboard power = 0/pressed (CHANGED)
-    1'b0,             // Bit 1: PSU = 0 (CHANGED)
-    pa_out[0]         // Bit 0: control panel readback (output)
+    pa_out[7],        // Bit 7: readback
+    adb_data_in,      // Bit 6: ADB data in
+    1'b1,             // Bit 5: system type = Egret controls power
+    pa_out[4],        // Bit 4: DFAC latch readback
+    1'b0,              // Bit 3: reset readback
+    1'b1,             // Bit 2: keyboard power (not pressed)
+    1'b1,             // Bit 1: PSU
+    1'b1              // Bit 0: control panel
 };
 
 always @(*) begin
@@ -288,13 +277,15 @@ always @(*) begin
 end
 
 `ifdef SIMULATION
-// Debug ROM reads for first few cycles
+// Debug ROM reads (commented out - enable if needed for debugging)
+/*
 always @(posedge clk) begin
     if (rom_cs && cycle_count < 20) begin
         $display("EGRET_ROM_READ[%0d]: addr=%04x rom_addr=%03x data=%02x rom_cs=%b", 
                  cycle_count, cpu_addr, rom_addr, rom[rom_addr], rom_cs);
     end
 end
+*/
 `endif
 
 // ============================================================================
