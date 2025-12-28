@@ -33,6 +33,7 @@ module egret (
     input         via_sr_write,     // VIA has written SR (shift out mode)
     input         via_sr_ext_clk,   // VIA is in external clock mode
     input         via_sr_dir,       // VIA shift direction: 0=in, 1=out
+    input         via_sr_active,    // VIA SR is actively shifting (for VIA_FULL)
     output reg    cuda_sr_irq,      // Request SR interrupt
 
     // Full port B for completeness
@@ -161,13 +162,17 @@ end
 // Bit 1 (O): VIA XCEIVER SESSION = TREQ to VIA
 // Bit 0 (I): +5V sense
 
+// VIA_FULL: HIGH when VIA SR has data that Egret hasn't clocked out yet
+// LOW when VIA SR is idle or empty - allows Egret to proceed
+wire via_full = via_sr_active;
+
 wire [7:0] pb_in = {
     pb_out[7],        // Bit 7: DFAC clock readback
     1'b1,             // Bit 6: DFAC data (not connected)
     via_cb2_in,       // Bit 5: CB2 from VIA
     pb_out[4],        // Bit 4: CB1 readback
-    via_tip,          // Bit 3: TIP from VIA (directly directly directly directly directly directly directly directly directly 0 = asserted)
-    1'b1,             // Bit 2: VIA_FULL (directly directly directly directly directly directly tied high)
+    via_tip,          // Bit 3: TIP from VIA (0 = asserted)
+    via_full,         // Bit 2: VIA_FULL (0 = buffer empty/ready)
     pb_out[1],        // Bit 1: TREQ readback
     1'b1              // Bit 0: +5V sense
 };
@@ -414,10 +419,10 @@ always @(posedge clk) begin
                 $display("EGRET[%0d]: *** TREQ INACTIVE ***", cycle_count);
         end
 
-        // Log TIP input changes from VIA
+        // Log TIP input changes from VIA - include PC for context
         if (via_tip != via_tip_prev) begin
-            $display("EGRET[%0d]: TIP from VIA changed: %b -> %b",
-                     cycle_count, via_tip_prev, via_tip);
+            $display("EGRET[%0d]: TIP from VIA changed: %b -> %b (PC~%04x)",
+                     cycle_count, via_tip_prev, via_tip, last_pc);
         end
 
         // Log CB1 clock edges (shift register clocking)
@@ -444,10 +449,39 @@ always @(posedge clk) begin
         end
 
         // Log key ROM addresses (from MAME trace analysis)
-        // 0x1244 = Port B init, 0x1549 = TREQ assert, 0x1550+ = CB1 clocking
-        if (cpu_addr == 13'h1244 || cpu_addr == 13'h1549 ||
-            cpu_addr == 13'h1550 || cpu_addr == 13'h1640) begin
-            $display("EGRET[%0d]: *** KEY ADDRESS 0x%04x ***", cycle_count, cpu_addr);
+        // Main loop path: 0x1047 -> 0x104C -> 0x104F -> 0x1051 -> 0x1054 -> 0x1059 -> 0x105B -> 0x12C2
+        if (cpu_addr == 13'h1047) begin
+            $display("EGRET[%0d]: 0x1047 - main loop jsr $1198", cycle_count);
+        end
+        if (cpu_addr == 13'h104F) begin
+            $display("EGRET[%0d]: 0x104F - bcc check after $1ace (C=%b)", cycle_count, tcr[0]);
+        end
+        if (cpu_addr == 13'h1051) begin
+            $display("EGRET[%0d]: 0x1051 - jsr $1138 (past first bcc!)", cycle_count);
+        end
+        if (cpu_addr == 13'h1054) begin
+            $display("EGRET[%0d]: 0x1054 - bcs check after $1138", cycle_count);
+        end
+        if (cpu_addr == 13'h1059) begin
+            $display("EGRET[%0d]: *** 0x1059 - about to call $12C2! ***", cycle_count);
+        end
+        if (cpu_addr == 13'h105B) begin
+            $display("EGRET[%0d]: *** 0x105B - jsr $12C2 ***", cycle_count);
+        end
+
+        // 0x12C2 = brclr 3, $01 (TIP check), 0x14C8 = CB1 clocking setup
+        if (cpu_addr == 13'h12C2) begin
+            $display("EGRET[%0d]: *** 0x12C2 brclr 3,$01 - TIP check: pb_in[3]=%b (TIP=%b) ***",
+                     cycle_count, pb_in[3], via_tip);
+        end
+        if (cpu_addr == 13'h14C8) begin
+            $display("EGRET[%0d]: *** 0x14C8 - CB1 clocking setup! ***", cycle_count);
+        end
+        if (cpu_addr == 13'h14EF || cpu_addr == 13'h14F1) begin
+            $display("EGRET[%0d]: *** 0x%04x - CB1 toggle instruction! ***", cycle_count, cpu_addr);
+        end
+        if (cpu_addr == 13'h132B) begin
+            $display("EGRET[%0d]: *** 0x132B - brclr jumped here (TIP was low) ***", cycle_count);
         end
     end
 end

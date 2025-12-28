@@ -524,6 +524,7 @@ assign cpuDataOut = selectIWM ? iwmDataOut :
 		.via_sr_write   (via_sr_write),
 		.via_sr_ext_clk (via_sr_ext_clk),
 		.via_sr_dir     (via_sr_dir),
+		.via_sr_active  (via_sr_active),  // For VIA_FULL signal
 		.cuda_sr_irq    (cuda_sr_irq),
 
 		// Full Port B
