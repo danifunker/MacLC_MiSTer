@@ -48,14 +48,40 @@ module egret_wrapper (
     output reg         nmi_680x0
 );
 
-wire cen = clk8_en;
+// ============================================================================
+// Clock generation for 68HC05
+// TEMPORARY FOR SIMULATION: Force cen=1 because m68hc05_core has no clock enable
+// The CPU runs every cycle, so peripherals must too
+// ============================================================================
+wire cen = 1'b1;  // TEMPORARY: Always enabled for simulation testing
+
+// Production version (uncomment when using dedicated PLL):
+// wire cen = clk8_en;  // Direct passthrough when using dedicated PLL clock
+
+// Uncomment this if NOT using dedicated PLL (fallback to divide-by-2 from 8 MHz):
+/*
+reg cen_div;
+wire cen = clk8_en & cen_div;
+
+always @(posedge clk) begin
+    if (reset)
+        cen_div <= 1'b0;
+    else if (clk8_en)
+        cen_div <= ~cen_div;
+end
+*/
 
 // ============================================================================
 // Memory map for Egret (68HC05 with 64KB address space from CPU core)
 // ============================================================================
 // 0x0000-0x000F: I/O registers (Ports A, B, C, DDR, etc.)
+// 0x0010-0x004F: Unmapped (reads as ROM due to mirroring)
 // 0x0050-0x01FF: Internal RAM (448 bytes for PRAM, RTC, variables)
-// 0x1000-0x1FFF: ROM (4KB, Egret firmware)
+// 0x0200-0xFFFF: ROM (4KB, repeats every 4KB due to [11:0] addressing)
+//
+// The 4KB ROM repeats throughout the address space, so:
+// - 0x0F0F (where reset vector points) → ROM offset 0xF0F
+// - 0xFFFE/FFFF (reset vectors) → ROM offset 0xFFE/FFF
 
 localparam ROM_SIZE = 4096;  // 4KB
 
@@ -86,17 +112,33 @@ reg  [7:0] rom_dout;
 // Initialize ROM from hex file
 initial begin
 `ifdef SIMULATION
-    $readmemh("../rtl/egret_rom.hex", rom);
+    $readmemh("../rtl/egret/egret_rom.hex", rom);
+    $display("============================================");
+    $display("EGRET ROM: Loading from ../rtl/egret/egret_rom.hex");
+    $display("EGRET ROM: First 16 bytes: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x", 
+             rom[0], rom[1], rom[2], rom[3], rom[4], rom[5], rom[6], rom[7],
+             rom[8], rom[9], rom[10], rom[11], rom[12], rom[13], rom[14], rom[15]);
+    $display("EGRET ROM: Reset vector area (0xFFE-0xFFF): %02x %02x (should point to start address)", 
+             rom[12'hFFE], rom[12'hFFF]);
+    $display("EGRET ROM: Code at 0x0F0F (if that's where reset points): %02x %02x %02x %02x",
+             rom[12'hF0F], rom[12'hF10], rom[12'hF11], rom[12'hF12]);
+    $display("EGRET ROM: Last 4 bytes: %02x %02x %02x %02x",
+             rom[12'hFFC], rom[12'hFFD], rom[12'hFFE], rom[12'hFFF]);
+    $display("============================================");
 `else
-    $readmemh("rtl/egret_rom.hex", rom);
+    $readmemh("rtl/egret/egret_rom.hex", rom);
 `endif
 end
 
 // Address decoding
-wire port_cs = (cpu_addr < 16'h0010);
-wire ram_cs  = (cpu_addr >= 16'h0050) && (cpu_addr < 16'h0200);
-wire rom_cs  = (cpu_addr >= 16'h1000) && (cpu_addr < 16'h2000);
-wire [11:0] rom_addr = cpu_addr[11:0];
+// ROM needs to be accessible where the reset vector points (0x0F0F suggests ROM at low addresses)
+// Map ROM to cover the address space the firmware expects
+wire port_cs = (cpu_addr < 16'h0010);  // I/O ports at 0x00-0x0F
+wire ram_cs  = (cpu_addr >= 16'h0050) && (cpu_addr < 16'h0200);  // RAM at 0x50-0x1FF
+// ROM everywhere else - covers reset vectors and main code
+// Exclude I/O and RAM regions
+wire rom_cs  = !port_cs && !ram_cs;
+wire [11:0] rom_addr = cpu_addr[11:0];  // 4KB ROM wraps every 4KB
 wire [8:0]  ram_addr = cpu_addr[8:0] - 9'h50;
 
 // ============================================================================
@@ -233,6 +275,13 @@ end
 always @(posedge clk) begin
     if (rom_cs) begin
         rom_dout <= rom[rom_addr];
+`ifdef SIMULATION
+        // Debug ROM reads for first few cycles
+        if (cycle_count < 20) begin
+            $display("EGRET_ROM_READ[%0d]: addr=%04x rom_addr=%03x data=%02x rom_cs=%b", 
+                     cycle_count, cpu_addr, rom_addr, rom[rom_addr], rom_cs);
+        end
+`endif
     end else begin
         rom_dout <= 8'hFF;
     end
