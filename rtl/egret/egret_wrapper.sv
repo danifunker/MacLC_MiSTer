@@ -382,11 +382,20 @@ always @(*) begin
 end
 
 always @(posedge clk) begin
-    if (ram_cs && !cpu_wr && cen) begin  // !cpu_wr means write
-        intram[ram_addr] <= cpu_dout;
+    if (ram_cs && cen) begin
+        if (ram_addr == 9'h44) begin  // $94 - $50 = $44
+            $display("EGRET_RAM[$94]: read=%b write=%b value=%02x PC=%04x", 
+                     cpu_wr, !cpu_wr, intram[ram_addr], cpu_addr);
+        end
+        
+        if (!cpu_wr) begin  // Write
+            intram[ram_addr] <= cpu_dout;
+            if (ram_addr == 9'h44) begin
+                $display("EGRET_RAM[$94]: WRITE new_value=%02x PC=%04x", cpu_dout, cpu_addr);
+            end
+        end
     end
 end
-
 // ============================================================================
 // ROM (4KB at 0x1000-0x1FFF)
 // ============================================================================
