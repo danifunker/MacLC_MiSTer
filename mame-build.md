@@ -148,14 +148,14 @@ tree roms
 **With verbose logging (if enabled in Step 3):**
 ```bash
 # Capture full boot logs
-./maclc maclc -hard mac608.chd -verbose 2>&1 | tee maclc_boot_full.log
+./maclc maclc -hard mac608.chd -oslog 2>&1 | tee maclc_boot_verbose.log
 
 # Let it boot completely, then quit with ESC -> Exit
 ```
 
 **With debugger:**
 ```bash
-./maclc maclc -hard mac608.chd -debug -verbose 2>&1 | tee maclc_debug.log
+./maclc maclc -hard mac608.chd -debug -oslog 2>&1 | tee maclc_debug.log
 ```
 
 ## Step 7: Analyzing Logs
