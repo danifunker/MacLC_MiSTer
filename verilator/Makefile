@@ -10,7 +10,7 @@ V_DEFINE = +define+debug=1 +define+SIMULATION=1 +define+USE_EGRET_CPU=1  -CFLAGS
 	-I$(RTL)/fx68k \
 	-I$(RTL)/tg68k \
 	-I$(RTL)/uart \
-	-I$(RTL)/jt6805 \
+	-I$(RTL)/egret \
         --timing
 # Suppress common warnings that don't affect simulation correctness
 V_DEFINE += -Wno-WIDTH -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-IMPLICIT -Wno-PINMISSING -Wno-UNUSEDSIGNAL -Wno-UNOPTFLAT -Wno-CASEINCOMPLETE -Wno-UNSIGNED -Wno-CMPCONST -Wno-LATCH -Wno-UNDRIVEN -Wno-MISINDENT -Wno-COMBDLY -Wno-INITIALDLY -Wno-SYNCASYNCNET
@@ -83,11 +83,10 @@ V_SRC = \
 	$(RTL)/ncr5380.sv \
 	$(RTL)/scc.v \
 	$(RTL)/cuda_maclc.sv \
-	$(RTL)/egret.sv \
-	$(RTL)/jt6805/jt6805.v \
-	$(RTL)/jt6805/jt6805_alu.v \
-	$(RTL)/jt6805/jt6805_ctrl.v \
-	$(RTL)/jt6805/jt6805_regs.v \
+	$(RTL)/pll/pll_0002.v \
+	$(RTL)/egret/egret_wrapper.sv \
+	$(RTL)/egret/m68hc05_alu.sv \
+	$(RTL)/egret/m68hc05_core.sv \
 	$(RTL)/uart/txuart.v \
 	$(RTL)/uart/rxuart.v
 

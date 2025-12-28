@@ -499,7 +499,7 @@ assign cpuDataOut = selectIWM ? iwmDataOut :
 	// Otherwise uses state machine implementation (cuda_maclc.sv)
 
 `ifdef USE_EGRET_CPU
-	egret egret_inst(
+	egret_wrapper egret_inst(
 		.clk            (clk32),
 		.clk8_en        (clk8_en_p),
 		.reset          (egretReset),  // Egret uses shorter reset than 68000
