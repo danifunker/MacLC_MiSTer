@@ -153,14 +153,14 @@ wire [8:0]  ram_addr = cpu_addr[8:0] - 9'h50;
 // Bit 1-0: PSU control
 
 wire [7:0] pa_in = {
-    pa_out[7],        // Bit 7: readback
-    adb_data_in,      // Bit 6: ADB data in
-    1'b1,             // Bit 5: system type = Egret controls power
-    pa_out[4],        // Bit 4: DFAC latch readback
-    pa_out[3],        // Bit 3: reset readback
-    1'b1,             // Bit 2: keyboard power (not pressed)
-    1'b1,             // Bit 1: PSU
-    1'b1              // Bit 0: control panel
+    pa_out[7],        // Bit 7: readback (output)
+    adb_data_in,      // Bit 6: ADB data in (input - keep as is for now)
+    1'b0,             // Bit 5: system type = 0 (CHANGED)
+    pa_out[4],        // Bit 4: DFAC latch readback (output)
+    pa_out[3],        // Bit 3: reset readback (output)
+    1'b0,             // Bit 2: keyboard power = 0/pressed (CHANGED)
+    1'b0,             // Bit 1: PSU = 0 (CHANGED)
+    pa_out[0]         // Bit 0: control panel readback (output)
 };
 
 always @(*) begin
@@ -260,32 +260,42 @@ end
 // ============================================================================
 // RAM (448 bytes at 0x50-0x1FF)
 // ============================================================================
-always @(posedge clk) begin
+// RAM read is combinational, write is synchronous
+always @(*) begin
     if (ram_cs) begin
-        ram_dout <= intram[ram_addr];
-        if (!cpu_wr && cen) begin  // !cpu_wr means write
-            intram[ram_addr] <= cpu_dout;
-        end
+        ram_dout = intram[ram_addr];
+    end else begin
+        ram_dout = 8'h00;
+    end
+end
+
+always @(posedge clk) begin
+    if (ram_cs && !cpu_wr && cen) begin  // !cpu_wr means write
+        intram[ram_addr] <= cpu_dout;
     end
 end
 
 // ============================================================================
 // ROM (4KB at 0x1000-0x1FFF)
 // ============================================================================
-always @(posedge clk) begin
+// CRITICAL: Make ROM read combinational (not registered) so data is available same cycle
+always @(*) begin
     if (rom_cs) begin
-        rom_dout <= rom[rom_addr];
-`ifdef SIMULATION
-        // Debug ROM reads for first few cycles
-        if (cycle_count < 20) begin
-            $display("EGRET_ROM_READ[%0d]: addr=%04x rom_addr=%03x data=%02x rom_cs=%b", 
-                     cycle_count, cpu_addr, rom_addr, rom[rom_addr], rom_cs);
-        end
-`endif
+        rom_dout = rom[rom_addr];
     end else begin
-        rom_dout <= 8'hFF;
+        rom_dout = 8'hFF;
     end
 end
+
+`ifdef SIMULATION
+// Debug ROM reads for first few cycles
+always @(posedge clk) begin
+    if (rom_cs && cycle_count < 20) begin
+        $display("EGRET_ROM_READ[%0d]: addr=%04x rom_addr=%03x data=%02x rom_cs=%b", 
+                 cycle_count, cpu_addr, rom_addr, rom[rom_addr], rom_cs);
+    end
+end
+`endif
 
 // ============================================================================
 // CPU data input mux
@@ -364,10 +374,14 @@ always @(posedge clk) begin
         // Log Port B and C latch/DDR writes
         if (port_cs && !cpu_wr) begin
             case (cpu_addr[3:0])
+                4'h0: $display("EGRET[%0d] PC=%04x: Port A LATCH write = 0x%02x (was 0x%02x)",
+                              cycle_count, cpu_addr, cpu_dout, pa_latch);
                 4'h1: $display("EGRET[%0d] PC=%04x: Port B LATCH write = 0x%02x (was 0x%02x)",
                               cycle_count, cpu_addr, cpu_dout, pb_latch);
                 4'h2: $display("EGRET[%0d] PC=%04x: Port C LATCH write = 0x%02x (bit3=%b -> reset_680x0 will be %b)",
                               cycle_count, cpu_addr, cpu_dout, cpu_dout[3], ~cpu_dout[3]);
+                4'h4: $display("EGRET[%0d] PC=%04x: Port A DDR write = 0x%02x",
+                              cycle_count, cpu_addr, cpu_dout);
                 4'h5: $display("EGRET[%0d] PC=%04x: Port B DDR write = 0x%02x",
                               cycle_count, cpu_addr, cpu_dout);
                 4'h6: $display("EGRET[%0d] PC=%04x: Port C DDR write = 0x%02x",
@@ -406,6 +420,12 @@ always @(posedge clk) begin
         // Track program counter
         if (rom_cs && cpu_wr) begin  // cpu_wr=1 means read
             last_pc <= cpu_addr;
+        end
+
+        // Debug Port A reads (especially in the wait loop around 0x0F9E)
+        if (port_cs && cpu_wr && cpu_addr[3:0] == 4'h0) begin
+            $display("EGRET[%0d]: PORT A READ = 0x%02x (pa_out=%02x pa_in=%02x pa_ddr=%02x)",
+                     cycle_count, cpu_din_r, pa_out, pa_in, pa_ddr);
         end
 
         // Log first 50 CPU cycles
