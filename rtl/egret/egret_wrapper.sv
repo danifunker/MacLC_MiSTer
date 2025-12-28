@@ -1,286 +1,388 @@
-// egret_wrapper.sv - Egret microcontroller wrapper
-// Integrates 68HC05 CPU core with ROM, RAM, and GPIO for Mac LC
+// egret_wrapper.sv - Egret microcontroller for Mac LC
+// Uses m68hc05_core CPU with real Egret ROM (341S0851)
 //
-// This module wraps the 68HC05 CPU and provides:
-// - 4KB ROM (Egret firmware)
-// - 448 bytes internal RAM (for PRAM, RTC, variables)
-// - GPIO port mapping to VIA interface
-// - ADB line control
-// - Reset control for 68020
+// Based on MAME's egret.cpp by R. Belmont
+// m68hc05_core converted from VHDL by Ulrich Riedel
+//
+// This is a drop-in replacement for egret.sv with the exact same interface
+
+`default_nettype none
 
 module egret_wrapper (
-    input  logic        clk,           // 4.194304 MHz CPU clock
-    input  logic        rst_n,         // Active low reset
-    input  logic        irq_n,         // Active low interrupt (not used currently)
-    
-    // VIA interface (matches your existing egret.sv)
-    input  logic        via_phi2,
-    input  logic        via_cs1,
-    input  logic        via_cs2,
-    input  logic        via_rnw,
-    input  logic [7:0]  via_data_in,
-    output logic [7:0]  via_data_out,
-    input  logic [3:0]  via_addr,
-    
-    // ADB interface
-    output logic        adb_out,       // ADB data line (to device)
-    input  logic        adb_in,        // ADB data line (from device)
-    
+    input  wire        clk,
+    input  wire        clk8_en,
+    input  wire        reset,
+
+    // RTC timestamp initialization (Unix time)
+    input  wire [32:0] timestamp,
+
+    // Direct VIA Port B connections
+    input  wire        via_tip,          // VIA Port B bit 5 - Transaction In Progress (active low)
+    input  wire        via_byteack_in,   // VIA Port B bit 4 - from VIA
+    output wire        cuda_treq,        // Port B bit 3 - Transfer Request (active LOW)
+    output wire        cuda_byteack,     // Port B bit 4 - Byte Acknowledge
+
+    // VIA Shift Register interface (CB1/CB2)
+    output wire        cuda_cb1,         // CB1 - Shift clock (Egret drives in external mode)
+    input  wire        via_cb2_in,       // CB2 - Data from VIA (when VIA sending)
+    output wire        cuda_cb2,         // CB2 - Data to VIA (when Egret sending)
+    output wire        cuda_cb2_oe,      // CB2 output enable
+
+    // VIA SR control signals
+    input  wire        via_sr_read,      // VIA is reading SR (shift in mode)
+    input  wire        via_sr_write,     // VIA has written SR (shift out mode)
+    input  wire        via_sr_ext_clk,   // VIA is in external clock mode
+    input  wire        via_sr_dir,       // VIA shift direction: 0=in, 1=out
+    output reg         cuda_sr_irq,      // Request SR interrupt
+
+    // Full port B for completeness
+    output wire [7:0]  cuda_portb,       // Complete Port B output
+    output wire [7:0]  cuda_portb_oe,    // Port B output enables
+
+    // ADB signals (simplified)
+    input  wire        adb_data_in,
+    output reg         adb_data_out,
+
     // System control
-    output logic        reset_out,     // Reset to 68020
-    
-    // DFAC (audio chip) control
-    output logic        dfac_scl,      // I2C clock
-    output logic        dfac_sda,      // I2C data
-    output logic        dfac_latch,    // DFAC latch signal
-    
-    // PRAM interface (for future save/load)
-    output logic [7:0]  pram_addr,
-    output logic [7:0]  pram_data_out,
-    input  logic [7:0]  pram_data_in,
-    output logic        pram_we
+    output reg         reset_680x0,
+    output reg         nmi_680x0
 );
 
-    // CPU signals
-    logic [15:0] cpu_addr;
-    logic        cpu_wr;
-    logic [7:0]  cpu_datain;
-    logic [7:0]  cpu_dataout;
-    logic [3:0]  cpu_state;
-    
-    // ROM signals
-    logic [7:0]  rom_data;
-    logic        rom_cs;
-    
-    // RAM signals  
-    logic [7:0]  ram_data;
-    logic [8:0]  ram_addr;  // 512 bytes (but only 448 used: 0x50-0x1FF)
-    logic        ram_cs;
-    logic        ram_we;
-    
-    // GPIO ports (following MAME's egret.cpp port definitions)
-    logic [7:0] porta_in, porta_out, porta_ddr;
-    logic [7:0] portb_in, portb_out, portb_ddr;
-    logic [3:0] portc_in, portc_out, portc_ddr;
-    
-    // VIA communication signals
-    logic via_data_bit;      // VIA shift register data (Port B bit 5)
-    logic via_clock_bit;     // VIA clock (Port B bit 4)
-    logic xcvr_session;      // VIA transceiver session (Port B bit 1)
-    logic sys_session;       // VIA system session input (Port B bit 3)
-    logic via_full;          // VIA full flag input (Port B bit 2)
-    
-    // Internal registers for VIA communication
-    logic [7:0] via_shift_reg;
-    logic [2:0] via_bit_count;
-    
-    //==========================================================================
-    // 68HC05 CPU Core Instantiation
-    //==========================================================================
-    m68hc05_core cpu (
-        .clk(clk),
-        .rst(rst_n),
-        .irq(~irq_n),
-        .addr(cpu_addr),
-        .wr(cpu_wr),
-        .datain(cpu_datain),
-        .state(cpu_state),
-        .dataout(cpu_dataout)
-    );
-    
-    //==========================================================================
-    // Memory Map Decoding
-    // Based on 68HC05EG memory map:
-    // 0x0000-0x003F: I/O and control registers
-    // 0x0050-0x01FF: Internal RAM (448 bytes) - used for PRAM, RTC, variables
-    // 0x0F00-0x1FFF: ROM (4KB + 256 byte header = 0x1100 bytes in .bin file)
-    //                We use 0x1000-0x1FFF (4KB) for the actual ROM
-    //==========================================================================
-    
-    assign rom_cs = (cpu_addr >= 16'h1000) && (cpu_addr <= 16'hFFFF);  // ROM at top 4KB
-    assign ram_cs = (cpu_addr >= 16'h0050) && (cpu_addr <= 16'h01FF);  // Internal RAM
-    
-    // RAM address calculation (0x50-0x1FF maps to 0x000-0x1AF)
-    assign ram_addr = cpu_addr[8:0] - 9'h50;
-    assign ram_we = ram_cs && !cpu_wr;
-    
-    // CPU data input mux
-    always_comb begin
-        if (rom_cs)
-            cpu_datain = rom_data;
-        else if (ram_cs)
-            cpu_datain = ram_data;
-        else if (cpu_addr[15:8] == 8'h00)  // I/O ports
-            case (cpu_addr[7:0])
-                8'h00: cpu_datain = porta_in;   // Port A data
-                8'h01: cpu_datain = portb_in;   // Port B data
-                8'h02: cpu_datain = {4'h0, portc_in};  // Port C data (4-bit)
-                8'h04: cpu_datain = porta_ddr;  // Port A DDR
-                8'h05: cpu_datain = portb_ddr;  // Port B DDR
-                8'h06: cpu_datain = {4'h0, portc_ddr};  // Port C DDR
-                default: cpu_datain = 8'h00;
-            endcase
-        else
-            cpu_datain = 8'h00;
+wire cen = clk8_en;
+
+// ============================================================================
+// Memory map for Egret (68HC05 with 64KB address space from CPU core)
+// ============================================================================
+// 0x0000-0x000F: I/O registers (Ports A, B, C, DDR, etc.)
+// 0x0050-0x01FF: Internal RAM (448 bytes for PRAM, RTC, variables)
+// 0x1000-0x1FFF: ROM (4KB, Egret firmware)
+
+localparam ROM_SIZE = 4096;  // 4KB
+
+// CPU signals (from m68hc05_core)
+wire [15:0] cpu_addr;
+wire        cpu_wr;
+wire [7:0]  cpu_din;
+wire [7:0]  cpu_dout;
+wire [3:0]  cpu_state;
+
+// Port registers (68HC05 style)
+reg  [7:0] pa_ddr, pb_ddr;
+reg  [7:0] pa_latch, pb_latch;
+reg  [3:0] pc_ddr, pc_latch;
+
+// Port I/O
+reg  [7:0] pa_out, pb_out;
+reg  [3:0] pc_out;
+
+// Memory
+reg  [7:0] intram[0:447];    // Internal RAM (0x50-0x1FF)
+reg  [7:0] ram_dout;
+
+// ROM
+reg  [7:0] rom[0:ROM_SIZE-1];
+reg  [7:0] rom_dout;
+
+// Initialize ROM from hex file
+initial begin
+`ifdef SIMULATION
+    $readmemh("../rtl/egret_rom.hex", rom);
+`else
+    $readmemh("rtl/egret_rom.hex", rom);
+`endif
+end
+
+// Address decoding
+wire port_cs = (cpu_addr < 16'h0010);
+wire ram_cs  = (cpu_addr >= 16'h0050) && (cpu_addr < 16'h0200);
+wire rom_cs  = (cpu_addr >= 16'h1000) && (cpu_addr < 16'h2000);
+wire [11:0] rom_addr = cpu_addr[11:0];
+wire [8:0]  ram_addr = cpu_addr[8:0] - 9'h50;
+
+// ============================================================================
+// Port A - ADB and system control
+// ============================================================================
+// Bit 7 (O): ADB data line out
+// Bit 6 (I): ADB data line in
+// Bit 5 (I): System type (1 = Egret controls power)
+// Bit 4 (O): DFAC latch
+// Bit 3 (O): 680x0 reset pulse
+// Bit 2 (I): Keyboard power switch
+// Bit 1-0: PSU control
+
+wire [7:0] pa_in = {
+    pa_out[7],        // Bit 7: readback
+    adb_data_in,      // Bit 6: ADB data in
+    1'b1,             // Bit 5: system type = Egret controls power
+    pa_out[4],        // Bit 4: DFAC latch readback
+    pa_out[3],        // Bit 3: reset readback
+    1'b1,             // Bit 2: keyboard power (not pressed)
+    1'b1,             // Bit 1: PSU
+    1'b1              // Bit 0: control panel
+};
+
+always @(*) begin
+    adb_data_out = pa_out[7];
+end
+
+// ============================================================================
+// Port B - VIA interface (this is the key interface)
+// ============================================================================
+// Bit 7 (O): DFAC clock (I2C SCL)
+// Bit 6 (I/O): DFAC data (I2C SDA)
+// Bit 5 (I/O): VIA shift register data = CB2
+// Bit 4 (O): VIA clock = CB1
+// Bit 3 (I): VIA SYS_SESSION = TIP from VIA
+// Bit 2 (I): VIA_FULL (tied high for now)
+// Bit 1 (O): VIA XCEIVER SESSION = TREQ to VIA
+// Bit 0 (I): +5V sense
+
+wire [7:0] pb_in = {
+    pb_out[7],        // Bit 7: DFAC clock readback
+    1'b1,             // Bit 6: DFAC data (not connected)
+    via_cb2_in,       // Bit 5: CB2 from VIA
+    pb_out[4],        // Bit 4: CB1 readback
+    via_tip,          // Bit 3: TIP from VIA (0 = asserted)
+    1'b1,             // Bit 2: VIA_FULL (tied high)
+    pb_out[1],        // Bit 1: TREQ readback
+    1'b1              // Bit 0: +5V sense
+};
+
+// Output assignments
+assign cuda_cb1    = pb_out[4];
+assign cuda_cb2    = pb_out[5];
+assign cuda_cb2_oe = pb_ddr[5];
+assign cuda_treq   = ~pb_out[1];  // Active low (invert)
+assign cuda_byteack = 1'b0;       // Not used in Egret
+
+assign cuda_portb    = pb_out;
+assign cuda_portb_oe = pb_ddr;
+
+// ============================================================================
+// Port C - 68000 control
+// ============================================================================
+// Bit 3 (O): 680x0 reset
+// Bit 2: IPL2
+// Bit 1-0: IPL1-0
+
+wire [3:0] pc_in = {
+    pc_out[3],        // Bit 3: reset readback
+    1'b1,             // Bit 2: IPL2
+    1'b1,             // Bit 1: IPL1
+    1'b1              // Bit 0: IPL0
+};
+
+always @(*) begin
+    reset_680x0 = ~pc_out[3];  // Active high to 68000
+    nmi_680x0 = 1'b0;
+end
+
+// ============================================================================
+// Port output logic (68HC05 style: out = (latch & ddr) | (in & ~ddr))
+// ============================================================================
+always @(posedge clk) begin
+    if (reset) begin
+        pa_out <= 8'h00;
+        pb_out <= 8'h00;
+        pc_out <= 4'h0;
+    end else if (cen) begin
+        pa_out <= (pa_latch & pa_ddr) | (pa_in & ~pa_ddr);
+        pb_out <= (pb_latch & pb_ddr) | (pb_in & ~pb_ddr);
+        pc_out <= (pc_latch & pc_ddr) | (pc_in & ~pc_ddr);
     end
-    
-    //==========================================================================
-    // ROM: Egret Firmware (4KB)
-    // This will be initialized with 341S0851.bin (or .hex)
-    //==========================================================================
-    logic [7:0] rom [0:4095];  // 4KB ROM
-    
-    initial begin
-        // Load firmware from hex file
-        $readmemh("rtl/egret/egret_rom.hex", rom);
+end
+
+// ============================================================================
+// Port and DDR register writes
+// ============================================================================
+always @(posedge clk) begin
+    if (reset) begin
+        pa_latch <= 8'h00;
+        pb_latch <= 8'h00;
+        pc_latch <= 4'h0;
+        pa_ddr   <= 8'h00;
+        pb_ddr   <= 8'h00;
+        pc_ddr   <= 4'h0;
+    end else if (port_cs && !cpu_wr && cen) begin  // !cpu_wr means write
+        case (cpu_addr[3:0])
+            4'h0: pa_latch <= cpu_dout;
+            4'h1: pb_latch <= cpu_dout;
+            4'h2: pc_latch <= cpu_dout[3:0];
+            4'h4: pa_ddr   <= cpu_dout;
+            4'h5: pb_ddr   <= cpu_dout;
+            4'h6: pc_ddr   <= cpu_dout[3:0];
+        endcase
     end
-    
-    // ROM address is cpu_addr - 0x1000 (maps 0x1000-0x1FFF to 0x000-0xFFF)
-    assign rom_data = rom[cpu_addr[11:0]];
-    
-    //==========================================================================
-    // Internal RAM: 448 bytes (0x50-0x1FF in CPU address space)
-    // Used for PRAM (0x70-0x16F = 256 bytes), RTC, and variables
-    //==========================================================================
-    logic [7:0] ram [0:447];  // 448 bytes
-    
-    always_ff @(posedge clk) begin
-        if (ram_we) begin
-            ram[ram_addr[8:0]] <= cpu_dataout;
+end
+
+// ============================================================================
+// RAM (448 bytes at 0x50-0x1FF)
+// ============================================================================
+always @(posedge clk) begin
+    if (ram_cs) begin
+        ram_dout <= intram[ram_addr];
+        if (!cpu_wr && cen) begin  // !cpu_wr means write
+            intram[ram_addr] <= cpu_dout;
         end
     end
-    
-    assign ram_data = ram[ram_addr[8:0]];
-    
-    // PRAM interface (0x70-0x16F in CPU space = 0x20-0x11F in RAM)
-    // For future save/load functionality
-    assign pram_addr = ram_addr[7:0] - 8'h20;  // Offset to PRAM region
-    assign pram_data_out = (ram_addr >= 9'h020 && ram_addr <= 9'h11F) ? ram[ram_addr] : 8'h00;
-    assign pram_we = 1'b0;  // Not implemented yet
-    
-    //==========================================================================
-    // GPIO Port Registers
-    // Implemented as memory-mapped I/O at 0x00-0x06
-    //==========================================================================
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            porta_out <= 8'h00;
-            portb_out <= 8'h00;
-            portc_out <= 4'h0;
-            porta_ddr <= 8'h00;
-            portb_ddr <= 8'h00;
-            portc_ddr <= 4'h0;
-        end else if (!cpu_wr && (cpu_addr[15:8] == 8'h00)) begin
-            case (cpu_addr[7:0])
-                8'h00: porta_out <= cpu_dataout;
-                8'h01: portb_out <= cpu_dataout;
-                8'h02: portc_out <= cpu_dataout[3:0];
-                8'h04: porta_ddr <= cpu_dataout;
-                8'h05: portb_ddr <= cpu_dataout;
-                8'h06: portc_ddr <= cpu_dataout[3:0];
+end
+
+// ============================================================================
+// ROM (4KB at 0x1000-0x1FFF)
+// ============================================================================
+always @(posedge clk) begin
+    if (rom_cs) begin
+        rom_dout <= rom[rom_addr];
+    end else begin
+        rom_dout <= 8'hFF;
+    end
+end
+
+// ============================================================================
+// CPU data input mux
+// ============================================================================
+reg [7:0] cpu_din_r;
+always @(*) begin
+    if (port_cs) begin
+        case (cpu_addr[3:0])
+            4'h0: cpu_din_r = pa_out;
+            4'h1: cpu_din_r = pb_out;
+            4'h2: cpu_din_r = {4'hF, pc_out};
+            default: cpu_din_r = 8'hFF;
+        endcase
+    end else if (ram_cs) begin
+        cpu_din_r = ram_dout;
+    end else if (rom_cs) begin
+        cpu_din_r = rom_dout;
+    end else begin
+        cpu_din_r = 8'hFF;
+    end
+end
+
+assign cpu_din = cpu_din_r;
+
+// ============================================================================
+// CPU instantiation - m68hc05_core
+// ============================================================================
+m68hc05_core u_cpu (
+    .clk(clk),
+    .rst(~reset),      // m68hc05_core uses active-low reset
+    .irq(1'b1),        // No external IRQ for now
+    .addr(cpu_addr),
+    .wr(cpu_wr),
+    .datain(cpu_din),
+    .state(cpu_state),
+    .dataout(cpu_dout)
+);
+
+// ============================================================================
+// Stub for cuda_sr_irq (not implemented yet)
+// ============================================================================
+always @(posedge clk) begin
+    if (reset)
+        cuda_sr_irq <= 1'b0;
+    // TODO: Implement SR interrupt logic if needed
+end
+
+// ============================================================================
+// Debug (simulation only)
+// ============================================================================
+`ifdef SIMULATION
+reg [7:0] pb_out_prev, pb_latch_prev, pb_ddr_prev;
+reg [7:0] pa_out_prev;
+reg       via_tip_prev;
+reg [31:0] cycle_count;
+reg [15:0] last_pc;
+reg       treq_prev;
+
+always @(posedge clk) begin
+    if (reset) begin
+        cycle_count <= 0;
+        pb_out_prev <= 8'hFF;
+        pb_latch_prev <= 0;
+        pb_ddr_prev <= 0;
+        pa_out_prev <= 0;
+        via_tip_prev <= 1;
+        last_pc <= 0;
+        treq_prev <= 1;
+    end else if (cen) begin
+        cycle_count <= cycle_count + 1;
+        pb_out_prev <= pb_out;
+        pa_out_prev <= pa_out;
+        via_tip_prev <= via_tip;
+        treq_prev <= ~pb_out[1];
+
+        // Log Port B and C latch/DDR writes
+        if (port_cs && !cpu_wr) begin
+            case (cpu_addr[3:0])
+                4'h1: $display("EGRET[%0d] PC=%04x: Port B LATCH write = 0x%02x (was 0x%02x)",
+                              cycle_count, cpu_addr, cpu_dout, pb_latch);
+                4'h2: $display("EGRET[%0d] PC=%04x: Port C LATCH write = 0x%02x (bit3=%b -> reset_680x0 will be %b)",
+                              cycle_count, cpu_addr, cpu_dout, cpu_dout[3], ~cpu_dout[3]);
+                4'h5: $display("EGRET[%0d] PC=%04x: Port B DDR write = 0x%02x",
+                              cycle_count, cpu_addr, cpu_dout);
+                4'h6: $display("EGRET[%0d] PC=%04x: Port C DDR write = 0x%02x",
+                              cycle_count, cpu_addr, cpu_dout);
             endcase
         end
+
+        // Log Port B output changes
+        if (pb_out != pb_out_prev) begin
+            $display("EGRET[%0d]: PB OUT 0x%02x->0x%02x (CB1=%b CB2=%b TREQ=%b) TIP_in=%b",
+                     cycle_count, pb_out_prev, pb_out,
+                     pb_out[4], pb_out[5], ~pb_out[1], via_tip);
+        end
+
+        // Log TREQ transitions
+        if ((~pb_out[1]) != treq_prev) begin
+            if (~pb_out[1])
+                $display("EGRET[%0d]: *** TREQ ACTIVE (requesting transfer) ***", cycle_count);
+            else
+                $display("EGRET[%0d]: *** TREQ INACTIVE ***", cycle_count);
+        end
+
+        // Log TIP input changes from VIA
+        if (via_tip != via_tip_prev) begin
+            $display("EGRET[%0d]: TIP from VIA changed: %b -> %b",
+                     cycle_count, via_tip_prev, via_tip);
+        end
+
+        // Log CB1 clock edges
+        if (pb_out[4] != pb_out_prev[4]) begin
+            $display("EGRET[%0d]: CB1 %s edge (CB2_out=%b CB2_in=%b)",
+                     cycle_count, pb_out[4] ? "RISING" : "FALLING",
+                     pb_out[5], via_cb2_in);
+        end
+
+        // Track program counter
+        if (rom_cs && cpu_wr) begin  // cpu_wr=1 means read
+            last_pc <= cpu_addr;
+        end
+
+        // Log first 50 CPU cycles
+        if (cycle_count < 50) begin
+            $display("EGRET_CPU[%0d]: addr=%04x din=%02x dout=%02x wr=%b rom=%b ram=%b port=%b state=%x",
+                     cycle_count, cpu_addr, cpu_din, cpu_dout, cpu_wr,
+                     rom_cs, ram_cs, port_cs, cpu_state);
+        end
     end
-    
-    //==========================================================================
-    // GPIO Port Input Logic
-    // Maps physical signals to CPU port inputs based on DDR
-    //==========================================================================
-    
-    // Port A bit definitions (from MAME egret.cpp):
-    // Bit 7: O - ADB data line out
-    // Bit 6: I - ADB data line in
-    // Bit 5: I - System type (0=hardware power switch, 1=Egret controls power)
-    // Bit 4: O - DFAC latch
-    // Bit 3: O - ? (asserted briefly when resetting 680x0)
-    // Bit 2: I - Keyboard power switch
-    // Bit 1: ? - PSU enable OUT (type 0) or chassis power switch IN (type 1)
-    // Bit 0: ? - Control panel enable IN (LC) or PSU enable OUT (type 1)
-    
-    always_comb begin
-        porta_in = porta_out;  // Start with output values
-        
-        // Override inputs based on DDR (0=input)
-        if (!porta_ddr[6]) porta_in[6] = adb_in;         // ADB data in
-        if (!porta_ddr[5]) porta_in[5] = 1'b1;           // System type (Egret controls power)
-        if (!porta_ddr[2]) porta_in[2] = 1'b1;           // Keyboard power switch (on)
-        if (!porta_ddr[1]) porta_in[1] = 1'b1;           // Chassis power switch
-        if (!porta_ddr[0]) porta_in[0] = 1'b0;           // Control panel (LC style)
+end
+
+// Periodic status
+reg [19:0] status_timer;
+always @(posedge clk) begin
+    if (reset) begin
+        status_timer <= 0;
+    end else if (cen) begin
+        status_timer <= status_timer + 1;
+        if (status_timer == 0) begin
+            $display("EGRET STATUS: PC~%04x PB_out=%02x PB_ddr=%02x TREQ=%b TIP=%b CB1=%b CB2=%b state=%x",
+                     last_pc, pb_out, pb_ddr, ~pb_out[1], via_tip, pb_out[4], pb_out[5], cpu_state);
+        end
     end
-    
-    // Port B bit definitions (from MAME egret.cpp):
-    // Bit 7: O - DFAC bit clock (I2C SCL)
-    // Bit 6: ? - DFAC data I/O (I2C SDA)
-    // Bit 5: ? - VIA shift register data (bidirectional)
-    // Bit 4: O - VIA clock
-    // Bit 3: I - VIA SYS_SESSION
-    // Bit 2: I - VIA VIA_FULL
-    // Bit 1: O - VIA XCEIVER SESSION
-    // Bit 0: I - +5v sense
-    
-    always_comb begin
-        portb_in = portb_out;  // Start with output values
-        
-        // Override inputs based on DDR
-        if (!portb_ddr[5]) portb_in[5] = via_data_bit;   // VIA data
-        if (!portb_ddr[3]) portb_in[3] = sys_session;    // VIA sys_session
-        if (!portb_ddr[2]) portb_in[2] = via_full;       // VIA full flag
-        if (!portb_ddr[0]) portb_in[0] = 1'b1;           // +5V present
-    end
-    
-    // Port C bit definitions (from MAME egret.cpp):
-    // Bit 3: O - 680x0 reset
-    // Bit 2: ? - 680x0 IPL 2 (bidirectional)
-    // Bit 1: ? - Trickle sense (if Egret controls PSU)
-    // Bit 0: ? - Pulled up to +5V (if Egret controls PSU)
-    
-    always_comb begin
-        portc_in = portc_out;  // Start with output values
-        
-        // For Egret-controlled power (LC style)
-        if (!portc_ddr[1]) portc_in[1] = 1'b1;  // Trickle sense
-        if (!portc_ddr[0]) portc_in[0] = 1'b1;  // Pulled to +5V
-    end
-    
-    //==========================================================================
-    // Output Signal Mapping
-    //==========================================================================
-    
-    // ADB control (Port A bit 7, inverted because it drives a pull-down MOSFET)
-    assign adb_out = ~porta_out[7];
-    
-    // DFAC control (Port A bit 4, Port B bits 7 and 6)
-    assign dfac_latch = porta_out[4];
-    assign dfac_scl = portb_out[7];
-    assign dfac_sda = portb_out[6];
-    
-    // 68020 reset (Port C bit 3)
-    assign reset_out = portc_out[3];
-    
-    // VIA communication (Port B)
-    assign via_data_bit = portb_out[5];
-    assign via_clock_bit = portb_out[4];
-    assign xcvr_session = portb_out[1];
-    
-    // For now, stub out the VIA communication
-    // TODO: Implement proper VIA shift register protocol
-    assign sys_session = 1'b0;
-    assign via_full = 1'b0;
-    
-    //==========================================================================
-    // VIA Communication Logic (stub for now)
-    // This needs to implement the actual VIA shift register protocol
-    // to communicate with the main Mac VIA
-    //==========================================================================
-    
-    // The VIA communication protocol:
-    // - Egret uses Port B bit 5 for data, bit 4 for clock
-    // - It implements a shift register protocol with the Mac's VIA
-    // - sys_session and via_full are handshake signals
-    // - xcvr_session controls the direction
-    
-    // TODO: This needs to be connected to your existing VIA interface
-    // For now, just pass through zeros
-    assign via_data_out = 8'h00;
+end
+`endif
 
 endmodule
+
+`default_nettype wire
