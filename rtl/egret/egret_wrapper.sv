@@ -146,7 +146,7 @@ wire [7:0] pa_in = {
     adb_data_in,      // Bit 6: ADB data in
     1'b1,             // Bit 5: system type = Egret controls power
     pa_out[4],        // Bit 4: DFAC latch readback
-    1'b0,              // Bit 3: reset readback
+    pa_out[3],        // Bit 3: reset readback
     1'b1,             // Bit 2: keyboard power (not pressed)
     1'b1,             // Bit 1: PSU
     1'b1              // Bit 0: control panel
@@ -203,8 +203,32 @@ wire [3:0] pc_in = {
     1'b1              // Bit 0: IPL0
 };
 
+// Auto-release 68020 from reset after initialization
+// The Egret firmware expects VIA communication before releasing reset,
+// but the 68020 needs to run first to initialize the VIA.
+// Solution: Force reset release after a short delay.
+reg [15:0] reset_release_counter;
+reg reset_680x0_override;
+
+always @(posedge clk) begin
+    if (reset) begin
+        reset_release_counter <= 0;
+        reset_680x0_override <= 1'b1; // Hold in reset initially
+    end else if (cen) begin
+        if (reset_release_counter < 16'h2000) begin
+            reset_release_counter <= reset_release_counter + 1;
+            reset_680x0_override <= 1'b1; // Keep in reset
+        end else begin
+            reset_680x0_override <= 1'b0; // Release reset after ~8K cycles
+        end
+    end
+end
+
 always @(*) begin
-    reset_680x0 = ~pc_out[3];  // Active high to 68000
+    // Release 68020 when either:
+    // 1. Egret firmware sets Port C bit 3 high, OR
+    // 2. Auto-release timer expires
+    reset_680x0 = reset_680x0_override & ~pc_out[3];  // Active high to 68000
     nmi_680x0 = 1'b0;
 end
 
@@ -344,6 +368,7 @@ reg       via_tip_prev;
 reg [31:0] cycle_count;
 reg [15:0] last_pc;
 reg       treq_prev;
+reg       reset_680x0_prev;
 
 always @(posedge clk) begin
     if (reset) begin
@@ -355,12 +380,23 @@ always @(posedge clk) begin
         via_tip_prev <= 1;
         last_pc <= 0;
         treq_prev <= 1;
+        reset_680x0_prev <= 1;
     end else if (cen) begin
         cycle_count <= cycle_count + 1;
         pb_out_prev <= pb_out;
         pa_out_prev <= pa_out;
         via_tip_prev <= via_tip;
         treq_prev <= ~pb_out[1];
+        reset_680x0_prev <= reset_680x0;
+
+        // Log 68020 reset release
+        if (reset_680x0 != reset_680x0_prev) begin
+            if (reset_680x0)
+                $display("EGRET[%0d]: *** 68020 RESET ASSERTED ***", cycle_count);
+            else
+                $display("EGRET[%0d]: *** 68020 RESET RELEASED (counter=%0d, pc_out[3]=%b) ***", 
+                         cycle_count, reset_release_counter, pc_out[3]);
+        end
 
         // Log Port B and C latch/DDR writes
         if (port_cs && !cpu_wr) begin
