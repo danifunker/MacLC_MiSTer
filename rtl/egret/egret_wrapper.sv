@@ -109,19 +109,31 @@ reg  [7:0] ram_dout;
 reg  [7:0] rom[0:ROM_SIZE-1];
 reg  [7:0] rom_dout;
 
-// Initialize ROM from hex file
+// PRAM storage (256 bytes loaded from disk)
+reg  [7:0] pram[0:255];
+reg        pram_loaded;
+reg        pc_bit3_prev;
+
+// Initialize ROM and PRAM from hex files
+integer i;
 initial begin
 `ifdef SIMULATION
     $readmemh("../rtl/egret/egret_rom.hex", rom);
     $display("EGRET ROM: Loaded %0d bytes from ../rtl/egret/egret_rom.hex", ROM_SIZE);
+    $readmemh("../rtl/egret/egret.pram", pram);
+    $display("EGRET PRAM: Loaded 256 bytes from ../rtl/egret/egret.pram");
 `else
     $readmemh("rtl/egret/egret_rom.hex", rom);
+    $readmemh("rtl/egret/egret.pram", pram);
 `endif
     
     // Initialize RAM to zeros (critical for proper Egret firmware operation)
-    for (int i = 0; i < 448; i = i + 1) begin
+    for (i = 0; i < 448; i = i + 1) begin
         intram[i] = 8'h00;
     end
+    
+    pram_loaded = 1'b0;
+    pc_bit3_prev = 1'b0;
 end
 
 // Address decoding
@@ -338,10 +350,41 @@ always @(posedge clk) begin
         pa_out <= 8'h00;
         pb_out <= 8'h00;
         pc_out <= 8'h00;
+        pc_bit3_prev <= 1'b0;
+        pram_loaded <= 1'b0;
     end else if (cen) begin
         pa_out <= (pa_latch & pa_ddr) | (pa_in & ~pa_ddr);
         pb_out <= (pb_latch & pb_ddr) | (pb_in & ~pb_ddr);
         pc_out <= (pc_latch & pc_ddr) | (pc_in & ~pc_ddr);
+        
+        // Track Port C bit 3 for falling edge detection
+        pc_bit3_prev <= pc_out[3];
+        
+        // Load PRAM when Egret asserts 680x0 reset (PC bit 3: 1->0 transition)
+        // This mimics MAME behavior where PRAM is loaded when reset is asserted
+        if (pc_bit3_prev && !pc_out[3] && !pram_loaded) begin
+            pram_loaded <= 1'b1;
+            $display("EGRET_PRAM[%0d]: Loading PRAM and RTC time on 680x0 reset assertion (PC3: 1->0)", cycle_count);
+        end
+    end
+end
+
+// Separate always block for PRAM loading (simulation only)
+integer pram_idx;
+always @(posedge clk) begin
+    if (pc_bit3_prev && !pc_out[3] && !pram_loaded && cen) begin
+        // Copy PRAM to internal RAM at addresses 0x70-0x16F
+        // Using blocking assignments for immediate effect
+        for (pram_idx = 0; pram_idx < 256; pram_idx = pram_idx + 1) begin
+            intram[pram_idx + (16'h70 - 16'h50)] = pram[pram_idx];
+        end
+        
+        // Initialize RTC time (use timestamp input)
+        // Addresses 0xAB-0xAE (offset from base 0x50)
+        intram[16'hAB - 16'h50] = timestamp[31:24];  // Seconds bits 31-24
+        intram[16'hAC - 16'h50] = timestamp[23:16];  // Seconds bits 23-16
+        intram[16'hAD - 16'h50] = timestamp[15:8];   // Seconds bits 15-8
+        intram[16'hAE - 16'h50] = timestamp[7:0];    // Seconds bits 7-0
     end
 end
 
