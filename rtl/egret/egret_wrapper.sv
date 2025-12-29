@@ -318,29 +318,29 @@ wire [7:0] pc_in = pc_latch;
 // but the 68020 needs to run first to initialize the VIA.
 // Solution: Force reset release after a short delay.
 reg [15:0] reset_release_counter;
-reg reset_680x0_override;
+// reg reset_680x0_override;
 
-always @(posedge clk) begin
-    if (reset) begin
-        reset_release_counter <= 0;
-        reset_680x0_override <= 1'b1; // Hold in reset initially
-    end else if (cen) begin
-        if (reset_release_counter < 16'h2000) begin
-            reset_release_counter <= reset_release_counter + 1;
-            reset_680x0_override <= 1'b1; // Keep in reset
-        end else begin
-            reset_680x0_override <= 1'b0; // Release reset after ~8K cycles
-        end
-    end
-end
+// always @(posedge clk) begin
+//     if (reset) begin
+//         reset_release_counter <= 0;
+//         reset_680x0_override <= 1'b1; // Hold in reset initially
+//     end else if (cen) begin
+//         if (reset_release_counter < 16'h2000) begin
+//             reset_release_counter <= reset_release_counter + 1;
+//             reset_680x0_override <= 1'b1; // Keep in reset
+//         end else begin
+//             reset_680x0_override <= 1'b0; // Release reset after ~8K cycles
+//         end
+//     end
+// end
 
-always @(*) begin
-    // Release 68020 when either:
-    // 1. Egret firmware sets Port C bit 3 high, OR
-    // 2. Auto-release timer expires
-    reset_680x0 = reset_680x0_override & ~pc_out[3];  // Active high to 68000
-    nmi_680x0 = 1'b0;
-end
+// always @(*) begin
+//     // Release 68020 when either:
+//     // 1. Egret firmware sets Port C bit 3 high, OR
+//     // 2. Auto-release timer expires
+//     reset_680x0 = reset_680x0_override & ~pc_out[3];  // Active high to 68000
+//     nmi_680x0 = 1'b0;
+// end
 
 // ============================================================================
 // Port output logic (68HC05 style: out = (latch & ddr) | (in & ~ddr))
