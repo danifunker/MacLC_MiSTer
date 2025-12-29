@@ -731,10 +731,11 @@ always @(posedge clk) begin
         end
 
         // Log ALL port accesses (read or write) to addresses 0x01 and 0x05
-        if (port_cs && (cpu_addr[3:0] == 4'h1 || cpu_addr[3:0] == 4'h5)) begin
-            $display("EGRET[%0d]: Port B access addr=%04x wr=%b din=%02x dout=%02x",
-                     cycle_count, cpu_addr, cpu_wr, cpu_din, cpu_dout);
-        end
+        // (Disabled for faster simulation)
+        // if (port_cs && (cpu_addr[3:0] == 4'h1 || cpu_addr[3:0] == 4'h5)) begin
+        //     $display("EGRET[%0d]: Port B access addr=%04x wr=%b din=%02x dout=%02x",
+        //              cycle_count, cpu_addr, cpu_wr, cpu_din, cpu_dout);
+        // end
 
         // Log Port B output changes
         // TREQ: pb_out[1]=0 means asserted (LOW), pb_out[1]=1 means deasserted (HIGH)
@@ -777,10 +778,11 @@ always @(posedge clk) begin
         end
 
         // Debug Port A reads (especially in the wait loop around 0x0F9E)
-        if (port_cs && cpu_wr && cpu_addr[3:0] == 4'h0) begin
-            $display("EGRET[%0d]: PORT A READ = 0x%02x (pa_out=%02x pa_in=%02x pa_ddr=%02x)",
-                     cycle_count, cpu_din_r, pa_out, pa_in, pa_ddr);
-        end
+        // (Disabled for faster simulation)
+        // if (port_cs && cpu_wr && cpu_addr[3:0] == 4'h0) begin
+        //     $display("EGRET[%0d]: PORT A READ = 0x%02x (pa_out=%02x pa_in=%02x pa_ddr=%02x)",
+        //              cycle_count, cpu_din_r, pa_out, pa_in, pa_ddr);
+        // end
 
         // Log first 500 CPU cycles
         if (cycle_count < 500) begin

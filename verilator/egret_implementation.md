@@ -53,7 +53,7 @@ wire cen = (clk_div == 3'b000);  // 4 MHz pulse (32/8)
 | **Reset_680x0 logic fix** | `egret_wrapper.sv` | Changed from `& ~pc_out[3]` to `\| pc_out[3]` |
 | **Wait for ROM download** | `sim.v` | n_reset held low until dio_download completes |
 
-### Recent Fixes (2024-12-28)
+### Recent Fixes (2024-12-28/29)
 
 #### Fix 1: reset_680x0 Logic Bug
 The reset_680x0 signal was using incorrect logic:
@@ -77,16 +77,43 @@ if(~pll_locked || reset || dio_download) begin
 end
 ```
 
-### Current Issue: 68020 Still Not Running
+#### Fix 3: Egret Boot Timing
+Egret was being released from reset before n_reset went high. This caused Egret
+to time out waiting for 68020 response (before ROM was even loaded).
+```verilog
+// dataController_top.sv - wait for _systemReset before releasing Egret
+always @(posedge clk32) begin
+    if (!_systemReset) begin
+        egretBootCounter <= 0;  // Keep counter at 0 while system reset active
+    end
+    else if (egretBootCounter < 10'd512) begin
+        if (clk8_en_p) egretBootCounter <= egretBootCounter + 1'b1;
+    end
+end
+```
 
-After the above fixes, the 68020 still doesn't appear to execute code:
-- `minResetPassed` stays 0 (reset delay timer not counting)
-- Egret releases/asserts 68020 reset multiple times
-- CPU trace shows no instruction fetches after download
-- Screenshot at frame 360 is blank white
+### Current Status: 68020 IS RUNNING!
 
-Suspected cause: The reset delay timer in dataController_top may not be starting
-because `_systemReset` (n_reset) isn't going high after download completes.
+After the above fixes, the 68020 successfully boots:
+- **n_reset goes high** after ROM download + countdown
+- **68020 released from reset** at cycle 4,523,021 (minResetPassed=1)
+- **CPU executes ROM code** - PC=0x00A14E20, opcode 0x67F8 (BEQ.S loop)
+- **Screen is white** - CPU stuck in wait loop before video init
+
+#### Current Issue: CPU Stuck in Wait Loop
+
+The 68020 runs for ~2.1M cycles then Egret re-asserts reset:
+- Released: cycle 4,523,021
+- Re-asserted: cycle 6,639,149
+- ~130ms of runtime at 16MHz
+
+The CPU is stuck at PC=0x00A14E20 executing `BEQ.S *-6` (opcode 0x67F8).
+This is likely a wait loop for:
+1. VBL interrupt from V8 video
+2. Response from Egret via VIA shift register
+3. Some other hardware initialization
+
+Egret times out because the 68020 doesn't respond (VIA communication not working).
 
 ## Memory Map (68HC05)
 
@@ -165,8 +192,11 @@ CPU Address    ROM Offset   Content
 4. ✅ CB1 gating added - only passes through when TIP=0
 5. ✅ reset_680x0 logic fixed (was inverted)
 6. ✅ System reset waits for ROM download
-7. ⚠️ 68020 still in reset after download (investigating)
-8. ❌ No VIA ↔ Egret communication occurs yet
+7. ✅ Egret waits for n_reset before starting
+8. ✅ **68020 IS RUNNING** - executes ROM code at PC=0x00A14E20
+9. ⚠️ 68020 stuck in wait loop (probably waiting for VBL or Egret response)
+10. ⚠️ Egret re-asserts reset after ~130ms timeout
+11. ❌ VIA ↔ Egret shift register communication not yet working
 
 ## Files
 
@@ -189,17 +219,19 @@ verilator/
 
 ## Next Steps
 
-1. **Debug n_reset assertion** - Verify n_reset goes high after ROM download
-   - Check dio_download signal timing
-   - Add debug output for n_reset transitions
+1. **Debug VIA ↔ Egret communication**
+   - Check if VIA shift register is responding to CB1 clocks
+   - Verify TIP/TREQ handshake signals
+   - Check if SR interrupt flag is being set
 
-2. **Verify reset delay timer** - Check minResetPassed
-   - Confirm resetDelay counts down after n_reset asserts
-   - Track when _cpuReset actually goes high
+2. **Debug 68020 wait loop at 0x00A14E20**
+   - Disassemble ROM around this address to understand what it's waiting for
+   - Check if VBL interrupt is being generated
+   - Check if the CPU is polling a memory location
 
-3. **Check Egret pc_out[3]** - When does firmware release 68020?
-   - Egret should clear PC bit 3 to release 68020
-   - Currently re-asserting reset too quickly
+3. **Prevent Egret timeout**
+   - Investigate why Egret re-asserts reset after ~130ms
+   - The 68020 needs to respond to Egret via VIA before timeout
 
 ## References
 

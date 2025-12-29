@@ -178,12 +178,17 @@ module dataController_top(
 
 	// Egret reset generation - Egret needs to start BEFORE the 68000
 	// The real Egret starts very early and controls when the 68000 comes out of reset
-	// Count up from boot, release Egret after 256 clk8 cycles regardless of _systemReset
+	// IMPORTANT: In simulation, wait for _systemReset to go high (ROM download complete)
+	// before releasing Egret, otherwise Egret times out before 68020 can respond.
 	reg [9:0] egretBootCounter = 0;
 	wire egretReset = (egretBootCounter < 10'd256);
 
 	always @(posedge clk32) begin
-		if (egretBootCounter < 10'd512) begin  // Stop counting once well past threshold
+		if (!_systemReset) begin
+			// Keep counter at 0 while system reset is active
+			egretBootCounter <= 0;
+		end
+		else if (egretBootCounter < 10'd512) begin  // Stop counting once well past threshold
 			if (clk8_en_p)
 				egretBootCounter <= egretBootCounter + 1'b1;
 		end
@@ -433,12 +438,12 @@ assign cpuDataOut = selectIWM ? iwmDataOut :
 	reg cuda_treq_prev = 1'b0;
 	reg [7:0] treq_log_counter = 8'd0;
 	always @(posedge clk32) begin
-		// Log cuda_treq periodically during startup
-		if (treq_log_counter < 8'd50 && clk8_en_p) begin
-			treq_log_counter <= treq_log_counter + 1'd1;
-			$display("CUDA DEBUG: treq=%b, treq_prev=%b, pb3_open_drain=%b, via_pb_i=0x%02x",
-				cuda_treq, cuda_treq_prev, pb3_open_drain, via_pb_i);
-		end
+		// Log cuda_treq periodically during startup (disabled for faster sim)
+		// if (treq_log_counter < 8'd50 && clk8_en_p) begin
+		// 	treq_log_counter <= treq_log_counter + 1'd1;
+		// 	$display("CUDA DEBUG: treq=%b, treq_prev=%b, pb3_open_drain=%b, via_pb_i=0x%02x",
+		// 		cuda_treq, cuda_treq_prev, pb3_open_drain, via_pb_i);
+		// end
 		// Log when DDRB (via_pb_oe) changes
 		if (via_pb_oe !== via_pb_oe_prev) begin
 			$display("VIA: DDRB changed: 0x%02x -> 0x%02x (PB3=%b=%s, PB4=%b=%s, PB5=%b=%s)",

@@ -109,19 +109,38 @@ module emu
 	// reset_n low to reset peripherals, but should NOT reset the CPU itself.
 	// IMPORTANT: In simulation, wait for ROM download to complete before releasing reset
 	reg n_reset = 0;
+	reg n_reset_prev = 0;
+	reg dio_download_prev = 0;
 	always @(posedge clk_sys) begin
 		reg [15:0] rst_cnt;
 
 		if (clk8_en_p) begin
+			n_reset_prev <= n_reset;
+			dio_download_prev <= dio_download;
+
+			// Debug: track when download completes
+			if (dio_download_prev && !dio_download) begin
+				$display("SIM: dio_download went LOW - ROM download complete");
+			end
+
 			if(~pll_locked || reset || dio_download) begin
 				rst_cnt <= '1;
 				n_reset <= 0;
 			end
 			else if(rst_cnt) begin
 				rst_cnt <= rst_cnt - 1'd1;
+				// Debug: show countdown progress every 0x1000 cycles
+				if (rst_cnt[11:0] == 12'h000) begin
+					$display("SIM: rst_cnt=%04x n_reset=%b", rst_cnt, n_reset);
+				end
 			end
 			else begin
 				n_reset <= 1;
+			end
+
+			// Debug: track when n_reset changes
+			if (n_reset != n_reset_prev) begin
+				$display("SIM: *** n_reset changed to %b *** (rst_cnt=%04x)", n_reset, rst_cnt);
 			end
 		end
 	end
