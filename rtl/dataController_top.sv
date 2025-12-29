@@ -170,13 +170,7 @@ module dataController_top(
 		end
 	end
 
-`ifdef USE_EGRET_CPU
-	// With real Egret: 68000 reset is controlled by Egret (but respect minimum time)
-	assign _cpuReset = (minResetPassed && !egret_reset_680x0) ? 1'b1 : 1'b0;
-`else
-	// Without Egret: just use the timer
-	assign _cpuReset = minResetPassed ? 1'b1 : 1'b0;
-`endif
+assign _cpuReset = minResetPassed ? 1'b1 : 1'b0;
 
 // Egret reset generation
 reg [9:0] egretBootCounter;
