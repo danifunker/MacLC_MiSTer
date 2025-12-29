@@ -146,12 +146,22 @@ module dataController_top(
 
 	initial begin
 		// force a reset when the FPGA configuration is completed
+`ifdef SIMULATION
+		// In simulation, use shorter reset delay (~1ms at 8MHz)
+		// This allows faster boot testing while still giving hardware time to stabilize
+		resetDelay <= 20'h2000;  // 8192 cycles = ~1ms at 8MHz
+`else
 		resetDelay <= 20'hFFFFF;
+`endif
 	end
 
 	always @(posedge clk32 or negedge _systemReset) begin
 		if (_systemReset == 1'b0) begin
+`ifdef SIMULATION
+			resetDelay <= 20'h2000;
+`else
 			resetDelay <= 20'hFFFFF;
+`endif
 		end
 		else if (clk8_en_p && !minResetPassed) begin
 			resetDelay <= resetDelay - 1'b1;

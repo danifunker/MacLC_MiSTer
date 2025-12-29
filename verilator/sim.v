@@ -89,7 +89,9 @@ module emu
 	// Configuration - directly from inputs (LC-only, no machineType)
 	wire      status_mem = cfg_memSize;      // 0=1MB, 1=4MB
 	wire [1:0] status_cpu = cfg_cpuType;     // CPU type (use 01 for TG68K)
-	wire      status_turbo = 1'b0;           // Normal speed (could expose later)
+	// Mac LC runs 68020 at C15M (~15.67 MHz), use 16 MHz mode (turbo=1)
+	// turbo=0 gives 8 MHz, turbo=1 gives 16 MHz
+	wire      status_turbo = 1'b1;           // 16 MHz for Mac LC
 
 	////////////////////   CLOCKS   ///////////////////
 
@@ -105,12 +107,13 @@ module emu
 	// Reset logic
 	// NOTE: Do NOT include _cpuReset_o here! The RESET instruction drives
 	// reset_n low to reset peripherals, but should NOT reset the CPU itself.
+	// IMPORTANT: In simulation, wait for ROM download to complete before releasing reset
 	reg n_reset = 0;
 	always @(posedge clk_sys) begin
 		reg [15:0] rst_cnt;
 
 		if (clk8_en_p) begin
-			if(~pll_locked || reset) begin
+			if(~pll_locked || reset || dio_download) begin
 				rst_cnt <= '1;
 				n_reset <= 0;
 			end
