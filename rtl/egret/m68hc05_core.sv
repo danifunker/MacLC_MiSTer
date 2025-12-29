@@ -147,7 +147,7 @@ module m68hc05_core (
             
             wr <= CPUread;
             flagH <= 1'b0;
-            flagI <= 1'b1;  // IRQ disabled at reset
+            flagI <= 1'b0;  // IRQ disabled at reset
             flagN <= 1'b0;
             flagZ <= 1'b0;
             flagC <= 1'b0;

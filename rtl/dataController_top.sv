@@ -142,11 +142,23 @@ module dataController_top(
 	// Egret controls 68000 reset via Port C bit 3
 `ifdef USE_EGRET_CPU
 	wire egret_reset_680x0;  // 1 = hold 68000 in reset, 0 = release
+    reg [7:0] cen_debug_counter;
+    
+    always @(posedge clk32) begin
+        if (!_cpuReset) begin  // Reset
+            cen_debug_counter <= 8'd0;
+        end else if (clk8_en_p && cen_debug_counter < 10) begin
+            $display("DC: clk8_en_p is HIGH at time %d", $time);
+            cen_debug_counter <= cen_debug_counter + 1;
+        end
+    end 
 `endif
 
 	initial begin
 		// force a reset when the FPGA configuration is completed
 		resetDelay <= 20'hFFFFF;
+		$display("DC INIT: egretReset=%b, minResetPassed=%b, resetDelay=%h", 
+    	egretReset, minResetPassed, resetDelay);
 	end
 
 	always @(posedge clk32 or negedge _systemReset) begin
@@ -166,22 +178,28 @@ module dataController_top(
 	assign _cpuReset = minResetPassed ? 1'b1 : 1'b0;
 `endif
 
-	// Egret reset generation - Egret needs to start BEFORE the 68000
-	// The real Egret starts very early and controls when the 68000 comes out of reset
-	// Count up from boot, release Egret after 256 clk8 cycles regardless of _systemReset
-	reg [9:0] egretBootCounter = 0;
-	wire egretReset = (egretBootCounter < 10'd256);
+// Egret reset generation
+reg [9:0] egretBootCounter;
+reg egretReset;
 
-	always @(posedge clk32) begin
-		if (egretBootCounter < 10'd512) begin  // Stop counting once well past threshold
-			if (clk8_en_p)
-				egretBootCounter <= egretBootCounter + 1'b1;
-		end
-	end
+initial begin
+    egretBootCounter = 0;
+    egretReset = 1'b1;  // Start in reset
+end
 
+always @(posedge clk32) begin
+    // Update reset condition
+    egretReset <= (egretBootCounter < 10'd256) || !minResetPassed;
+    
+    // Increment counter
+    if (!minResetPassed || egretBootCounter < 10'd512) begin
+        if (clk8_en_p)
+            egretBootCounter <= egretBootCounter + 1'b1;
+    end
+end
 `ifdef SIMULATION
 	reg [31:0] dc_debug_count = 0;
-	reg egretReset_prev = 1;
+	reg egretReset_prev = 1'b1;
 `ifdef USE_EGRET_CPU
 	reg egret_reset_680x0_prev = 1;
 	reg cpuReset_prev = 0;
@@ -194,22 +212,31 @@ module dataController_top(
 			         dc_debug_count, egretReset ? "ASSERTED" : "RELEASED", egretBootCounter);
 		end
 `ifdef USE_EGRET_CPU
-		egret_reset_680x0_prev <= egret_reset_680x0;
-		cpuReset_prev <= _cpuReset;
-		// Track when Egret releases/asserts 68000 reset
-		if (egret_reset_680x0 != egret_reset_680x0_prev) begin
-			$display("DC[%0d]: Egret %s 68000 reset (minResetPassed=%b, _cpuReset=%b)",
-			         dc_debug_count,
-			         egret_reset_680x0 ? "ASSERTS" : "RELEASES",
-			         minResetPassed, _cpuReset);
-		end
-		// Track when 68000 actually comes out of reset
-		if (_cpuReset != cpuReset_prev) begin
-			$display("DC[%0d]: *** 68000 reset %s *** (egret_reset=%b, minResetPassed=%b)",
-			         dc_debug_count,
-			         _cpuReset ? "RELEASED" : "ASSERTED",
-			         egret_reset_680x0, minResetPassed);
-		end
+        egret_reset_680x0_prev <= egret_reset_680x0;
+        cpuReset_prev <= _cpuReset;
+        
+        // Track when Egret releases/asserts 68000 reset (ignore initial glitches)
+        if (egret_reset_680x0 != egret_reset_680x0_prev && dc_debug_count > 10) begin
+            $display("DC[%0d]: Egret %s 68000 reset (minResetPassed=%b, _cpuReset=%b)",
+                     dc_debug_count,
+                     egret_reset_680x0 ? "ASSERTS" : "RELEASES",
+                     minResetPassed, _cpuReset);
+        end
+        
+        // Track when 68000 actually comes out of reset
+        if (_cpuReset != cpuReset_prev && dc_debug_count > 10) begin
+            $display("DC[%0d]: *** 68000 reset %s *** (egret_reset=%b, minResetPassed=%b)",
+                     dc_debug_count,
+                     _cpuReset ? "RELEASED" : "ASSERTED",
+                     egret_reset_680x0, minResetPassed);
+        end
+        
+        // Track when Egret itself comes out of reset
+        if (egretReset == 1'b0 && egretReset_prev == 1'b1) begin
+            $display("DC[%0d]: *** EGRET RESET RELEASED *** (minResetPassed=%b, egretBootCounter=%d)",
+                     dc_debug_count, minResetPassed, egretBootCounter);
+        end
+        egretReset_prev <= egretReset;
 `endif
 	end
 `endif

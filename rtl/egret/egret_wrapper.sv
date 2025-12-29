@@ -53,7 +53,7 @@ module egret_wrapper (
 // TEMPORARY FOR SIMULATION: Force cen=1 because m68hc05_core has no clock enable
 // The CPU runs every cycle, so peripherals must too
 // ============================================================================
-wire cen = 1'b1;  // TEMPORARY: Always enabled for simulation testing
+//wire cen = 1'b1;  // TEMPORARY: Always enabled for simulation testing
 
 // Production version (uncomment when using dedicated PLL):
 // wire cen = clk8_en;  // Direct passthrough when using dedicated PLL clock
@@ -360,9 +360,9 @@ always @(posedge clk) begin
         // Track Port C bit 3 for falling edge detection
         pc_bit3_prev <= pc_out[3];
         
-        // Load PRAM when Egret asserts 680x0 reset (PC bit 3: 1->0 transition)
+        // Load PRAM when Egret releases 680x0 reset (PC bit 3: 1->0 transition)
         // This mimics MAME behavior where PRAM is loaded when reset is asserted
-        if (pc_bit3_prev && !pc_out[3] && !pram_loaded) begin
+        if (!pc_bit3_prev && pc_out[3] && !pram_loaded && cen) begin
             pram_loaded <= 1'b1;
             $display("EGRET_PRAM[%0d]: Loading PRAM and RTC time on 680x0 reset assertion (PC3: 1->0)", cycle_count);
         end
@@ -545,6 +545,27 @@ always @(posedge clk) begin
     if (reset)
         cuda_sr_irq <= 1'b0;
     // TODO: Implement SR interrupt logic if needed
+end
+
+reg cen_divider;
+always @(posedge clk) begin
+    if (reset)
+        cen_divider <= 1'b0;
+    else if (clk8_en)
+        cen_divider <= ~cen_divider;
+end
+
+wire cen = clk8_en & cen_divider;
+
+// Debug: Check if cen is ever active
+reg [7:0] cen_debug_count;
+initial cen_debug_count = 0;
+
+always @(posedge clk) begin
+    if (cen && cen_debug_count < 10) begin
+        $display("EGRET_CEN[%0d]: cen is HIGH (clk8_en=%b)", cycle_count, clk8_en);
+        cen_debug_count <= cen_debug_count + 1;
+    end
 end
 
 // ============================================================================
