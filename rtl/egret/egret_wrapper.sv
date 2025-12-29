@@ -406,7 +406,7 @@ always @(posedge clk) begin
         pa_ddr   <= 8'h00;
         pb_ddr   <= 8'h00;  // All inputs on reset per 68HC05 datasheet
         pc_ddr   <= 8'h00;
-    end else if (port_cs && !cpu_wr && cen) begin  // !cpu_wr means write
+    end else if (port_cs && cpu_wr && cen) begin
         case (cpu_addr[3:0])
             4'h0: pa_latch <= cpu_dout;
             4'h1: pb_latch <= cpu_dout;
@@ -624,6 +624,17 @@ always @(posedge clk) begin
                 default: $display("EGRET[%0d] PC=%04x: Port write addr=%x data=%02x",
                               cycle_count, cpu_addr, cpu_addr[3:0], cpu_dout);
             endcase
+        end
+
+        // Debug $96 writes during init (tracks loop counter)
+        if (ram_cs && !cpu_wr && cpu_addr == 16'h0096) begin
+            $display("EGRET[%0d] PC=%04x: RAM $96 write = 0x%02x", cycle_count, last_pc, cpu_dout);
+        end
+        
+        // Debug writes to $F1-$F3 range (should be port writes but might be hitting ROM)
+        if (!port_cs && !cpu_wr && (cpu_addr >= 16'h00F1 && cpu_addr <= 16'h00F3)) begin
+            $display("EGRET[%0d] PC=%04x: WRITE to $%04x = 0x%02x (rom=%b ram=%b port=%b)", 
+                     cycle_count, last_pc, cpu_addr, cpu_dout, rom_cs, ram_cs, port_cs);
         end
 
         // Log ALL port accesses (read or write) to addresses 0x01 and 0x05
