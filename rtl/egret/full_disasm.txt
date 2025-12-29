@@ -1,0 +1,1923 @@
+ROM size: 4096 bytes
+Reset vector: 0x0f71
+IRQ vector: 0x1e8e
+SWI vector: 0x0f71
+
+=== Disassembly at 0x0000 ===
+0000  12 cd         bset    1,$cd
+0002  12 3e         bset    1,$3e
+0004  20 2e         bra    $0034
+0006  cd 12 b6      jsr    $12b6
+0009  16 a3         bset    3,$a3
+000b  cd 1e 4e      jsr    $1e4e
+000e  03 02 f8      brclr    1,$02,$0009
+0011  cd 1e 01      jsr    $1e01
+0014  03 02 f2      brclr    1,$02,$0009
+0017  cd 11 a0      jsr    $11a0
+001a  25 10         bcs    $002c
+001c  05 00 0d      brclr    2,$00,$002c
+001f  04 a3 0a      brset    2,$a3,$002c
+0022  0c a3 07      brset    6,$a3,$002c
+0025  cd 12 0a      jsr    $120a
+0028  25 02         bcs    $002c
+002a  20 da         bra    $0006
+002c  cd 11 e7      jsr    $11e7
+002f  24 d5         bcc    $0006
+0031  cd 12 3e      jsr    $123e
+0034  b6 a4         lda    $a4
+0036  a0 02         suba    #$02
+0038  b7 90         sta    $90
+003a  0a 00 06      brset    5,$00,$0043
+003d  a6 09         lda    #$09
+003f  b7 91         sta    $91
+0041  20 04         bra    $0047
+0043  a6 08         lda    #$08
+0045  b7 91         sta    $91
+0047  cd 11 98      jsr    $1198
+004a  11 a3         bclr    0,$a3
+004c  cd 1a ce      jsr    $1ace
+004f  24 e3         bcc    $0034
+0051  cd 11 38      jsr    $1138
+0054  25 03         bcs    $0059
+0056  cc 0f af      jmp    $0faf
+0059  1d 95         bclr    6,$95
+005b  cd 12 c2      jsr    $12c2
+005e  24 d4         bcc    $0034
+0060  3a 91         dec    $91
+0062  26 e3         bne    $0047
+0064  3a 90         dec    $90
+0066  26 d2         bne    $003a
+0068  0e a2 07      brset    7,$a2,$0072
+006b  10 a3         bset    0,$a3
+006d  cd 11 49      jsr    $1149
+0070  20 c2         bra    $0034
+0072  3f 95         clr    $95
+0074  1c 95         bset    6,$95
+0076  b6 b3         lda    $b3
+0078  aa 0c         ora    #$0c
+007a  cd 1c 71      jsr    $1c71
+007d  b6 95         lda    $95
+007f  a4 03         anda    #$03
+0081  a8 02         eora    #$02
+0083  27 af         beq    $0034
+0085  a4 02         anda    #$02
+0087  27 06         beq    $008f
+0089  cd 14 3b      jsr    $143b
+008c  01 95 a5      brclr    0,$95,$0034
+008f  cd 1d d7      jsr    $1dd7
+0092  b6 b3         lda    $b3
+0094  b7 ce         sta    $ce
+0096  b6 b4         lda    $b4
+0098  b7 cd         sta    $cd
+009a  aa 0c         ora    #$0c
+009c  cd 1c 71      jsr    $1c71
+009f  02 95 19      brset    1,$95,$00bb
+00a2  b6 cd         lda    $cd
+00a4  b7 ce         sta    $ce
+00a6  cd 14 3b      jsr    $143b
+00a9  00 95 0f      brset    0,$95,$00bb
+00ac  b6 b3         lda    $b3
+00ae  b1 ce         cmpa    $ce
+00b0  27 06         beq    $00b8
+00b2  be ce         ldx    $ce
+00b4  b7 b4         sta    $b4
+00b6  bf b3         stx    $b3
+00b8  cc 10 34      jmp    $1034
+00bb  cd 1d d7      jsr    $1dd7
+00be  b6 cd         lda    $cd
+00c0  a0 10         suba    #$10
+00c2  b7 cd         sta    $cd
+00c4  b1 b3         cmpa    $b3
+00c6  27 f6         beq    $00be
+00c8  b1 b4         cmpa    $b4
+00ca  27 18         beq    $00e4
+00cc  cd 11 21      jsr    $1121
+00cf  24 ed         bcc    $00be
+00d1  b6 cd         lda    $cd
+00d3  aa 0c         ora    #$0c
+00d5  cd 1c 71      jsr    $1c71
+00d8  02 95 e0      brset    1,$95,$00bb
+00db  b6 cd         lda    $cd
+00dd  b7 ce         sta    $ce
+00df  cd 14 3b      jsr    $143b
+00e2  20 c8         bra    $00ac
+00e4  b6 b3         lda    $b3
+00e6  b7 cd         sta    $cd
+00e8  aa 0c         ora    #$0c
+00ea  cd 1c 71      jsr    $1c71
+00ed  02 95 09      brset    1,$95,$00f9
+00f0  b6 cd         lda    $cd
+00f2  b7 ce         sta    $ce
+00f4  cd 14 3b      jsr    $143b
+00f7  20 b3         bra    $00ac
+00f9  b6 b4         lda    $b4
+00fb  b7 cd         sta    $cd
+00fd  cd 1d d7      jsr    $1dd7
+0100  b6 cd         lda    $cd
+0102  a0 10         suba    #$10
+0104  b7 cd         sta    $cd
+0106  b1 b4         cmpa    $b4
+0108  27 a2         beq    $00ac
+010a  cd 11 21      jsr    $1121
+010d  25 f1         bcs    $0100
+010f  b6 cd         lda    $cd
+0111  aa 0c         ora    #$0c
+0113  cd 1c 71      jsr    $1c71
+0116  02 95 e4      brset    1,$95,$00fd
+0119  cd 14 3b      jsr    $143b
+011c  01 95 8d      brclr    0,$95,$00ac
+011f  20 dc         bra    $00fd
+0121  44            db      $44
+0122  44            db      $44
+0123  44            db      $44
+0124  44            db      $44
+0125  a1 08         cmpa    #$08
+0127  25 07         bcs    $0130
+0129  a4 07         anda    #$07
+012b  97            tax
+012c  b6 c9         lda    $c9
+012e  20 03         bra    $0133
+0130  97            tax
+0131  b6 ca         lda    $ca
+0133  46            db      $46
+0134  5a            decx
+0135  2a fc         bpl    $0133
+0137  81            rts
+0138  cd 12 0a      jsr    $120a
+013b  25 05         bcs    $0142
+013d  1d 07         bclr    6,$07
+013f  17 07         bclr    3,$07
+0141  81            rts
+0142  cd 12 12      jsr    $1212
+0145  cd 11 49      jsr    $1149
+0148  81            rts
+0149  b7 d5         sta    $d5
+014b  bf d6         stx    $d6
+014d  04 00 2b      brset    2,$00,$017b
+0150  b6 cc         lda    $cc
+0152  b1 a6         cmpa    $a6
+0154  24 03         bcc    $0159
+0156  01 a3 22      brclr    0,$a3,$017b
+0159  07 02 1f      brclr    3,$02,$017b
+015c  ae 05         ldx    #$05
+015e  e6 95         lda    $95,x
+0160  e7 cf         sta    $cf,x
+0162  5a            decx
+0163  2a f9         bpl    $015e
+0165  cd 1d d7      jsr    $1dd7
+0168  a6 2e         lda    #$2e
+016a  cd 1c 71      jsr    $1c71
+016d  02 95 00      brset    1,$95,$0170
+0170  ae 05         ldx    #$05
+0172  e6 cf         lda    $cf,x
+0174  e7 95         sta    $95,x
+0176  5a            decx
+0177  2a f9         bpl    $0172
+0179  25 00         bcs    $017b
+017b  0b 00 1a      brclr    5,$00,$0198
+017e  cd 11 a0      jsr    $11a0
+0181  24 15         bcc    $0198
+0183  cd 11 c1      jsr    $11c1
+0186  25 10         bcs    $0198
+0188  03 00 fd      brclr    1,$00,$0188
+018b  cd 1d f2      jsr    $1df2
+018e  03 00 f7      brclr    1,$00,$0188
+0191  16 a3         bset    3,$a3
+0193  15 a3         bclr    2,$a3
+0195  cc 0f af      jmp    $0faf
+0198  0d 01 fa      brclr    6,$01,$0195
+019b  be d6         ldx    $d6
+019d  b6 d5         lda    $d5
+019f  81            rts
+01a0  03 00 0f      brclr    1,$00,$01b2
+01a3  07 a3 02      brclr    3,$a3,$01a8
+01a6  20 08         bra    $01b0
+01a8  cd 1e 01      jsr    $1e01
+01ab  03 00 02      brclr    1,$00,$01b0
+01ae  16 a3         bset    3,$a3
+01b0  98            clc
+01b1  81            rts
+01b2  07 a3 fb      brclr    3,$a3,$01b0
+01b5  cd 1e 01      jsr    $1e01
+01b8  03 00 02      brclr    1,$00,$01bd
+01bb  20 f3         bra    $01b0
+01bd  17 a3         bclr    3,$a3
+01bf  99            sec
+01c0  81            rts
+01c1  1d 07         bclr    6,$07
+01c3  17 07         bclr    3,$07
+01c5  11 00         bclr    0,$00
+01c7  10 04         bset    0,$04
+01c9  a6 96         lda    #$96
+01cb  b7 93         sta    $93
+01cd  cd 1d f2      jsr    $1df2
+01d0  01 01 0a      brclr    0,$01,$01dd
+01d3  3a 93         dec    $93
+01d5  26 f6         bne    $01cd
+01d7  11 04         bclr    0,$04
+01d9  cd 12 12      jsr    $1212
+01dc  81            rts
+01dd  11 04         bclr    0,$04
+01df  1f a3         bclr    7,$a3
+01e1  cd 12 b6      jsr    $12b6
+01e4  1f a1         bclr    7,$a1
+01e6  81            rts
+01e7  10 00         bset    0,$00
+01e9  10 04         bset    0,$04
+01eb  a6 96         lda    #$96
+01ed  b7 93         sta    $93
+01ef  cd 1d f2      jsr    $1df2
+01f2  00 01 0a      brset    0,$01,$01ff
+01f5  4a            deca
+01f6  26 f7         bne    $01ef
+01f8  11 04         bclr    0,$04
+01fa  1d 07         bclr    6,$07
+01fc  17 07         bclr    3,$07
+01fe  81            rts
+01ff  cd 12 0a      jsr    $120a
+0202  24 f4         bcc    $01f8
+0204  11 04         bclr    0,$04
+0206  cd 12 12      jsr    $1212
+0209  81            rts
+020a  0f a3 1b      brclr    7,$a3,$0228
+020d  01 01 2b      brclr    0,$01,$023b
+0210  1d a3         bclr    6,$a3
+0212  0c 07 11      brset    6,$07,$0226
+0215  18 07         bset    4,$07
+0217  16 07         bset    3,$07
+0219  cd 1e 01      jsr    $1e01
+021c  19 07         bclr    4,$07
+021e  cd 1e 01      jsr    $1e01
+0221  01 01 15      brclr    0,$01,$0239
+0224  1c 07         bset    6,$07
+0226  99            sec
+0227  81            rts
+0228  ae 32         ldx    #$32
+022a  bf 93         stx    $93
+022c  cd 1d f2      jsr    $1df2
+022f  01 01 09      brclr    0,$01,$023b
+0232  3a 93         dec    $93
+0234  26 f6         bne    $022c
+0236  1e a3         bset    7,$a3
+0238  81            rts
+0239  17 07         bclr    3,$07
+023b  1f a3         bclr    7,$a3
+023d  81            rts
+023e  a6 f7         lda    #$f7
+0240  b7 02         sta    $02
+0242  a6 92         lda    #$92
+0244  b7 01         sta    $01
+0246  3f 00         clr    $00
+0248  17 00         bclr    3,$00
+024a  17 02         bclr    3,$02
+024c  16 06         bset    3,$06
+024e  0f a1 20      brclr    7,$a1,$0271
+0251  cd 12 0a      jsr    $120a
+0254  24 5d         bcc    $02b3
+0256  cd 1e 4e      jsr    $1e4e
+0259  cd 11 49      jsr    $1149
+025c  a6 2e         lda    #$2e
+025e  cd 1c 71      jsr    $1c71
+0261  02 95 0d      brset    1,$95,$0271
+0264  b6 99         lda    $99
+0266  a4 19         anda    #$19
+0268  a8 19         eora    #$19
+026a  27 05         beq    $0271
+026c  cd 1d d7      jsr    $1dd7
+026f  20 e0         bra    $0251
+0271  ae 05         ldx    #$05
+0273  bf 93         stx    $93
+0275  cd 1d f2      jsr    $1df2
+0278  01 01 38      brclr    0,$01,$02b3
+027b  3a 93         dec    $93
+027d  26 f6         bne    $0275
+027f  16 00         bset    3,$00
+0281  ae 14         ldx    #$14
+0283  bf 93         stx    $93
+0285  cd 1d f2      jsr    $1df2
+0288  01 01 28      brclr    0,$01,$02b3
+028b  3a 93         dec    $93
+028d  26 f6         bne    $0285
+028f  16 02         bset    3,$02
+0291  17 06         bclr    3,$06
+0293  1e 00         bset    7,$00
+0295  ae 03         ldx    #$03
+0297  cd 1d e2      jsr    $1de2
+029a  1f 00         bclr    7,$00
+029c  ae 1c         ldx    #$1c
+029e  cd 1d d1      jsr    $1dd1
+02a1  cd 12 0a      jsr    $120a
+02a4  24 0d         bcc    $02b3
+02a6  cd 1e 4e      jsr    $1e4e
+02a9  cd 11 49      jsr    $1149
+02ac  06 01 f2      brset    3,$01,$02a1
+02af  04 01 ef      brset    2,$01,$02a1
+02b2  81            rts
+02b3  cc 0f af      jmp    $0faf
+02b6  00 01 08      brset    0,$01,$02c1
+02b9  16 06         bset    3,$06
+02bb  3f 02         clr    $02
+02bd  3f 01         clr    $01
+02bf  3f 00         clr    $00
+02c1  81            rts
+02c2  07 01 66      brclr    3,$01,$032b
+02c5  3f b5         clr    $b5
+02c7  cd 14 c8      jsr    $14c8
+02ca  25 5f         bcs    $032b
+02cc  cd 14 c8      jsr    $14c8
+02cf  25 5a         bcs    $032b
+02d1  b6 ba         lda    $ba
+02d3  b7 b8         sta    $b8
+02d5  b6 b9         lda    $b9
+02d7  b7 b7         sta    $b7
+02d9  26 03         bne    $02de
+02db  cc 13 8d      jmp    $138d
+02de  a1 01         cmpa    #$01
+02e0  27 2e         beq    $0310
+02e2  a6 01         lda    #$01
+02e4  20 0f         bra    $02f5
+02e6  b6 b7         lda    $b7
+02e8  b7 b9         sta    $b9
+02ea  b6 b8         lda    $b8
+02ec  b7 ba         sta    $ba
+02ee  a6 03         lda    #$03
+02f0  cd 12 f5      jsr    $12f5
+02f3  99            sec
+02f4  81            rts
+02f5  b7 93         sta    $93
+02f7  b6 b7         lda    $b7
+02f9  b7 bb         sta    $bb
+02fb  b6 b8         lda    $b8
+02fd  b7 99         sta    $99
+02ff  a6 02         lda    #$02
+0301  b7 b9         sta    $b9
+0303  b6 93         lda    $93
+0305  b7 ba         sta    $ba
+0307  a6 01         lda    #$01
+0309  b7 97         sta    $97
+030b  b7 96         sta    $96
+030d  cc 14 45      jmp    $1445
+0310  b6 ba         lda    $ba
+0312  a1 20         cmpa    #$20
+0314  24 09         bcc    $031f
+0316  b7 93         sta    $93
+0318  48            db      $48
+0319  bb 93         adda    $93
+031b  97            tax
+031c  dc            db      $dc
+031d  13 2d         bclr    1,$2d
+031f  3f b5         clr    $b5
+0321  cd 14 c8      jsr    $14c8
+0324  24 f9         bcc    $031f
+0326  a6 02         lda    #$02
+0328  cc 12 f5      jmp    $12f5
+032b  99            sec
+032c  81            rts
+032d  cc 16 77      jmp    $1677
+0330  cc 16 84      jmp    $1684
+0333  cc 16 a1      jmp    $16a1
+0336  cc 16 d2      jmp    $16d2
+0339  cc 17 0a      jmp    $170a
+033c  cc 17 26      jmp    $1726
+033f  cc 17 43      jmp    $1743
+0342  cc 17 60      jmp    $1760
+0345  cc 17 cf      jmp    $17cf
+0348  cc 17 f7      jmp    $17f7
+034b  cc 18 0f      jmp    $180f
+034e  cc 18 2a      jmp    $182a
+0351  cc 18 4a      jmp    $184a
+0354  cc 18 89      jmp    $1889
+0357  cc 18 9e      jmp    $189e
+035a  cc 18 db      jmp    $18db
+035d  cc 19 a7      jmp    $19a7
+0360  cc 19 ca      jmp    $19ca
+0363  cc 19 d8      jmp    $19d8
+0366  cc 19 f5      jmp    $19f5
+0369  cc 1a 12      jmp    $1a12
+036c  cc 1a 23      jmp    $1a23
+036f  cc 1a 40      jmp    $1a40
+0372  cc 1a 56      jmp    $1a56
+0375  cc 1a 67      jmp    $1a67
+0378  cc 1a 7d      jmp    $1a7d
+037b  cc 1a 92      jmp    $1a92
+037e  cc 1a af      jmp    $1aaf
+0381  cc 1b 11      jmp    $1b11
+0384  cc 1b 26      jmp    $1b26
+0387  cc 1b 3b      jmp    $1b3b
+038a  cc 1b 4f      jmp    $1b4f
+038d  b6 ba         lda    $ba
+038f  a4 0f         anda    #$0f
+0391  27 3e         beq    $03d1
+0393  a1 01         cmpa    #$01
+0395  27 66         beq    $03fd
+0397  a1 08         cmpa    #$08
+0399  25 84         bcs    $031f
+039b  a1 0c         cmpa    #$0c
+039d  24 7c         bcc    $041b
+039f  be b5         ldx    $b5
+03a1  a3 0b         cpx    #$0b
+03a3  25 02         bcs    $03a7
+03a5  3a b5         dec    $b5
+03a7  cd 14 c8      jsr    $14c8
+03aa  24 f3         bcc    $039f
+03ac  cd 14 8b      jsr    $148b
+03af  be b5         ldx    $b5
+03b1  a3 04         cpx    #$04
+03b3  25 17         bcs    $03cc
+03b5  5a            decx
+03b6  bf 96         stx    $96
+03b8  5a            decx
+03b9  a3 09         cpx    #$09
+03bb  24 0f         bcc    $03cc
+03bd  e6 bb         lda    $bb,x
+03bf  e7 99         sta    $99,x
+03c1  5a            decx
+03c2  2a f9         bpl    $03bd
+03c4  b6 ba         lda    $ba
+03c6  cd 1c 71      jsr    $1c71
+03c9  cc 16 40      jmp    $1640
+03cc  a6 03         lda    #$03
+03ce  cc 12 f5      jmp    $12f5
+03d1  cd 14 c8      jsr    $14c8
+03d4  24 19         bcc    $03ef
+03d6  a6 30         lda    #$30
+03d8  b7 b3         sta    $b3
+03da  a6 20         lda    #$20
+03dc  b7 b4         sta    $b4
+03de  1e 00         bset    7,$00
+03e0  ae 03         ldx    #$03
+03e2  cd 1d e2      jsr    $1de2
+03e5  1f 00         bclr    7,$00
+03e7  ae 1b         ldx    #$1b
+03e9  cd 1d d1      jsr    $1dd1
+03ec  cc 16 40      jmp    $1640
+03ef  a6 03         lda    #$03
+03f1  b7 b5         sta    $b5
+03f3  cd 14 c8      jsr    $14c8
+03f6  24 35         bcc    $042d
+03f8  a6 03         lda    #$03
+03fa  cc 12 f5      jmp    $12f5
+03fd  cd 14 c8      jsr    $14c8
+0400  24 0b         bcc    $040d
+0402  cd 14 8b      jsr    $148b
+0405  b6 ba         lda    $ba
+0407  cd 1c 71      jsr    $1c71
+040a  cc 16 40      jmp    $1640
+040d  a6 03         lda    #$03
+040f  b7 b5         sta    $b5
+0411  cd 14 c8      jsr    $14c8
+0414  24 17         bcc    $042d
+0416  a6 03         lda    #$03
+0418  cc 12 f5      jmp    $12f5
+041b  cd 14 c8      jsr    $14c8
+041e  24 0d         bcc    $042d
+0420  cd 14 8b      jsr    $148b
+0423  b6 ba         lda    $ba
+0425  cd 1c 71      jsr    $1c71
+0428  cd 14 3b      jsr    $143b
+042b  98            clc
+042c  81            rts
+042d  a6 03         lda    #$03
+042f  b7 b5         sta    $b5
+0431  cd 14 c8      jsr    $14c8
+0434  24 f7         bcc    $042d
+0436  a6 03         lda    #$03
+0438  cc 12 f5      jmp    $12f5
+043b  3f b9         clr    $b9
+043d  b6 95         lda    $95
+043f  b7 ba         sta    $ba
+0441  b6 98         lda    $98
+0443  b7 bb         sta    $bb
+0445  cd 15 49      jsr    $1549
+0448  b6 b9         lda    $b9
+044a  be ba         ldx    $ba
+044c  cd 15 86      jsr    $1586
+044f  25 38         bcs    $0489
+0451  b6 96         lda    $96
+0453  26 05         bne    $045a
+0455  b6 bb         lda    $bb
+0457  cc 16 4d      jmp    $164d
+045a  b6 bb         lda    $bb
+045c  cd 15 93      jsr    $1593
+045f  25 28         bcs    $0489
+0461  3f 97         clr    $97
+0463  b6 96         lda    $96
+0465  27 22         beq    $0489
+0467  be 97         ldx    $97
+0469  9f            txa
+046a  4c            inca
+046b  b1 96         cmpa    $96
+046d  26 02         bne    $0471
+046f  12 01         bset    1,$01
+0471  e6 99         lda    $99,x
+0473  cd 15 93      jsr    $1593
+0476  25 11         bcs    $0489
+0478  3c 97         inc    $97
+047a  b6 97         lda    $97
+047c  b1 96         cmpa    $96
+047e  26 e7         bne    $0467
+0480  01 01 51      brclr    0,$01,$04d4
+0483  cd 11 49      jsr    $1149
+0486  06 01 f7      brset    3,$01,$0480
+0489  98            clc
+048a  81            rts
+048b  b6 ba         lda    $ba
+048d  cd 11 21      jsr    $1121
+0490  24 0e         bcc    $04a0
+0492  b6 ba         lda    $ba
+0494  a4 f0         anda    #$f0
+0496  b1 b3         cmpa    $b3
+0498  27 06         beq    $04a0
+049a  be b3         ldx    $b3
+049c  b7 b3         sta    $b3
+049e  bf b4         stx    $b4
+04a0  81            rts
+04a1  b7 b6         sta    $b6
+04a3  3f b5         clr    $b5
+04a5  be b5         ldx    $b5
+04a7  b3 b6         cpx    $b6
+04a9  27 0f         beq    $04ba
+04ab  cd 14 c8      jsr    $14c8
+04ae  24 f5         bcc    $04a5
+04b0  be b5         ldx    $b5
+04b2  b6 b6         lda    $b6
+04b4  b3 b6         cpx    $b6
+04b6  27 01         beq    $04b9
+04b8  99            sec
+04b9  81            rts
+04ba  cd 14 c8      jsr    $14c8
+04bd  25 f1         bcs    $04b0
+04bf  cd 14 c8      jsr    $14c8
+04c2  25 ec         bcs    $04b0
+04c4  3a b5         dec    $b5
+04c6  20 f7         bra    $04bf
+04c8  cd 11 49      jsr    $1149
+04cb  01 01 06      brclr    0,$01,$04d4
+04ce  04 01 05      brset    2,$01,$04d6
+04d1  06 01 f4      brset    3,$01,$04c8
+04d4  99            sec
+04d5  81            rts
+04d6  cd 14 ec      jsr    $14ec
+04d9  be b5         ldx    $b5
+04db  e7 b9         sta    $b9,x
+04dd  3c b5         inc    $b5
+04df  cd 11 49      jsr    $1149
+04e2  01 01 ef      brclr    0,$01,$04d4
+04e5  05 01 03      brclr    2,$01,$04eb
+04e8  0a a3 f4      brset    5,$a3,$04df
+04eb  81            rts
+04ec  9b            sei
+04ed  1b 05         bclr    5,$05
+04ef  19 01         bclr    4,$01
+04f1  18 01         bset    4,$01
+04f3  0a 01 00      brset    5,$01,$04f6
+04f6  49            db      $49
+04f7  19 01         bclr    4,$01
+04f9  18 01         bset    4,$01
+04fb  0a 01 00      brset    5,$01,$04fe
+04fe  49            db      $49
+04ff  19 01         bclr    4,$01
+0501  18 01         bset    4,$01
+0503  0a 01 00      brset    5,$01,$0506
+0506  49            db      $49
+0507  19 01         bclr    4,$01
+0509  18 01         bset    4,$01
+050b  0a 01 00      brset    5,$01,$050e
+050e  49            db      $49
+050f  19 01         bclr    4,$01
+0511  18 01         bset    4,$01
+0513  0a 01 00      brset    5,$01,$0516
+0516  49            db      $49
+0517  19 01         bclr    4,$01
+0519  18 01         bset    4,$01
+051b  0a 01 00      brset    5,$01,$051e
+051e  49            db      $49
+051f  19 01         bclr    4,$01
+0521  18 01         bset    4,$01
+0523  0a 01 00      brset    5,$01,$0526
+0526  49            db      $49
+0527  19 01         bclr    4,$01
+0529  18 01         bset    4,$01
+052b  0a 01 00      brset    5,$01,$052e
+052e  49            db      $49
+052f  98            clc
+0530  19 a3         bclr    4,$a3
+0532  1a a3         bset    5,$a3
+0534  9a            cli
+0535  81            rts
+0536  b6 b9         lda    $b9
+0538  b7 b7         sta    $b7
+053a  b6 ba         lda    $ba
+053c  b7 b8         sta    $b8
+053e  3f b5         clr    $b5
+0540  cd 14 c8      jsr    $14c8
+0543  25 03         bcs    $0548
+0545  cd 14 c8      jsr    $14c8
+0548  81            rts
+0549  13 01         bclr    1,$01
+054b  ae 04         ldx    #$04
+054d  cd 1d d1      jsr    $1dd1
+0550  19 01         bclr    4,$01
+0552  18 01         bset    4,$01
+0554  19 01         bclr    4,$01
+0556  18 01         bset    4,$01
+0558  19 01         bclr    4,$01
+055a  18 01         bset    4,$01
+055c  19 01         bclr    4,$01
+055e  18 01         bset    4,$01
+0560  19 01         bclr    4,$01
+0562  18 01         bset    4,$01
+0564  19 01         bclr    4,$01
+0566  18 01         bset    4,$01
+0568  19 01         bclr    4,$01
+056a  18 01         bset    4,$01
+056c  19 01         bclr    4,$01
+056e  18 01         bset    4,$01
+0570  cd 11 49      jsr    $1149
+0573  01 01 0d      brclr    0,$01,$0583
+0576  06 01 f7      brset    3,$01,$0570
+0579  cd 11 49      jsr    $1149
+057c  01 01 04      brclr    0,$01,$0583
+057f  07 01 f7      brclr    3,$01,$0579
+0582  81            rts
+0583  cc 0f af      jmp    $0faf
+0586  bf 94         stx    $94
+0588  cd 15 93      jsr    $1593
+058b  25 05         bcs    $0592
+058d  b6 94         lda    $94
+058f  cd 15 93      jsr    $1593
+0592  81            rts
+0593  cd 11 49      jsr    $1149
+0596  01 01 06      brclr    0,$01,$059f
+0599  05 01 07      brclr    2,$01,$05a3
+059c  06 01 f4      brset    3,$01,$0593
+059f  12 01         bset    1,$01
+05a1  99            sec
+05a2  81            rts
+05a3  cd 15 c9      jsr    $15c9
+05a6  cd 11 49      jsr    $1149
+05a9  01 01 f3      brclr    0,$01,$059f
+05ac  04 01 0b      brset    2,$01,$05ba
+05af  08 a3 08      brset    4,$a3,$05ba
+05b2  04 01 05      brset    2,$01,$05ba
+05b5  07 01 e7      brclr    3,$01,$059f
+05b8  20 ec         bra    $05a6
+05ba  cd 11 49      jsr    $1149
+05bd  01 01 df      brclr    0,$01,$059f
+05c0  05 01 05      brclr    2,$01,$05c8
+05c3  07 01 d9      brclr    3,$01,$059f
+05c6  20 f2         bra    $05ba
+05c8  81            rts
+05c9  9b            sei
+05ca  1a 05         bset    5,$05
+05cc  19 01         bclr    4,$01
+05ce  49            db      $49
+05cf  24 04         bcc    $05d5
+05d1  1a 01         bset    5,$01
+05d3  20 02         bra    $05d7
+05d5  1b 01         bclr    5,$01
+05d7  18 01         bset    4,$01
+05d9  19 01         bclr    4,$01
+05db  49            db      $49
+05dc  24 04         bcc    $05e2
+05de  1a 01         bset    5,$01
+05e0  20 02         bra    $05e4
+05e2  1b 01         bclr    5,$01
+05e4  18 01         bset    4,$01
+05e6  19 01         bclr    4,$01
+05e8  49            db      $49
+05e9  24 04         bcc    $05ef
+05eb  1a 01         bset    5,$01
+05ed  20 02         bra    $05f1
+05ef  1b 01         bclr    5,$01
+05f1  18 01         bset    4,$01
+05f3  19 01         bclr    4,$01
+05f5  49            db      $49
+05f6  24 04         bcc    $05fc
+05f8  1a 01         bset    5,$01
+05fa  20 02         bra    $05fe
+05fc  1b 01         bclr    5,$01
+05fe  18 01         bset    4,$01
+0600  19 01         bclr    4,$01
+0602  49            db      $49
+0603  24 04         bcc    $0609
+0605  1a 01         bset    5,$01
+0607  20 02         bra    $060b
+0609  1b 01         bclr    5,$01
+060b  18 01         bset    4,$01
+060d  19 01         bclr    4,$01
+060f  49            db      $49
+0610  24 04         bcc    $0616
+0612  1a 01         bset    5,$01
+0614  20 02         bra    $0618
+0616  1b 01         bclr    5,$01
+0618  18 01         bset    4,$01
+061a  19 01         bclr    4,$01
+061c  49            db      $49
+061d  24 04         bcc    $0623
+061f  1a 01         bset    5,$01
+0621  20 02         bra    $0625
+0623  1b 01         bclr    5,$01
+0625  18 01         bset    4,$01
+0627  19 01         bclr    4,$01
+0629  49            db      $49
+062a  24 04         bcc    $0630
+062c  1a 01         bset    5,$01
+062e  20 02         bra    $0632
+0630  1b 01         bclr    5,$01
+0632  18 01         bset    4,$01
+0634  cd 1d f1      jsr    $1df1
+0637  1b 05         bclr    5,$05
+0639  98            clc
+063a  19 a3         bclr    4,$a3
+063c  1a a3         bset    5,$a3
+063e  9a            cli
+063f  81            rts
+0640  cd 15 49      jsr    $1549
+0643  b6 b7         lda    $b7
+0645  5f            clrx
+0646  cd 15 86      jsr    $1586
+0649  25 07         bcs    $0652
+064b  b6 b8         lda    $b8
+064d  12 01         bset    1,$01
+064f  cd 15 93      jsr    $1593
+0652  12 01         bset    1,$01
+0654  01 01 0a      brclr    0,$01,$0661
+0657  06 01 02      brset    3,$01,$065c
+065a  99            sec
+065b  81            rts
+065c  cd 11 49      jsr    $1149
+065f  20 f3         bra    $0654
+0661  99            sec
+0662  81            rts
+0663  cd 15 49      jsr    $1549
+0666  b6 b7         lda    $b7
+0668  5f            clrx
+0669  cd 15 86      jsr    $1586
+066c  25 06         bcs    $0674
+066e  b6 b8         lda    $b8
+0670  cd 15 93      jsr    $1593
+0673  81            rts
+0674  12 01         bset    1,$01
+0676  81            rts
+0677  4f            clra
+0678  cd 14 a1      jsr    $14a1
+067b  1f a2         bclr    7,$a2
+067d  19 a2         bclr    4,$a2
+067f  3f cb         clr    $cb
+0681  cc 16 40      jmp    $1640
+0684  a6 01         lda    #$01
+0686  cd 14 a1      jsr    $14a1
+0689  24 03         bcc    $068e
+068b  cc 12 e6      jmp    $12e6
+068e  1f a2         bclr    7,$a2
+0690  b6 b9         lda    $b9
+0692  27 0a         beq    $069e
+0694  1e a2         bset    7,$a2
+0696  a6 30         lda    #$30
+0698  b7 b3         sta    $b3
+069a  a6 20         lda    #$20
+069c  b7 b4         sta    $b4
+069e  cc 16 40      jmp    $1640
+06a1  a6 02         lda    #$02
+06a3  cd 14 a1      jsr    $14a1
+06a6  24 03         bcc    $06ab
+06a8  cc 12 e6      jmp    $12e6
+06ab  cd 16 63      jsr    $1663
+06ae  25 1f         bcs    $06cf
+06b0  a6 c6         lda    #$c6
+06b2  b7 a7         sta    $a7
+06b4  b6 b9         lda    $b9
+06b6  b7 a8         sta    $a8
+06b8  b6 ba         lda    $ba
+06ba  b7 a9         sta    $a9
+06bc  a6 81         lda    #$81
+06be  b7 aa         sta    $aa
+06c0  bd a7         jsr    $a7
+06c2  cd 15 93      jsr    $1593
+06c5  25 08         bcs    $06cf
+06c7  3c a9         inc    $a9
+06c9  26 f5         bne    $06c0
+06cb  3c a8         inc    $a8
+06cd  20 f1         bra    $06c0
+06cf  cc 16 52      jmp    $1652
+06d2  4f            clra
+06d3  cd 14 a1      jsr    $14a1
+06d6  24 03         bcc    $06db
+06d8  cc 12 e6      jmp    $12e6
+06db  cd 16 63      jsr    $1663
+06de  25 27         bcs    $0707
+06e0  ae 03         ldx    #$03
+06e2  9b            sei
+06e3  e6 ab         lda    $ab,x
+06e5  e7 b9         sta    $b9,x
+06e7  5a            decx
+06e8  2a f9         bpl    $06e3
+06ea  11 a2         bclr    0,$a2
+06ec  9a            cli
+06ed  b6 b9         lda    $b9
+06ef  cd 15 93      jsr    $1593
+06f2  25 13         bcs    $0707
+06f4  b6 ba         lda    $ba
+06f6  cd 15 93      jsr    $1593
+06f9  25 0c         bcs    $0707
+06fb  b6 bb         lda    $bb
+06fd  cd 15 93      jsr    $1593
+0700  25 05         bcs    $0707
+0702  b6 bc         lda    $bc
+0704  cc 16 4d      jmp    $164d
+0707  cc 16 52      jmp    $1652
+070a  4f            clra
+070b  cd 14 a1      jsr    $14a1
+070e  24 03         bcc    $0713
+0710  cc 12 e6      jmp    $12e6
+0713  cd 16 63      jsr    $1663
+0716  25 0b         bcs    $0723
+0718  a6 10         lda    #$10
+071a  cd 15 93      jsr    $1593
+071d  25 04         bcs    $0723
+071f  4f            clra
+0720  cc 16 4d      jmp    $164d
+0723  cc 16 52      jmp    $1652
+0726  4f            clra
+0727  cd 14 a1      jsr    $14a1
+072a  24 03         bcc    $072f
+072c  cc 12 e6      jmp    $12e6
+072f  cd 16 63      jsr    $1663
+0732  25 0c         bcs    $0740
+0734  a6 0f         lda    #$0f
+0736  cd 15 93      jsr    $1593
+0739  25 05         bcs    $0740
+073b  a6 00         lda    #$00
+073d  cc 16 4d      jmp    $164d
+0740  cc 16 52      jmp    $1652
+0743  4f            clra
+0744  cd 14 a1      jsr    $14a1
+0747  24 03         bcc    $074c
+0749  cc 12 e6      jmp    $12e6
+074c  cd 16 63      jsr    $1663
+074f  25 0c         bcs    $075d
+0751  a6 0f         lda    #$0f
+0753  cd 15 93      jsr    $1593
+0756  25 05         bcs    $075d
+0758  a6 5a         lda    #$5a
+075a  cc 16 4d      jmp    $164d
+075d  cc 16 52      jmp    $1652
+0760  a6 02         lda    #$02
+0762  cd 14 a1      jsr    $14a1
+0765  24 03         bcc    $076a
+0767  cc 12 e6      jmp    $12e6
+076a  b6 b9         lda    $b9
+076c  27 0a         beq    $0778
+076e  a1 01         cmpa    #$01
+0770  26 28         bne    $079a
+0772  b6 ba         lda    $ba
+0774  a1 08         cmpa    #$08
+0776  24 22         bcc    $079a
+0778  cd 16 63      jsr    $1663
+077b  25 1a         bcs    $0797
+077d  a6 c6         lda    #$c6
+077f  b7 a7         sta    $a7
+0781  a6 81         lda    #$81
+0783  b7 aa         sta    $aa
+0785  cd 17 a7      jsr    $17a7
+0788  bd a7         jsr    $a7
+078a  cd 15 93      jsr    $1593
+078d  25 08         bcs    $0797
+078f  3c ba         inc    $ba
+0791  26 f2         bne    $0785
+0793  3c b9         inc    $b9
+0795  20 ee         bra    $0785
+0797  cc 16 52      jmp    $1652
+079a  b6 b7         lda    $b7
+079c  b7 b9         sta    $b9
+079e  b6 b8         lda    $b8
+07a0  b7 ba         sta    $ba
+07a2  a6 04         lda    #$04
+07a4  cc 12 f5      jmp    $12f5
+07a7  b6 b9         lda    $b9
+07a9  27 0e         beq    $07b9
+07ab  a1 01         cmpa    #$01
+07ad  26 06         bne    $07b5
+07af  b6 ba         lda    $ba
+07b1  a1 08         cmpa    #$08
+07b3  25 04         bcs    $07b9
+07b5  3f b9         clr    $b9
+07b7  3f ba         clr    $ba
+07b9  b6 b9         lda    $b9
+07bb  a4 01         anda    #$01
+07bd  a8 01         eora    #$01
+07bf  b7 a8         sta    $a8
+07c1  27 05         beq    $07c8
+07c3  b6 ba         lda    $ba
+07c5  b7 a9         sta    $a9
+07c7  81            rts
+07c8  b6 ba         lda    $ba
+07ca  ab d7         adda    #$d7
+07cc  b7 a9         sta    $a9
+07ce  81            rts
+07cf  cd 15 36      jsr    $1536
+07d2  24 03         bcc    $07d7
+07d4  cc 12 e6      jmp    $12e6
+07d7  a6 c7         lda    #$c7
+07d9  b7 a7         sta    $a7
+07db  b6 b9         lda    $b9
+07dd  b7 a8         sta    $a8
+07df  b6 ba         lda    $ba
+07e1  b7 a9         sta    $a9
+07e3  a6 81         lda    #$81
+07e5  b7 aa         sta    $aa
+07e7  3f b5         clr    $b5
+07e9  cd 14 c8      jsr    $14c8
+07ec  25 06         bcs    $07f4
+07ee  bd a7         jsr    $a7
+07f0  3c a9         inc    $a9
+07f2  20 f3         bra    $07e7
+07f4  cc 16 40      jmp    $1640
+07f7  a6 04         lda    #$04
+07f9  cd 14 a1      jsr    $14a1
+07fc  24 03         bcc    $0801
+07fe  cc 12 e6      jmp    $12e6
+0801  ae 03         ldx    #$03
+0803  9b            sei
+0804  e6 b9         lda    $b9,x
+0806  e7 ab         sta    $ab,x
+0808  5a            decx
+0809  2a f9         bpl    $0804
+080b  9a            cli
+080c  cc 16 40      jmp    $1640
+080f  4f            clra
+0810  cd 14 a1      jsr    $14a1
+0813  24 03         bcc    $0818
+0815  cc 12 e6      jmp    $12e6
+0818  0b 00 0a      brclr    5,$00,$0825
+081b  cd 11 c1      jsr    $11c1
+081e  25 05         bcs    $0825
+0820  15 a3         bclr    2,$a3
+0822  cc 0f af      jmp    $0faf
+0825  cc 16 40      jmp    $1640
+0828  98            clc
+0829  81            rts
+082a  a6 04         lda    #$04
+082c  cd 14 a1      jsr    $14a1
+082f  24 03         bcc    $0834
+0831  cc 12 e6      jmp    $12e6
+0834  0a 00 05      brset    5,$00,$083c
+0837  a6 02         lda    #$02
+0839  cc 12 f5      jmp    $12f5
+083c  ae 03         ldx    #$03
+083e  9b            sei
+083f  e6 b9         lda    $b9,x
+0841  e7 af         sta    $af,x
+0843  5a            decx
+0844  2a f9         bpl    $083f
+0846  9a            cli
+0847  cc 16 40      jmp    $1640
+084a  cd 15 36      jsr    $1536
+084d  24 03         bcc    $0852
+084f  cc 12 e6      jmp    $12e6
+0852  b6 b9         lda    $b9
+0854  27 0a         beq    $0860
+0856  a1 01         cmpa    #$01
+0858  26 27         bne    $0881
+085a  b6 ba         lda    $ba
+085c  a1 08         cmpa    #$08
+085e  24 21         bcc    $0881
+0860  a6 c7         lda    #$c7
+0862  b7 a7         sta    $a7
+0864  a6 81         lda    #$81
+0866  b7 aa         sta    $aa
+0868  cd 17 a7      jsr    $17a7
+086b  a6 02         lda    #$02
+086d  b7 b5         sta    $b5
+086f  cd 14 c8      jsr    $14c8
+0872  25 0a         bcs    $087e
+0874  bd a7         jsr    $a7
+0876  3c ba         inc    $ba
+0878  26 ee         bne    $0868
+087a  3c b9         inc    $b9
+087c  20 ea         bra    $0868
+087e  cc 16 40      jmp    $1640
+0881  cd 14 c8      jsr    $14c8
+0884  24 fb         bcc    $0881
+0886  cc 17 9a      jmp    $179a
+0889  a6 01         lda    #$01
+088b  cd 14 a1      jsr    $14a1
+088e  24 03         bcc    $0893
+0890  cc 12 e6      jmp    $12e6
+0893  1d a2         bclr    6,$a2
+0895  b6 b9         lda    $b9
+0897  27 02         beq    $089b
+0899  1c a2         bset    6,$a2
+089b  cc 16 40      jmp    $1640
+089e  a6 04         lda    #$04
+08a0  cd 14 a1      jsr    $14a1
+08a3  b6 b5         lda    $b5
+08a5  27 04         beq    $08ab
+08a7  a1 04         cmpa    #$04
+08a9  23 03         bls    $08ae
+08ab  cc 12 e6      jmp    $12e6
+08ae  3f b6         clr    $b6
+08b0  1c 05         bset    6,$05
+08b2  be b6         ldx    $b6
+08b4  e6 b9         lda    $b9,x
+08b6  ae 08         ldx    #$08
+08b8  1f 01         bclr    7,$01
+08ba  49            db      $49
+08bb  24 04         bcc    $08c1
+08bd  1c 01         bset    6,$01
+08bf  20 02         bra    $08c3
+08c1  1d 01         bclr    6,$01
+08c3  1e 01         bset    7,$01
+08c5  5a            decx
+08c6  26 f0         bne    $08b8
+08c8  3c b6         inc    $b6
+08ca  b6 b6         lda    $b6
+08cc  b1 b5         cmpa    $b5
+08ce  26 e2         bne    $08b2
+08d0  18 00         bset    4,$00
+08d2  19 00         bclr    4,$00
+08d4  1c 01         bset    6,$01
+08d6  1d 05         bclr    6,$05
+08d8  cc 16 40      jmp    $1640
+08db  4f            clra
+08dc  cd 14 a1      jsr    $14a1
+08df  24 03         bcc    $08e4
+08e1  cc 12 e6      jmp    $12e6
+08e4  ae 3f         ldx    #$3f
+08e6  e6 90         lda    $90,x
+08e8  b7 c0         sta    $c0
+08ea  a6 01         lda    #$01
+08ec  e7 90         sta    $90,x
+08ee  e1            db      $e1
+08ef  90            db      $90
+08f0  26 0c         bne    $08fe
+08f2  49            db      $49
+08f3  24 f7         bcc    $08ec
+08f5  b6 c0         lda    $c0
+08f7  e7 90         sta    $90,x
+08f9  5a            decx
+08fa  2a ea         bpl    $08e6
+08fc  20 0e         bra    $090c
+08fe  b7 bb         sta    $bb
+0900  b6 c0         lda    $c0
+0902  e7 90         sta    $90,x
+0904  a6 02         lda    #$02
+0906  b7 b9         sta    $b9
+0908  bf ba         stx    $ba
+090a  20 79         bra    $0985
+090c  1e 00         bset    7,$00
+090e  cd 1d f1      jsr    $1df1
+0911  0c 00 0a      brset    6,$00,$091e
+0914  1f 00         bclr    7,$00
+0916  cd 1d f1      jsr    $1df1
+0919  0d 00 02      brclr    6,$00,$091e
+091c  20 0c         bra    $092a
+091e  1f 00         bclr    7,$00
+0920  a6 03         lda    #$03
+0922  b7 b9         sta    $b9
+0924  3f ba         clr    $ba
+0926  3f bb         clr    $bb
+0928  20 5b         bra    $0985
+092a  3f 93         clr    $93
+092c  a6 c6         lda    #$c6
+092e  b7 a7         sta    $a7
+0930  a6 0f         lda    #$0f
+0932  b7 a8         sta    $a8
+0934  3f a9         clr    $a9
+0936  a6 81         lda    #$81
+0938  b7 aa         sta    $aa
+093a  bd a7         jsr    $a7
+093c  b8 93         eora    $93
+093e  b8 a9         eora    $a9
+0940  b8 a8         eora    $a8
+0942  b7 93         sta    $93
+0944  3c a9         inc    $a9
+0946  26 02         bne    $094a
+0948  3c a8         inc    $a8
+094a  b6 a9         lda    $a9
+094c  a1 b6         cmpa    #$b6
+094e  26 ea         bne    $093a
+0950  b6 a8         lda    $a8
+0952  a1 1e         cmpa    #$1e
+0954  26 e4         bne    $093a
+0956  a6 f0         lda    #$f0
+0958  ae 1f         ldx    #$1f
+095a  bf a8         stx    $a8
+095c  b7 a9         sta    $a9
+095e  bd a7         jsr    $a7
+0960  b8 93         eora    $93
+0962  b8 a9         eora    $a9
+0964  b8 a8         eora    $a8
+0966  b7 93         sta    $93
+0968  3c a9         inc    $a9
+096a  26 f2         bne    $095e
+096c  c6 1e b6      lda    $1eb6
+096f  b1 93         cmpa    $93
+0971  27 0c         beq    $097f
+0973  b7 ba         sta    $ba
+0975  b6 93         lda    $93
+0977  b7 bb         sta    $bb
+0979  a6 01         lda    #$01
+097b  b7 b9         sta    $b9
+097d  20 06         bra    $0985
+097f  3f b9         clr    $b9
+0981  3f ba         clr    $ba
+0983  3f bb         clr    $bb
+0985  cd 15 49      jsr    $1549
+0988  a6 01         lda    #$01
+098a  be b9         ldx    $b9
+098c  cd 15 86      jsr    $1586
+098f  25 13         bcs    $09a4
+0991  a6 0f         lda    #$0f
+0993  cd 15 93      jsr    $1593
+0996  25 0c         bcs    $09a4
+0998  b6 ba         lda    $ba
+099a  cd 15 93      jsr    $1593
+099d  25 05         bcs    $09a4
+099f  b6 bb         lda    $bb
+09a1  cc 16 4d      jmp    $164d
+09a4  cc 16 52      jmp    $1652
+09a7  4f            clra
+09a8  cd 14 a1      jsr    $14a1
+09ab  24 03         bcc    $09b0
+09ad  cc 12 e6      jmp    $12e6
+09b0  0b 00 05      brclr    5,$00,$09b8
+09b3  a6 02         lda    #$02
+09b5  cc 12 f5      jmp    $12f5
+09b8  cd 16 63      jsr    $1663
+09bb  25 0a         bcs    $09c7
+09bd  00 00 00      brset    0,$00,$09c0
+09c0  4f            clra
+09c1  24 01         bcc    $09c4
+09c3  4a            deca
+09c4  cc 16 4d      jmp    $164d
+09c7  cc 16 52      jmp    $1652
+09ca  4f            clra
+09cb  cd 14 a1      jsr    $14a1
+09ce  24 03         bcc    $09d3
+09d0  cc 12 e6      jmp    $12e6
+09d3  1f a1         bclr    7,$a1
+09d5  cc 0f af      jmp    $0faf
+09d8  a6 01         lda    #$01
+09da  cd 14 a1      jsr    $14a1
+09dd  24 03         bcc    $09e2
+09df  cc 12 e6      jmp    $12e6
+09e2  0b 00 05      brclr    5,$00,$09ea
+09e5  a6 02         lda    #$02
+09e7  cc 12 f5      jmp    $12f5
+09ea  13 00         bclr    1,$00
+09ec  b6 b9         lda    $b9
+09ee  27 02         beq    $09f2
+09f0  12 00         bset    1,$00
+09f2  cc 16 40      jmp    $1640
+09f5  a6 01         lda    #$01
+09f7  cd 14 a1      jsr    $14a1
+09fa  24 03         bcc    $09ff
+09fc  cc 12 e6      jmp    $12e6
+09ff  0a 00 05      brset    5,$00,$0a07
+0a02  a6 02         lda    #$02
+0a04  cc 12 f5      jmp    $12f5
+0a07  15 a3         bclr    2,$a3
+0a09  b6 b9         lda    $b9
+0a0b  27 02         beq    $0a0f
+0a0d  14 a3         bset    2,$a3
+0a0f  cc 16 40      jmp    $1640
+0a12  a6 01         lda    #$01
+0a14  cd 14 a1      jsr    $14a1
+0a17  24 03         bcc    $0a1c
+0a19  cc 12 e6      jmp    $12e6
+0a1c  b6 b9         lda    $b9
+0a1e  b7 a4         sta    $a4
+0a20  cc 16 40      jmp    $1640
+0a23  4f            clra
+0a24  cd 14 a1      jsr    $14a1
+0a27  24 03         bcc    $0a2c
+0a29  cc 12 e6      jmp    $12e6
+0a2c  cd 16 63      jsr    $1663
+0a2f  25 0c         bcs    $0a3d
+0a31  a6 01         lda    #$01
+0a33  cd 15 93      jsr    $1593
+0a36  25 05         bcs    $0a3d
+0a38  a6 08         lda    #$08
+0a3a  cc 16 4d      jmp    $164d
+0a3d  cc 16 52      jmp    $1652
+0a40  4f            clra
+0a41  cd 14 a1      jsr    $14a1
+0a44  24 03         bcc    $0a49
+0a46  cc 12 e6      jmp    $12e6
+0a49  cd 16 63      jsr    $1663
+0a4c  25 05         bcs    $0a53
+0a4e  b6 a4         lda    $a4
+0a50  cc 16 4d      jmp    $164d
+0a53  cc 16 52      jmp    $1652
+0a56  a6 01         lda    #$01
+0a58  cd 14 a1      jsr    $14a1
+0a5b  24 03         bcc    $0a60
+0a5d  cc 12 e6      jmp    $12e6
+0a60  b6 b9         lda    $b9
+0a62  b7 a5         sta    $a5
+0a64  cc 16 40      jmp    $1640
+0a67  4f            clra
+0a68  cd 14 a1      jsr    $14a1
+0a6b  24 03         bcc    $0a70
+0a6d  cc 12 e6      jmp    $12e6
+0a70  cd 16 63      jsr    $1663
+0a73  25 05         bcs    $0a7a
+0a75  b6 a5         lda    $a5
+0a77  cc 16 4d      jmp    $164d
+0a7a  cc 16 52      jmp    $1652
+0a7d  a6 02         lda    #$02
+0a7f  cd 14 a1      jsr    $14a1
+0a82  24 03         bcc    $0a87
+0a84  cc 12 e6      jmp    $12e6
+0a87  b6 b9         lda    $b9
+0a89  b7 c9         sta    $c9
+0a8b  b6 ba         lda    $ba
+0a8d  b7 ca         sta    $ca
+0a8f  cc 16 40      jmp    $1640
+0a92  4f            clra
+0a93  cd 14 a1      jsr    $14a1
+0a96  24 03         bcc    $0a9b
+0a98  cc 12 e6      jmp    $12e6
+0a9b  cd 16 63      jsr    $1663
+0a9e  25 0c         bcs    $0aac
+0aa0  b6 c9         lda    $c9
+0aa2  cd 15 93      jsr    $1593
+0aa5  25 05         bcs    $0aac
+0aa7  b6 ca         lda    $ca
+0aa9  cc 16 4d      jmp    $164d
+0aac  cc 16 52      jmp    $1652
+0aaf  a6 01         lda    #$01
+0ab1  cd 14 a1      jsr    $14a1
+0ab4  24 03         bcc    $0ab9
+0ab6  cc 12 e6      jmp    $12e6
+0ab9  19 a2         bclr    4,$a2
+0abb  3f cb         clr    $cb
+0abd  b6 b9         lda    $b9
+0abf  27 0a         beq    $0acb
+0ac1  a1 04         cmpa    #$04
+0ac3  24 06         bcc    $0acb
+0ac5  18 a2         bset    4,$a2
+0ac7  b7 cb         sta    $cb
+0ac9  10 a2         bset    0,$a2
+0acb  cc 16 40      jmp    $1640
+0ace  cd 1e 4e      jsr    $1e4e
+0ad1  09 a2 21      brclr    4,$a2,$0af5
+0ad4  07 a2 1e      brclr    3,$a2,$0af5
+0ad7  a6 01         lda    #$01
+0ad9  b7 b7         sta    $b7
+0adb  a6 03         lda    #$03
+0add  b7 b8         sta    $b8
+0adf  00 a2 0c      brset    0,$a2,$0aee
+0ae2  b6 cb         lda    $cb
+0ae4  4a            deca
+0ae5  27 07         beq    $0aee
+0ae7  4a            deca
+0ae8  27 0d         beq    $0af7
+0aea  4a            deca
+0aeb  27 0f         beq    $0afc
+0aed  81            rts
+0aee  cd 16 db      jsr    $16db
+0af1  17 a2         bclr    3,$a2
+0af3  98            clc
+0af4  81            rts
+0af5  99            sec
+0af6  81            rts
+0af7  cd 16 40      jsr    $1640
+0afa  20 f5         bra    $0af1
+0afc  cd 15 49      jsr    $1549
+0aff  a6 03         lda    #$03
+0b01  12 01         bset    1,$01
+0b03  cd 15 93      jsr    $1593
+0b06  cd 11 49      jsr    $1149
+0b09  01 01 e9      brclr    0,$01,$0af5
+0b0c  06 01 f7      brset    3,$01,$0b06
+0b0f  20 e0         bra    $0af1
+0b11  a6 01         lda    #$01
+0b13  cd 14 a1      jsr    $14a1
+0b16  24 03         bcc    $0b1b
+0b18  cc 12 e6      jmp    $12e6
+0b1b  15 a2         bclr    2,$a2
+0b1d  b6 b9         lda    $b9
+0b1f  27 02         beq    $0b23
+0b21  14 a2         bset    2,$a2
+0b23  cc 16 40      jmp    $1640
+0b26  a6 01         lda    #$01
+0b28  cd 14 a1      jsr    $14a1
+0b2b  24 03         bcc    $0b30
+0b2d  cc 12 e6      jmp    $12e6
+0b30  1d a1         bclr    6,$a1
+0b32  b6 b9         lda    $b9
+0b34  27 02         beq    $0b38
+0b36  1c a1         bset    6,$a1
+0b38  cc 16 40      jmp    $1640
+0b3b  a6 01         lda    #$01
+0b3d  cd 14 a1      jsr    $14a1
+0b40  24 03         bcc    $0b45
+0b42  cc 12 e6      jmp    $12e6
+0b45  b6 b9         lda    $b9
+0b47  26 01         bne    $0b4a
+0b49  4a            deca
+0b4a  b7 a6         sta    $a6
+0b4c  cc 16 40      jmp    $1640
+0b4f  4f            clra
+0b50  cd 14 a1      jsr    $14a1
+0b53  24 03         bcc    $0b58
+0b55  cc 12 e6      jmp    $12e6
+0b58  cd 16 63      jsr    $1663
+0b5b  25 05         bcs    $0b62
+0b5d  b6 a6         lda    $a6
+0b5f  cc 16 4d      jmp    $164d
+0b62  cc 16 52      jmp    $1652
+0b65  36            db      $36
+0b66  37            db      $37
+0b67  7f            db      $7f
+0b68  b7 93         sta    $93
+0b6a  a4 7f         anda    #$7f
+0b6c  ae 02         ldx    #$02
+0b6e  d1            db      $d1
+0b6f  1b 65         bclr    5,$65
+0b71  27 0a         beq    $0b7d
+0b73  5a            decx
+0b74  2a f8         bpl    $0b6e
+0b76  b6 a1         lda    $a1
+0b78  a4 c0         anda    #$c0
+0b7a  b7 a1         sta    $a1
+0b7c  81            rts
+0b7d  9f            txa
+0b7e  48            db      $48
+0b7f  97            tax
+0b80  b6 93         lda    $93
+0b82  dc            db      $dc
+0b83  1b b9         bclr    5,$b9
+0b85  2a 04         bpl    $0b8b
+0b87  11 a1         bclr    0,$a1
+0b89  20 34         bra    $0bbf
+0b8b  10 a1         bset    0,$a1
+0b8d  20 30         bra    $0bbf
+0b8f  2a 04         bpl    $0b95
+0b91  15 a1         bclr    2,$a1
+0b93  20 2a         bra    $0bbf
+0b95  14 a1         bset    2,$a1
+0b97  20 26         bra    $0bbf
+0b99  b7 94         sta    $94
+0b9b  b6 99         lda    $99
+0b9d  a4 7f         anda    #$7f
+0b9f  b7 93         sta    $93
+0ba1  b6 9a         lda    $9a
+0ba3  a4 7f         anda    #$7f
+0ba5  a1 7f         cmpa    #$7f
+0ba7  26 16         bne    $0bbf
+0ba9  b8 93         eora    $93
+0bab  26 12         bne    $0bbf
+0bad  b6 94         lda    $94
+0baf  2a 04         bpl    $0bb5
+0bb1  1b a1         bclr    5,$a1
+0bb3  20 0a         bra    $0bbf
+0bb5  1a a1         bset    5,$a1
+0bb7  20 06         bra    $0bbf
+0bb9  20 ca         bra    $0b85
+0bbb  20 d2         bra    $0b8f
+0bbd  20 da         bra    $0b99
+0bbf  b6 a1         lda    $a1
+0bc1  a4 3f         anda    #$3f
+0bc3  27 08         beq    $0bcd
+0bc5  a1 25         cmpa    #$25
+0bc7  27 05         beq    $0bce
+0bc9  a1 24         cmpa    #$24
+0bcb  27 18         beq    $0be5
+0bcd  81            rts
+0bce  b6 a1         lda    $a1
+0bd0  a4 c0         anda    #$c0
+0bd2  b7 a1         sta    $a1
+0bd4  0d a2 03      brclr    6,$a2,$0bda
+0bd7  1d a2         bclr    6,$a2
+0bd9  81            rts
+0bda  17 00         bclr    3,$00
+0bdc  17 02         bclr    3,$02
+0bde  16 06         bset    3,$06
+0be0  1e a1         bset    7,$a1
+0be2  cc 0f af      jmp    $0faf
+0be5  05 a2 0d      brclr    2,$a2,$0bf5
+0be8  cd 1e 92      jsr    $1e92
+0beb  b6 a1         lda    $a1
+0bed  a4 c0         anda    #$c0
+0bef  b7 a1         sta    $a1
+0bf1  12 95         bset    1,$95
+0bf3  3f 96         clr    $96
+0bf5  81            rts
+0bf6  1e 00         bset    7,$00
+0bf8  ae 06         ldx    #$06
+0bfa  bf 92         stx    $92
+0bfc  49            db      $49
+0bfd  25 16         bcs    $0c15
+0bff  ae 09         ldx    #$09
+0c01  cd 1d d1      jsr    $1dd1
+0c04  cd 1d f1      jsr    $1df1
+0c07  20 00         bra    $0c09
+0c09  1f 00         bclr    7,$00
+0c0b  ae 04         ldx    #$04
+0c0d  cd 1d d1      jsr    $1dd1
+0c10  cd 1d f1      jsr    $1df1
+0c13  20 12         bra    $0c27
+0c15  ae 04         ldx    #$04
+0c17  cd 1d d1      jsr    $1dd1
+0c1a  20 00         bra    $0c1c
+0c1c  1f 00         bclr    7,$00
+0c1e  ae 0b         ldx    #$0b
+0c20  cd 1d d1      jsr    $1dd1
+0c23  9d            nop
+0c24  9d            nop
+0c25  20 00         bra    $0c27
+0c27  1e 00         bset    7,$00
+0c29  49            db      $49
+0c2a  25 11         bcs    $0c3d
+0c2c  ae 0b         ldx    #$0b
+0c2e  cd 1d d1      jsr    $1dd1
+0c31  9d            nop
+0c32  1f 00         bclr    7,$00
+0c34  ae 04         ldx    #$04
+0c36  cd 1d d1      jsr    $1dd1
+0c39  20 00         bra    $0c3b
+0c3b  20 11         bra    $0c4e
+0c3d  ae 04         ldx    #$04
+0c3f  cd 1d d1      jsr    $1dd1
+0c42  20 00         bra    $0c44
+0c44  20 00         bra    $0c46
+0c46  9d            nop
+0c47  1f 00         bclr    7,$00
+0c49  ae 0b         ldx    #$0b
+0c4b  cd 1d d1      jsr    $1dd1
+0c4e  3a 92         dec    $92
+0c50  26 d5         bne    $0c27
+0c52  1e 00         bset    7,$00
+0c54  49            db      $49
+0c55  25 08         bcs    $0c5f
+0c57  ae 0b         ldx    #$0b
+0c59  cd 1d d1      jsr    $1dd1
+0c5c  1f 00         bclr    7,$00
+0c5e  81            rts
+0c5f  ae 04         ldx    #$04
+0c61  cd 1d d1      jsr    $1dd1
+0c64  9d            nop
+0c65  20 00         bra    $0c67
+0c67  20 00         bra    $0c69
+0c69  1f 00         bclr    7,$00
+0c6b  ae 05         ldx    #$05
+0c6d  cd 1d d1      jsr    $1dd1
+0c70  81            rts
+0c71  00 01 03      brset    0,$01,$0c77
+0c74  cc 0f af      jmp    $0faf
+0c77  9b            sei
+0c78  b7 98         sta    $98
+0c7a  b6 95         lda    $95
+0c7c  a4 40         anda    #$40
+0c7e  b7 95         sta    $95
+0c80  a6 01         lda    #$01
+0c82  b7 97         sta    $97
+0c84  11 95         bclr    0,$95
+0c86  1e 00         bset    7,$00
+0c88  ae a5         ldx    #$a5
+0c8a  cd 1d d1      jsr    $1dd1
+0c8d  20 00         bra    $0c8f
+0c8f  20 00         bra    $0c91
+0c91  9d            nop
+0c92  1f 00         bclr    7,$00
+0c94  ae 0a         ldx    #$0a
+0c96  cd 1d d1      jsr    $1dd1
+0c99  20 00         bra    $0c9b
+0c9b  9d            nop
+0c9c  9d            nop
+0c9d  b6 98         lda    $98
+0c9f  cd 1b f6      jsr    $1bf6
+0ca2  ae 05         ldx    #$05
+0ca4  cd 1d d1      jsr    $1dd1
+0ca7  1e 00         bset    7,$00
+0ca9  ae 0c         ldx    #$0c
+0cab  cd 1d d1      jsr    $1dd1
+0cae  20 00         bra    $0cb0
+0cb0  9d            nop
+0cb1  9d            nop
+0cb2  1f 00         bclr    7,$00
+0cb4  20 00         bra    $0cb6
+0cb6  20 00         bra    $0cb8
+0cb8  0c 00 16      brset    6,$00,$0cd1
+0cbb  10 95         bset    0,$95
+0cbd  ae 4a         ldx    #$4a
+0cbf  0c 00 0b      brset    6,$00,$0ccd
+0cc2  5a            decx
+0cc3  26 fa         bne    $0cbf
+0cc5  14 95         bset    2,$95
+0cc7  11 95         bclr    0,$95
+0cc9  12 95         bset    1,$95
+0ccb  9a            cli
+0ccc  81            rts
+0ccd  20 00         bra    $0ccf
+0ccf  20 00         bra    $0cd1
+0cd1  b6 98         lda    $98
+0cd3  a4 0c         anda    #$0c
+0cd5  a1 08         cmpa    #$08
+0cd7  26 03         bne    $0cdc
+0cd9  cc 1d 92      jmp    $1d92
+0cdc  ae 2f         ldx    #$2f
+0cde  3f 96         clr    $96
+0ce0  a6 f8         lda    #$f8
+0ce2  b7 97         sta    $97
+0ce4  0d 00 08      brclr    6,$00,$0cef
+0ce7  5a            decx
+0ce8  26 fa         bne    $0ce4
+0cea  12 95         bset    1,$95
+0cec  cc 1d 90      jmp    $1d90
+0cef  ae 0b         ldx    #$0b
+0cf1  0c 00 08      brset    6,$00,$0cfc
+0cf4  5a            decx
+0cf5  26 fa         bne    $0cf1
+0cf7  12 95         bset    1,$95
+0cf9  cc 1d 90      jmp    $1d90
+0cfc  ae 0f         ldx    #$0f
+0cfe  0d 00 06      brclr    6,$00,$0d07
+0d01  5a            decx
+0d02  26 fa         bne    $0cfe
+0d04  cc 1d 4a      jmp    $1d4a
+0d07  a6 01         lda    #$01
+0d09  5f            clrx
+0d0a  0c 00 05      brset    6,$00,$0d12
+0d0d  5c            incx
+0d0e  26 fa         bne    $0d0a
+0d10  20 40         bra    $0d52
+0d12  9d            nop
+0d13  20 00         bra    $0d15
+0d15  0d 00 13      brclr    6,$00,$0d2b
+0d18  5a            decx
+0d19  2a fa         bpl    $0d15
+0d1b  0d 00 0d      brclr    6,$00,$0d2b
+0d1e  ae 8f         ldx    #$8f
+0d20  9d            nop
+0d21  9d            nop
+0d22  0d 00 06      brclr    6,$00,$0d2b
+0d25  5a            decx
+0d26  2b fa         bmi    $0d22
+0d28  98            clc
+0d29  20 1f         bra    $0d4a
+0d2b  59            db      $59
+0d2c  49            db      $49
+0d2d  25 0b         bcs    $0d3a
+0d2f  0d 00 00      brclr    6,$00,$0d32
+0d32  0d 00 00      brclr    6,$00,$0d35
+0d35  9d            nop
+0d36  9d            nop
+0d37  9d            nop
+0d38  20 0b         bra    $0d45
+0d3a  be 97         ldx    $97
+0d3c  d7            sta    ,x
+0d3d  ff a1         stx    $a1,x
+0d3f  3c 97         inc    $97
+0d41  27 07         beq    $0d4a
+0d43  a6 01         lda    #$01
+0d45  ae 02         ldx    #$02
+0d47  0d 00 c4      brclr    6,$00,$0d0e
+0d4a  a6 08         lda    #$08
+0d4c  bb 97         adda    $97
+0d4e  b7 96         sta    $96
+0d50  20 04         bra    $0d56
+0d52  16 95         bset    3,$95
+0d54  20 3a         bra    $0d90
+0d56  b6 98         lda    $98
+0d58  a4 0f         anda    #$0f
+0d5a  a1 0f         cmpa    #$0f
+0d5c  26 02         bne    $0d60
+0d5e  19 99         bclr    4,$99
+0d60  b6 98         lda    $98
+0d62  a1 2c         cmpa    #$2c
+0d64  26 0d         bne    $0d73
+0d66  9a            cli
+0d67  b6 99         lda    $99
+0d69  cd 1b 68      jsr    $1b68
+0d6c  b6 9a         lda    $9a
+0d6e  cd 1b 68      jsr    $1b68
+0d71  20 1d         bra    $0d90
+0d73  0d a1 02      brclr    6,$a1,$0d78
+0d76  20 18         bra    $0d90
+0d78  a1 2e         cmpa    #$2e
+0d7a  26 14         bne    $0d90
+0d7c  b6 99         lda    $99
+0d7e  a4 1f         anda    #$1f
+0d80  a1 06         cmpa    #$06
+0d82  26 05         bne    $0d89
+0d84  cd 1b d4      jsr    $1bd4
+0d87  20 07         bra    $0d90
+0d89  a1 0e         cmpa    #$0e
+0d8b  26 03         bne    $0d90
+0d8d  cd 1b e5      jsr    $1be5
+0d90  9a            cli
+0d91  81            rts
+0d92  ae 26         ldx    #$26
+0d94  cd 1d d1      jsr    $1dd1
+0d97  1e 00         bset    7,$00
+0d99  ae 05         ldx    #$05
+0d9b  cd 1d d1      jsr    $1dd1
+0d9e  9d            nop
+0d9f  9d            nop
+0da0  1f 00         bclr    7,$00
+0da2  ae 0a         ldx    #$0a
+0da4  cd 1d d1      jsr    $1dd1
+0da7  20 00         bra    $0da9
+0da9  be 97         ldx    $97
+0dab  e6 98         lda    $98,x
+0dad  cd 1b f6      jsr    $1bf6
+0db0  ae 02         ldx    #$02
+0db2  cd 1d d1      jsr    $1dd1
+0db5  3c 97         inc    $97
+0db7  b6 97         lda    $97
+0db9  b1 96         cmpa    $96
+0dbb  26 ec         bne    $0da9
+0dbd  cd 1d f1      jsr    $1df1
+0dc0  9d            nop
+0dc1  1e 00         bset    7,$00
+0dc3  ae 0c         ldx    #$0c
+0dc5  cd 1d d1      jsr    $1dd1
+0dc8  20 00         bra    $0dca
+0dca  20 00         bra    $0dcc
+0dcc  9d            nop
+0dcd  1f 00         bclr    7,$00
+0dcf  9a            cli
+0dd0  81            rts
+0dd1  9d            nop
+0dd2  9d            nop
+0dd3  5a            decx
+0dd4  26 fb         bne    $0dd1
+0dd6  81            rts
+0dd7  b6 a5         lda    $a5
+0dd9  ae 13         ldx    #$13
+0ddb  cd 1d d1      jsr    $1dd1
+0dde  4a            deca
+0ddf  26 f8         bne    $0dd9
+0de1  81            rts
+0de2  a3 00         cpx    #$00
+0de4  27 0b         beq    $0df1
+0de6  a6 ae         lda    #$ae
+0de8  9d            nop
+0de9  9d            nop
+0dea  9d            nop
+0deb  4a            deca
+0dec  26 fa         bne    $0de8
+0dee  5a            decx
+0def  26 f5         bne    $0de6
+0df1  81            rts
+0df2  0c 07 06      brset    6,$07,$0dfb
+0df5  ae 0f         ldx    #$0f
+0df7  cd 1d d1      jsr    $1dd1
+0dfa  81            rts
+0dfb  ae 0a         ldx    #$0a
+0dfd  cd 1d e2      jsr    $1de2
+0e00  81            rts
+0e01  0c 07 06      brset    6,$07,$0e0a
+0e04  ae a1         ldx    #$a1
+0e06  cd 1d d1      jsr    $1dd1
+0e09  81            rts
+0e0a  ae 64         ldx    #$64
+0e0c  cd 1d e2      jsr    $1de2
+0e0f  81            rts
+0e10  04 01 21      brset    2,$01,$0e34
+0e13  1b a3         bclr    5,$a3
+0e15  3c cc         inc    $cc
+0e17  2a 05         bpl    $0e1e
+0e19  10 a3         bset    0,$a3
+0e1b  cd 1e 4e      jsr    $1e4e
+0e1e  07 a2 02      brclr    3,$a2,$0e23
+0e21  10 a2         bset    0,$a2
+0e23  04 01 07      brset    2,$01,$0e2d
+0e26  1b a3         bclr    5,$a3
+0e28  16 a2         bset    3,$a2
+0e2a  1d 12         bclr    6,$12
+0e2c  80            rti
+0e2d  18 a3         bset    4,$a3
+0e2f  16 a2         bset    3,$a2
+0e31  1d 12         bclr    6,$12
+0e33  80            rti
+0e34  18 a3         bset    4,$a3
+0e36  3c cc         inc    $cc
+0e38  2a 05         bpl    $0e3f
+0e3a  10 a3         bset    0,$a3
+0e3c  cd 1e 4e      jsr    $1e4e
+0e3f  07 a2 02      brclr    3,$a2,$0e44
+0e42  10 a2         bset    0,$a2
+0e44  04 01 e6      brset    2,$01,$0e2d
+0e47  1b a3         bclr    5,$a3
+0e49  16 a2         bset    3,$a2
+0e4b  1d 12         bclr    6,$12
+0e4d  80            rti
+0e4e  b6 cc         lda    $cc
+0e50  27 2c         beq    $0e7e
+0e52  3c ae         inc    $ae
+0e54  26 0a         bne    $0e60
+0e56  3c ad         inc    $ad
+0e58  26 06         bne    $0e60
+0e5a  3c ac         inc    $ac
+0e5c  26 02         bne    $0e60
+0e5e  3c ab         inc    $ab
+0e60  b6 b2         lda    $b2
+0e62  b1 ae         cmpa    $ae
+0e64  26 14         bne    $0e7a
+0e66  b6 b1         lda    $b1
+0e68  b1 ad         cmpa    $ad
+0e6a  26 0e         bne    $0e7a
+0e6c  b6 b0         lda    $b0
+0e6e  b1 ac         cmpa    $ac
+0e70  26 08         bne    $0e7a
+0e72  b6 af         lda    $af
+0e74  b1 ab         cmpa    $ab
+0e76  26 02         bne    $0e7a
+0e78  1c a3         bset    6,$a3
+0e7a  3a cc         dec    $cc
+0e7c  26 d4         bne    $0e52
+0e7e  81            rts
+0e7f  0f 08 04      brclr    7,$08,$0e86
+0e82  1b 08         bclr    5,$08
+0e84  1f 08         bclr    7,$08
+0e86  0c 08 04      brset    6,$08,$0e8d
+0e89  19 08         bclr    4,$08
+0e8b  1d 08         bclr    6,$08
+0e8d  80            rti
+0e8e  cd 1e 92      jsr    $1e92
+0e91  80            rti
+0e92  0a 00 15      brset    5,$00,$0eaa
+0e95  b6 02         lda    $02
+0e97  a4 f8         anda    #$f8
+0e99  b7 02         sta    $02
+0e9b  b6 06         lda    $06
+0e9d  aa 07         ora    #$07
+0e9f  b7 06         sta    $06
+0ea1  cd 1d f1      jsr    $1df1
+0ea4  a4 f8         anda    #$f8
+0ea6  b7 06         sta    $06
+0ea8  20 0b         bra    $0eb5
+0eaa  15 02         bclr    2,$02
+0eac  14 06         bset    2,$06
+0eae  cd 1d f1      jsr    $1df1
+0eb1  15 06         bclr    2,$06
+0eb3  14 02         bset    2,$02
+0eb5  81            rts
+0eb6  43            db      $43
+0eb7  00 00 00      brset    0,$00,$0eba
+0eba  00 00 00      brset    0,$00,$0ebd
+0ebd  00 00 00      brset    0,$00,$0ec0
+0ec0  00 00 00      brset    0,$00,$0ec3
+0ec3  00 00 00      brset    0,$00,$0ec6
+0ec6  00 00 00      brset    0,$00,$0ec9
+0ec9  00 00 00      brset    0,$00,$0ecc
+0ecc  00 00 00      brset    0,$00,$0ecf
+0ecf  00 00 00      brset    0,$00,$0ed2
+0ed2  00 00 00      brset    0,$00,$0ed5
+0ed5  00 00 00      brset    0,$00,$0ed8
+0ed8  00 00 00      brset    0,$00,$0edb
+0edb  00 00 00      brset    0,$00,$0ede
+0ede  00 00 00      brset    0,$00,$0ee1
+0ee1  00 00 00      brset    0,$00,$0ee4
+0ee4  00 00 00      brset    0,$00,$0ee7
+0ee7  00 00 00      brset    0,$00,$0eea
+0eea  00 00 00      brset    0,$00,$0eed
+0eed  00 00 00      brset    0,$00,$0ef0
+0ef0  00 00 00      brset    0,$00,$0ef3
+0ef3  00 00 00      brset    0,$00,$0ef6
+0ef6  00 00 00      brset    0,$00,$0ef9
+0ef9  00 00 00      brset    0,$00,$0efc
+0efc  00 00 00      brset    0,$00,$0eff
+0eff  00 d8 0f      brset    0,$d8,$0f11
+0f02  00 81 ae      brset    0,$81,$0eb3
+0f05  04 d6 1e      brset    2,$d6,$0f26
+0f08  ff e7         stx    $e7,x
+0f0a  8f            db      $8f
+0f0b  5a            decx
+0f0c  26 f8         bne    $0f06
+0f0e  81            rts
+0f0f  5f            clrx
+0f10  10 06         bset    0,$06
+0f12  ad 47         bsr    $0f5b
+0f14  2f fc         bih    $0f12
+0f16  3f 02         clr    $02
+0f18  b6 00         lda    $00
+0f1a  d7            sta    ,x
+0f1b  01 00 5c      brclr    0,$00,$0f7a
+0f1e  c6 01 00      lda    $0100
+0f21  4a            deca
+0f22  33            db      $33
+0f23  02 c7 01      brset    1,$c7,$0f27
+0f26  00 26 e9      brset    0,$26,$0f12
+0f29  cc 01 01      jmp    $0101
+0f2c  04 01 05      brset    2,$01,$0f34
+0f2f  00 01 dd      brset    0,$01,$0f0f
+0f32  bc 90         jmp    $90
+0f34  07 01 34      brclr    3,$01,$0f6b
+0f37  08 07 fd      brset    4,$07,$0f37
+0f3a  1c 07         bset    6,$07
+0f3c  20 2d         bra    $0f6b
+0f3e  03 96 02      brclr    1,$96,$0f43
+0f41  44            db      $44
+0f42  44            db      $44
+0f43  e7 04         sta    $04,x
+0f45  a6 0a         lda    #$0a
+0f47  02 96 02      brset    1,$96,$0f4c
+0f4a  a6 66         lda    #$66
+0f4c  f7 f1         sta    $f1,x
+0f4e  26 0f         bne    $0f5f
+0f50  43            db      $43
+0f51  03 96 02      brclr    1,$96,$0f56
+0f54  a4 0f         anda    #$0f
+0f56  f7 f1         sta    $f1,x
+0f58  26 05         bne    $0f5f
+0f5a  81            rts
+0f5b  c7 1f f0      sta    $1ff0
+0f5e  81            rts
+0f5f  4f            clra
+0f60  ad f9         bsr    $0f5b
+0f62  20 fb         bra    $0f5f
+0f64  9a            cli
+0f65  9b            sei
+0f66  07 94 f6      brclr    3,$94,$0f5f
+0f69  4f            clra
+0f6a  83            swi
+0f6b  3f 00         clr    $00
+0f6d  ae 02         ldx    #$02
+0f6f  bf 96         stx    $96
+0f71  a6 f0         lda    #$f0
+0f73  ad c9         bsr    $0f3e
+0f75  a6 0f         lda    #$0f
+0f77  ad c5         bsr    $0f3e
+0f79  5a            decx
+0f7a  bf 96         stx    $96
+0f7c  a3 00         cpx    #$00
+0f7e  2a f1         bpl    $0f71
+0f80  4f            clra
+0f81  83            swi
+0f82  ae 90         ldx    #$90
+0f84  f7 f1         sta    $f1,x
+0f86  26 d7         bne    $0f5f
+0f88  4c            inca
+0f89  7c            db      $7c
+0f8a  26 f9         bne    $0f85
+0f8c  ad cd         bsr    $0f5b
+0f8e  7c            db      $7c
+0f8f  5c            incx
+0f90  26 f2         bne    $0f84
+0f92  83            swi
+0f93  ad 06         bsr    $0f9b
+0f95  83            swi
+0f96  ad 39         bsr    $0fd1
+0f98  83            swi
+0f99  20 c9         bra    $0f64
+0f9b  ae 13         ldx    #$13
+0f9d  bf 08         stx    $08
+0f9f  bf 12         stx    $12
+0fa1  ad b8         bsr    $0f5b
+0fa3  0f 08 fb      brclr    7,$08,$0fa1
+0fa6  b6 09         lda    $09
+0fa8  ab 03         adda    #$03
+0faa  b7 95         sta    $95
+0fac  21 fe         brn    $0fac
+0fae  b6 09         lda    $09
+0fb0  b1 95         cmpa    $95
+0fb2  26 ab         bne    $0f5f
+0fb4  0f 08 ef      brclr    7,$08,$0fa6
+0fb7  4f            clra
+0fb8  ad a1         bsr    $0f5b
+0fba  0d 08 fa      brclr    6,$08,$0fb7
+0fbd  0d 12 f7      brclr    6,$12,$0fb7
+0fc0  81            rts
+0fc1  26 9c         bne    $0f5f
+0fc3  3c 01         inc    $01
+0fc5  ad 94         bsr    $0f5b
+0fc7  80            rti
+0fc8  19 12         bclr    4,$12
+0fca  20 02         bra    $0fce
+0fcc  19 08         bclr    4,$08
+0fce  38            db      $38
+0fcf  94            db      $94
+0fd0  80            rti
+0fd1  cd 1f 04      jsr    $1f04
+0fd4  4f            clra
+0fd5  5f            clrx
+0fd6  bd 90         jsr    $90
+0fd8  5c            incx
+0fd9  26 fb         bne    $0fd6
+0fdb  3c 91         inc    $91
+0fdd  ae 20         ldx    #$20
+0fdf  b3 91         cpx    $91
+0fe1  26 f2         bne    $0fd5
+0fe3  43            db      $43
+0fe4  81            rts
+0fe5  44            db      $44
+0fe6  1f c8         bclr    7,$c8
+0fe8  1f cc         bclr    7,$cc
+0fea  1f ce         bclr    7,$ce
+0fec  1f c1         bclr    7,$c1
+0fee  1f 2c         bclr    7,$2c
+0ff0  0f 71 0f      brclr    7,$71,$1002
+0ff3  71            db      $71
+0ff4  0f 71 1e      brclr    7,$71,$1015
+0ff7  10 1e         bset    0,$1e
+0ff9  7f            db      $7f
+0ffa  1e 8e         bset    7,$8e
+0ffc  0f 71 0f      brclr    7,$71,$100e
+0fff  71            db      $71

@@ -404,7 +404,7 @@ always @(posedge clk) begin
         pb_latch <= 8'h00;
         pc_latch <= 8'h00;
         pa_ddr   <= 8'h00;
-        pb_ddr   <= 8'h92;  // Initialize with CB1/CB2 as outputs for VIA communication
+        pb_ddr   <= 8'h00;  // All inputs on reset per 68HC05 datasheet
         pc_ddr   <= 8'h00;
     end else if (port_cs && !cpu_wr && cen) begin  // !cpu_wr means write
         case (cpu_addr[3:0])
@@ -412,8 +412,7 @@ always @(posedge clk) begin
             4'h1: pb_latch <= cpu_dout;
             4'h2: pc_latch <= cpu_dout;
             4'h4: pa_ddr   <= cpu_dout;
-            // Keep PB_ddr at 0x92 - port test would overwrite with bad values
-            // 4'h5: pb_ddr   <= cpu_dout;
+            4'h5: pb_ddr   <= cpu_dout;
             4'h6: pc_ddr   <= cpu_dout;
         endcase
     end
