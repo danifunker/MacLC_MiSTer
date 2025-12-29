@@ -152,7 +152,7 @@ end
 // ROM needs to be accessible where the reset vector points (0x0F0F suggests ROM at low addresses)
 // Map ROM to cover the address space the firmware expects
 wire port_cs = (cpu_addr < 16'h0010);  // I/O ports at 0x00-0x0F
-wire ram_cs  = (cpu_addr >= 16'h0050) && (cpu_addr < 16'h0200);  // RAM at 0x50-0x1FF
+wire ram_cs  = (cpu_addr >= 16'h0050) && (cpu_addr <= 16'h01FF);  // RAM at 0x50-0x1FF (448 bytes)
 // ROM everywhere else - covers reset vectors and main code
 // Exclude I/O and RAM regions
 wire rom_cs  = !port_cs && !ram_cs;
@@ -171,13 +171,28 @@ wire [8:0]  ram_addr = cpu_addr[8:0] - 9'h50;
 // Bit 1-0: PSU control
 
 // Port A input - match MAME's pa_r() behavior
-// For the firmware's port test to pass, all bits must read back from the latch
-// when used as inputs (DDR=0). The test writes a value and reads it back,
-// expecting the same value regardless of DDR setting.
-// IMPORTANT: Even bit 6 (ADB data in) must read from latch during port test.
-// TODO: Later we can add proper ADB handling where bit 6 reflects actual ADB state
-// after initialization is complete.
-wire [7:0] pa_in = pa_latch;  // All bits read back from latch for port test compatibility
+// Per MAME egret.cpp pa_r():
+//   rv = 0;
+//   rv |= m_adb_in ? 0x40 : 0;  // bit 6 = ADB data in
+//   if (m_egret_controls_power) rv |= 0x02;  // bit 1 = chassis switch
+//
+// For Mac LC: m_egret_controls_power = FALSE (hardware power switch)
+// So pa_r() returns only ADB data on bit 6, everything else is 0
+//
+// Bit 5 = 0: Hardware power switch (NOT Egret controls power)
+// Bit 2 = 0: Keyboard power state (from ADB, not implemented)
+// Bit 1-0 = 0: For hardware power switch systems
+wire [7:0] pa_external = {
+    1'b0,           // bit 7: ADB out (reads as 0 when driven low)
+    adb_data_in,    // bit 6: ADB data in
+    1'b0,           // bit 5: System type = 0 (hardware power switch - Mac LC)
+    1'b0,           // bit 4: DFAC latch
+    1'b0,           // bit 3: 680x0 reset
+    1'b0,           // bit 2: Keyboard power (not connected on Mac LC)
+    2'b00           // bits 1-0: Type 0 system (hardware power)
+};
+// Return external values for inputs, latch values for outputs
+wire [7:0] pa_in = (pa_external & ~pa_ddr) | (pa_latch & pa_ddr);
 
 always @(*) begin
     adb_data_out = pa_out[7];
@@ -196,9 +211,25 @@ end
 // Bit 0 (I): +5V sense
 
 // Port B input - Use synchronized signals from VIA
-// Bit 5 (CB2) must read actual data from VIA during shift operations
-// Other bits read back from latch for port test compatibility
-wire [7:0] pb_in = {pb_latch[7:6], via_cb2_in_stable, via_tip_stable, via_byteack_in_stable, pb_latch[1:0]};
+// Per Egret 68HC05 port mapping (MAME egret.cpp):
+//   Bit 7 (O): DFAC clock (I2C SCL) - output, read back from latch
+//   Bit 6 (I/O): DFAC data (I2C SDA) - read back from latch
+//   Bit 5 (I/O): VIA CB2 data - input from VIA during receive
+//   Bit 4 (O): VIA CB1 clock - output, read back from latch
+//   Bit 3 (I): SYS_SESSION/TIP from VIA - INPUT (critical for handshake!)
+//   Bit 2 (I): VIA_FULL - input from VIA (shift register busy)
+//   Bit 1 (O): XCVR_SESSION/TREQ to VIA - output, read back from latch
+//   Bit 0 (I): +5V sense - always high
+wire [7:0] pb_in = {
+    pb_latch[7],           // bit 7: DFAC SCL (output, read back from latch)
+    1'b1,                  // bit 6: DFAC SDA - has pull-up per MAME (always 1)
+    via_cb2_in_stable,     // bit 5: CB2 data from VIA
+    pb_latch[4],           // bit 4: CB1 output (read back from latch)
+    via_tip_stable,        // bit 3: TIP/SYS_SESSION from VIA (INPUT)
+    via_byteack_in_stable, // bit 2: VIA_FULL (shift register busy)
+    pb_latch[1],           // bit 1: TREQ/XCVR_SESSION output (read back from latch)
+    1'b1                   // bit 0: +5V sense (always high per MAME)
+};
 
 // Clock domain crossing synchronizers for VIA signals
 reg [2:0] via_tip_sync;
@@ -319,32 +350,21 @@ assign cuda_portb_oe = pb_ddr;
 // Port C - 68000 control
 // ============================================================================
 // Bit 3 (O): 680x0 reset
-// Bit 2: IPL2
-// Bit 1-0: IPL1-0
+// Bit 2: IPL2 (I/O)
+// Bit 1-0: For hardware power switch: IPL1-0
+//          For Egret-controlled power: trickle sense (bit 1), +5v pullup (bit 0)
+//
+// Per MAME egret.cpp pc_r():
+//   if (m_egret_controls_power) rv |= 0x3;
+//   else rv = 0;
+//
+// For Mac LC (hardware power switch): pc_r() returns 0
+wire [7:0] pc_external = 8'h00;  // All 0 for hardware power switch (Mac LC)
+// Return external values for inputs, latch values for outputs
+wire [7:0] pc_in = (pc_external & ~pc_ddr) | (pc_latch & pc_ddr);
 
-// Port C input - return latch for port test compatibility (like Port A)
-wire [7:0] pc_in = pc_latch;
-
-// Auto-release 68020 from reset after initialization
-// The Egret firmware expects VIA communication before releasing reset,
-// but the 68020 needs to run first to initialize the VIA.
-// Solution: Force reset release after a short delay.
 reg [15:0] reset_release_counter;
-// reg reset_680x0_override;
 
-// always @(posedge clk) begin
-//     if (reset) begin
-//         reset_release_counter <= 0;
-//         reset_680x0_override <= 1'b1; // Hold in reset initially
-//     end else if (cen) begin
-//         if (reset_release_counter < 16'h2000) begin
-//             reset_release_counter <= reset_release_counter + 1;
-//             reset_680x0_override <= 1'b1; // Keep in reset
-//         end else begin
-//             reset_680x0_override <= 1'b0; // Release reset after ~8K cycles
-//         end
-//     end
-// end
 
 always @(*) begin
     reset_680x0 = ~pc_out[3];  // Egret has full control
@@ -462,15 +482,13 @@ always @(*) begin
 end
 
 `ifdef SIMULATION
-// Debug ROM reads (commented out - enable if needed for debugging)
-/*
+// Debug ROM reads to see reset vector fetch - log even before cycle counter starts
 always @(posedge clk) begin
-    if (rom_cs && cycle_count < 20) begin
-        $display("EGRET_ROM_READ[%0d]: addr=%04x rom_addr=%03x data=%02x rom_cs=%b", 
-                 cycle_count, cpu_addr, rom_addr, rom[rom_addr], rom_cs);
+    if (rom_cs) begin
+        $display("EGRET_ROM_READ: addr=%04x rom_addr=%03x data=%02x rom_cs=%b cycle=%0d", 
+                 cpu_addr, rom_addr, rom[rom_addr], rom_cs, cycle_count);
     end
 end
-*/
 `endif
 
 // ============================================================================
