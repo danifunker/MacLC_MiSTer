@@ -7,6 +7,7 @@
 
 module m68hc05_core (
     input  logic        clk,
+    input  logic        cen,    // Clock enable (active high)
     input  logic        rst,
     input  logic        irq,
     output logic [15:0] addr,
@@ -166,13 +167,23 @@ module m68hc05_core (
             
             trace   <= 1'b0;
             trace_i <= 1'b0;
-            
-        end else begin
+
+        end else if (cen) begin
+            // Clock enabled - normal operation
             // IRQ edge detection
             irq_d <= irq;
             if ((irq == 1'b0) && (irq_d == 1'b1) && (flagI == 1'b0)) begin
                 irqRequest <= 1'b1;
+                `ifdef SIMULATION
+                $display("HC05: IRQ request set! PC=%04x flagI=%b", regPC, flagI);
+                `endif
             end
+            `ifdef SIMULATION
+            // Debug: Log when IRQ edge is seen but flagI blocks it
+            if ((irq == 1'b0) && (irq_d == 1'b1) && (flagI == 1'b1)) begin
+                $display("HC05: IRQ edge seen but BLOCKED (flagI=1) PC=%04x mainFSM=%d", regPC, mainFSM);
+            end
+            `endif
             
             case (mainFSM)
                 4'h0: begin  // Reset - fetch PCH from FFFE
@@ -554,6 +565,12 @@ module m68hc05_core (
                             
                             8'h9A, 8'h9B: begin  // CLI, SEI
                                 flagI <= datain[0];
+                                `ifdef SIMULATION
+                                if (datain[0] == 0)
+                                    $display("HC05: CLI - Interrupts ENABLED at PC=%04x (flagI: 1->0)", regPC);
+                                else
+                                    $display("HC05: SEI - Interrupts DISABLED at PC=%04x (flagI: 0->1)", regPC);
+                                `endif
                                 regPC <= regPC + 16'h0001;
                                 mainFSM <= 4'h2;
                             end
@@ -602,6 +619,10 @@ module m68hc05_core (
                 end
                 
                 4'h3: begin  // Instruction cycle 2
+                    `ifdef SIMULATION
+                    if (opcode == 8'h81)
+                        $display("HC05_STATE3: opcode=0x%02x SP=0x%04x PC=0x%04x addr=0x%04x datain=0x%02x", opcode, regSP, regPC, addr, datain);
+                    `endif
                     case (opcode)
                         // BRSET/BRCLR/BSET/BCLR with direct addressing
                         8'h00, 8'h01, 8'h02, 8'h03, 8'h04, 8'h05, 8'h06, 8'h07,
@@ -783,11 +804,17 @@ module m68hc05_core (
                             flagN <= datain[2];
                             flagZ <= datain[1];
                             flagC <= datain[0];
+                            `ifdef SIMULATION
+                            $display("HC05: RTI restoring flags from 0x%02x - flagI will be %b, PC=%04x", datain, datain[3], regPC);
+                            `endif
                             regSP <= regSP + 16'h0001;
                             mainFSM <= 4'h4;
                         end
-                        
+
                         8'h81: begin  // RTS
+                            `ifdef SIMULATION
+                            $display("HC05_RTS[state3]: SP=0x%04x datain=0x%02x addr=0x%04x PC=0x%04x -> regPC[15:8]=0x%02x, next=state4", regSP, datain, addr, regPC, datain);
+                            `endif
                             regPC[15:8] <= datain;
                             regSP <= regSP + 16'h0001;
                             mainFSM <= 4'h4;
@@ -826,6 +853,13 @@ module m68hc05_core (
                 end
                 
                 4'h4: begin  // Instruction cycle 3
+                    `ifdef SIMULATION
+                    // Unconditional state4 debug to catch missing RTS state4
+                    if (regPC >= 16'h12A0 && regPC <= 16'h12C0)
+                        $display("HC05_STATE4_ENTRY: opcode=0x%02x SP=0x%04x PC=0x%04x addr=0x%04x datain=0x%02x", opcode, regSP, regPC, addr, datain);
+                    if (opcode == 8'h81)
+                        $display("HC05_STATE4: opcode=0x%02x SP=0x%04x PC=0x%04x addr=0x%04x datain=0x%02x regPC_high=0x%02x", opcode, regSP, regPC, addr, datain, regPC[15:8]);
+                    `endif
                     case (opcode)
                         // BRSET/BRCLR
                         8'h00, 8'h01, 8'h02, 8'h03, 8'h04, 8'h05, 8'h06, 8'h07,
@@ -1031,11 +1065,14 @@ module m68hc05_core (
                         end
                         
                         8'h81: begin  // RTS
+                            `ifdef SIMULATION
+                            $display("HC05_RTS[state4]: SP=0x%04x datain=0x%02x -> regPC[7:0] (final PC=0x%04x)", regSP, datain, {regPC[15:8], datain});
+                            `endif
                             regPC[7:0] <= datain;
                             addrMux <= addrPC;
                             mainFSM <= 4'h2;
                         end
-                        
+
                         8'h83: begin  // SWI
                             regSP <= regSP - 16'h0001;
                             dataMux <= outPCH;
@@ -1348,13 +1385,19 @@ module m68hc05_core (
                             regSP <= regSP - 16'h0001;
                             dataMux <= outHelp;
                             flagI <= 1'b1;
-                            
+
                             if (!trace) begin
                                 if (!irqRequest) begin
                                     temp <= 16'hFFFC;  // SWI vector
+                                    `ifdef SIMULATION
+                                    $display("HC05: SWI at PC=%04x, flagI=1, vector=FFFC", regPC);
+                                    `endif
                                 end else begin
                                     irqRequest <= 1'b0;
                                     temp <= 16'hFFFA;  // IRQ vector
+                                    `ifdef SIMULATION
+                                    $display("HC05: IRQ taken at PC=%04x, flagI=1, vector=FFFA", regPC);
+                                    `endif
                                 end
                                 mainFSM <= 4'h8;
                             end else begin

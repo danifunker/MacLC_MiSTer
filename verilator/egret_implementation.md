@@ -4,7 +4,7 @@
 
 Mac LC uses **Egret** (not CUDA) as its ADB/PRAM/RTC microcontroller. This document tracks the implementation of the real Egret using the m68hc05_core CPU (from OpenCores) and the actual Egret ROM (341S0851).
 
-## Clock Configuration (Updated 2024-12)
+## Clock Configuration
 
 ### Reference: MAME maclc.cpp
 | Signal | Frequency | Source |
@@ -34,28 +34,37 @@ reg [2:0] clk_div;
 wire cen = (clk_div == 3'b000);  // 4 MHz pulse (32/8)
 ```
 
-## Implementation Status
+## Current Status (2024-12-30)
 
-### Completed
+### Working Features
+- Egret ROM loads correctly (4352 bytes)
+- Egret CPU runs at 4 MHz with proper clock enable
+- CB1 gating - only passes through when TIP=0 (transaction active)
+- Reset_680x0 logic correctly controlled by Port C bit 3
+- System reset waits for ROM download to complete
+- Egret waits for n_reset before starting initialization
+- **PRAM loading correct** - uses offset 0x70 to match MAME, no stack overlap
+- **68020 released from reset** at cycle 278529
+- **TIP signal working** - VIA asserts TIP, Egret detects it
+- **TIP/BYTEACK polling passes** - firmware reaches 0x12B2 (rts)
+- **RTS returns correctly** - stack reads valid return addresses (0x0ff0, 0x1dfa, etc.)
+- **Firmware reaches main loop** at 0x120A/0x1228 polling for TIP
 
-| Component | File | Status |
-|-----------|------|--------|
-| Egret ROM extraction | `rtl/egret/egret_rom.hex` | Done - 4352 bytes, maps to 0x0F00-0x1FFF |
-| m68hc05_core CPU | `rtl/egret/m68hc05_core.sv` | Converted from OpenCores, added cen input |
-| Egret wrapper | `rtl/egret/egret_wrapper.sv` | Port handling, clock divider, PRAM loading |
-| Build integration | `verilator/Makefile` | USE_EGRET_CPU define |
-| Clock enable | `m68hc05_core.sv` | Added `cen` input for 4 MHz operation |
-| PRAM loading | `egret_wrapper.sv` | Loads egret.pram on 680x0 reset assertion |
-| Clock domain sync | `egret_wrapper.sv` | 3-bit synchronizers for VIA signals |
-| Handshake state machine | `egret_wrapper.sv` | INIT_WAIT → INIT_ASSERT → INIT_DELAY → RUNNING |
-| CB1 gating | `egret_wrapper.sv` | CB1 output gated until TIP is asserted |
-| Reset delay (SIMULATION) | `dataController_top.sv` | Uses 0x2000 cycles at 8MHz |
-| **Reset_680x0 logic fix** | `egret_wrapper.sv` | Changed from `& ~pc_out[3]` to `\| pc_out[3]` |
-| **Wait for ROM download** | `sim.v` | n_reset held low until dio_download completes |
+### Current Issue: VIA ↔ Egret Communication
 
-### Recent Fixes (2024-12-28/29)
+The Egret is in the main loop polling for TIP, but the communication protocol
+between VIA and Egret isn't completing properly:
+1. VIA is polling IFR (checking for SR completion)
+2. Egret is at 0x120A polling Port B bit 3 (TIP)
+3. TIP is sometimes asserted (0) but communication doesn't progress
+4. TREQ not being asserted after 68020 release
 
-#### Fix 1: reset_680x0 Logic Bug
+The boot is stuck at a white screen because the 68020 needs PRAM values from
+Egret, but the shift register communication isn't working correctly.
+
+## Bug Fixes History
+
+### Fix 1: reset_680x0 Logic Bug (2024-12-28)
 The reset_680x0 signal was using incorrect logic:
 ```verilog
 // BEFORE (wrong):
@@ -66,7 +75,7 @@ reset_680x0 = reset_680x0_override | pc_out[3];
 ```
 Per MAME egret.cpp: Port C bit 3 = 1 means ASSERT reset, bit 3 = 0 means RELEASE reset.
 
-#### Fix 2: ROM Download Timing
+### Fix 2: ROM Download Timing (2024-12-28)
 The 68020 was being released from reset before ROM download completed (~frame 9).
 System reset now waits for ROM download:
 ```verilog
@@ -77,7 +86,7 @@ if(~pll_locked || reset || dio_download) begin
 end
 ```
 
-#### Fix 3: Egret Boot Timing
+### Fix 3: Egret Boot Timing (2024-12-28)
 Egret was being released from reset before n_reset went high. This caused Egret
 to time out waiting for 68020 response (before ROM was even loaded).
 ```verilog
@@ -92,36 +101,58 @@ always @(posedge clk32) begin
 end
 ```
 
-### Current Status: 68020 IS RUNNING!
+### Fix 4: Port C DDR for Reset Release (2024-12-29)
+When firmware makes Port C bit 3 an INPUT (DDR[3]=0), it expects to read 0
+(reset released). Without this fix, the latch value (1) was returned, keeping
+the 68020 in reset forever.
+```verilog
+// pc_in returns 0 for bit 3 when DDR makes it an input
+wire [7:0] pc_in = {pc_latch[7:4], (pc_ddr[3] ? pc_latch[3] : 1'b0), pc_latch[2:0]};
+```
 
-After the above fixes, the 68020 successfully boots:
-- **n_reset goes high** after ROM download + countdown
-- **68020 released from reset** at cycle 4,523,021 (minResetPassed=1)
-- **CPU executes ROM code** - PC=0x00A14E20, opcode 0x67F8 (BEQ.S loop)
-- **Screen is white** - CPU stuck in wait loop before video init
+### Fix 5: BYTEACK Signal (2024-12-29)
+The BYTEACK (Port B bit 2) was HIGH due to via_pb_o[4] connection. Tied LOW
+temporarily so firmware's BYTEACK polling at 0x12AF passes.
+TODO: Implement proper BYTEACK based on VIA shift register state.
 
-#### Current Issue: CPU Stuck in Wait Loop
+### Fix 6: PRAM Loading Wrong Offset (2024-12-30)
+**Root Cause:** PRAM loading used wrong RAM base offset (0x50 instead of 0x90).
+The stack at addresses 0x00FE and 0x00FF was being zeroed during PRAM init,
+causing RTS at 0x12B2 to pop 0x0000 and jump to error handler at 0x1F89.
 
-The 68020 runs for ~2.1M cycles then Egret re-asserts reset:
-- Released: cycle 4,523,021
-- Re-asserted: cycle 6,639,149
-- ~130ms of runtime at 16MHz
+**Debug Process:**
+1. Added HC05 CPU state machine debug for RTS instruction
+2. Found state3 read 0x00 from stack, state4 also read 0x00
+3. Traced that stack should have contained 0x10 0x04 (return addr 0x1004)
+4. Found PRAM loading at cycle 272713 overwrote stack locations
+5. Initial workaround: skip indices 64-79 during PRAM loading
+6. Investigated MAME source: `write_internal_ram(0x70 + byte, data)`
+7. Found code used offset 0x20 (from 0x70-0x50) but RAM base is 0x90, not 0x50!
 
-The CPU is stuck at PC=0x00A14E20 executing `BEQ.S *-6` (opcode 0x67F8).
-This is likely a wait loop for:
-1. VBL interrupt from V8 video
-2. Response from Egret via VIA shift register
-3. Some other hardware initialization
-
-Egret times out because the 68020 doesn't respond (VIA communication not working).
+**Real Fix:** Change PRAM offset from 0x20 to 0x70 to match MAME:
+```verilog
+// Per MAME: write_internal_ram(0x70 + byte, data)
+// intram[x] = CPU addr 0x90+x, so PRAM goes to CPU 0x100-0x1FF
+for (pram_idx = 0; pram_idx < 256; pram_idx = pram_idx + 1) begin
+    intram[pram_idx + 16'h70] = pram[pram_idx];  // Offset 0x70, not 0x20
+end
+```
+With correct offset, PRAM at CPU 0x100-0x1FF does NOT overlap stack (0xF0-0xFF).
 
 ## Memory Map (68HC05)
 
 | Address Range | Size | Description |
 |---------------|------|-------------|
 | 0x0000-0x001F | 32B | I/O Registers (Ports A, B, C, DDR, Timer) |
-| 0x0090-0x01FF | 368B | Internal RAM |
+| 0x0090-0x01FF | 368B | Internal RAM (intram[0-367]) |
 | 0x0F00-0x1FFF | 4352B | ROM (Egret firmware 341S0851) |
+
+### RAM Layout (verified against MAME)
+| CPU Address | intram Index | Usage |
+|-------------|--------------|-------|
+| 0x0090-0x00EF | 0x00-0x5F | Variables, scratch |
+| 0x00F0-0x00FF | 0x60-0x6F | Stack (16 bytes) |
+| 0x0100-0x01FF | 0x70-0x16F | PRAM (256 bytes) |
 
 ### ROM Mapping
 ```
@@ -184,20 +215,6 @@ CPU Address    ROM Offset   Content
 4. VIA sets SR interrupt flag when byte complete
 5. Process repeats for each byte
 
-## Current Simulation Behavior
-
-1. ✅ Egret ROM loads correctly (4352 bytes)
-2. ✅ Egret CPU runs at 4 MHz
-3. ✅ CB1 toggles from Egret firmware
-4. ✅ CB1 gating added - only passes through when TIP=0
-5. ✅ reset_680x0 logic fixed (was inverted)
-6. ✅ System reset waits for ROM download
-7. ✅ Egret waits for n_reset before starting
-8. ✅ **68020 IS RUNNING** - executes ROM code at PC=0x00A14E20
-9. ⚠️ 68020 stuck in wait loop (probably waiting for VBL or Egret response)
-10. ⚠️ Egret re-asserts reset after ~130ms timeout
-11. ❌ VIA ↔ Egret shift register communication not yet working
-
 ## Files
 
 ```
@@ -219,19 +236,25 @@ verilator/
 
 ## Next Steps
 
-1. **Debug VIA ↔ Egret communication**
-   - Check if VIA shift register is responding to CB1 clocks
-   - Verify TIP/TREQ handshake signals
-   - Check if SR interrupt flag is being set
+1. **Debug VIA ↔ Egret shift register communication**
+   - Egret is in main loop at 0x120A polling for TIP
+   - VIA is polling IFR for SR completion (bit 2)
+   - Need to understand why communication isn't progressing
+   - Check if 68020 initiates communication by asserting TIP via VIA PB5
 
-2. **Debug 68020 wait loop at 0x00A14E20**
-   - Disassemble ROM around this address to understand what it's waiting for
-   - Check if VBL interrupt is being generated
-   - Check if the CPU is polling a memory location
+2. **Implement proper BYTEACK**
+   - Add VIA shift register completion signal
+   - Connect to Egret Port B bit 2 instead of current constant LOW
+   - BYTEACK should go HIGH when VIA receives 8 bits
 
-3. **Prevent Egret timeout**
-   - Investigate why Egret re-asserts reset after ~130ms
-   - The 68020 needs to respond to Egret via VIA before timeout
+3. **Verify CB1/CB2 clocking**
+   - When TIP is asserted and communication starts
+   - Egret should clock CB1 to shift data via CB2
+   - VIA should respond with SR interrupt flag
+
+4. **Check 68020 boot ROM code**
+   - Understand what the 68020 is waiting for
+   - It may need Egret to respond with PRAM values before proceeding
 
 ## References
 
