@@ -220,14 +220,16 @@ end
 //   Bit 2 (I): VIA_FULL - input from VIA (shift register busy)
 //   Bit 1 (O): XCVR_SESSION/TREQ to VIA - output, read back from latch
 //   Bit 0 (I): +5V sense - always high
+// pb_in matches MAME's pb_r() - only INPUT bits are returned
+// Output-only bits (1, 4, 7) read as 0 (no external pull-up)
 wire [7:0] pb_in = {
-    pb_latch[7],           // bit 7: DFAC SCL (output, read back from latch)
-    1'b1,                  // bit 6: DFAC SDA - has pull-up per MAME (always 1)
-    via_cb2_in_stable,     // bit 5: CB2 data from VIA
-    pb_latch[4],           // bit 4: CB1 output (read back from latch)
-    via_tip_stable,        // bit 3: TIP/SYS_SESSION from VIA (INPUT)
-    via_byteack_in_stable, // bit 2: VIA_FULL (shift register busy)
-    pb_latch[1],           // bit 1: TREQ/XCVR_SESSION output (read back from latch)
+    1'b0,                  // bit 7: DFAC SCL - output only, reads 0
+    1'b1,                  // bit 6: DFAC SDA - has pull-up per MAME
+    via_cb2_in_stable,     // bit 5: CB2 data from VIA (input)
+    1'b0,                  // bit 4: CB1 - output only, reads 0
+    via_tip_stable,        // bit 3: TIP/SYS_SESSION from VIA (input)
+    via_byteack_in_stable, // bit 2: VIA_FULL (input)
+    1'b0,                  // bit 1: TREQ - output only, reads 0
     1'b1                   // bit 0: +5V sense (always high per MAME)
 };
 
@@ -337,13 +339,17 @@ always @(posedge clk) begin
 end
 
 // Output assignments
-assign cuda_cb1    = pb_out[4];
-assign cuda_cb2    = pb_out[5];
+// CRITICAL: Use pb_latch directly for outputs, NOT pb_out
+// MAME's pb_w() extracts output bits from the written data regardless of DDR
+// The DDR only controls whether the physical pin is driven, but software can still
+// write to the latch and we use that for inter-chip communication
+assign cuda_cb1    = pb_latch[4];  // CB1 clock from latch (MAME: write_via_clock(BIT(data, 4)))
+assign cuda_cb2    = pb_latch[5];  // CB2 data from latch (MAME: write_via_data(BIT(data, 5)))
 assign cuda_cb2_oe = pb_ddr[5];
-assign cuda_treq   = force_treq ? 1'b0 : ~pb_out[1];  // Force LOW during init
+assign cuda_treq   = force_treq ? 1'b0 : ~pb_latch[1];  // TREQ from latch (MAME: m_xcvr_session = BIT(data, 1))
 assign cuda_byteack = 1'b0;       // Not used in Egret
 
-assign cuda_portb    = pb_out;
+assign cuda_portb    = pb_latch;  // Use latch for outputs
 assign cuda_portb_oe = pb_ddr;
 
 // ============================================================================
@@ -426,13 +432,24 @@ always @(posedge clk) begin
         pa_ddr   <= 8'h00;
         pb_ddr   <= 8'h00;  // All inputs on reset per 68HC05 datasheet
         pc_ddr   <= 8'h00;
-    end else if (port_cs && cpu_wr && cen) begin
+    end else if (port_cs && !cpu_wr && cen) begin  // cpu_wr=0 means WRITE
         case (cpu_addr[3:0])
             4'h0: pa_latch <= cpu_dout;
-            4'h1: pb_latch <= cpu_dout;
+            4'h1: begin
+                pb_latch <= cpu_dout;
+                `ifdef SIMULATION
+                $display("EGRET[%0d] PC=%04x: Port B LATCH write = 0x%02x (CB1=%b CB2=%b TREQ=%b)",
+                         cycle_count, cpu_addr, cpu_dout, cpu_dout[4], cpu_dout[5], ~cpu_dout[1]);
+                `endif
+            end
             4'h2: pc_latch <= cpu_dout;
             4'h4: pa_ddr   <= cpu_dout;
-            4'h5: pb_ddr   <= cpu_dout;
+            4'h5: begin
+                pb_ddr <= cpu_dout;
+                `ifdef SIMULATION
+                $display("EGRET[%0d] PC=%04x: Port B DDR write = 0x%02x", cycle_count, cpu_addr, cpu_dout);
+                `endif
+            end
             4'h6: pc_ddr   <= cpu_dout;
         endcase
     end
