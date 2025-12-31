@@ -119,6 +119,10 @@ module via6522 (
     wire       shift_dir             = acr[4];
     wire [1:0] shift_clk_sel         = acr[3:2];
     wire [2:0] shift_mode_control    = acr[4:2];
+    // External clock modes: Mode 3 (011) = Shift In Ext, Mode 7 (111) = Shift Out Ext
+    wire       si_ext_control        = (shift_mode_control == 3'b011);  // Mode 3
+    wire       so_ext_control        = (shift_mode_control == 3'b111);  // Mode 7
+    wire       ext_clock_mode        = si_ext_control | so_ext_control;
     wire       pb_latch_en           = acr[1];
     wire       pa_latch_en           = acr[0];
     // Aliases for PCR bits
@@ -298,7 +302,9 @@ module via6522 (
                     pio_i_prb <= data_in;
 `ifdef SIMULATION
                     // Mac LC V8 protocol: PB5=TIP(SYS_SESSION), PB4=BYTEACK(VIA_FULL), PB3=TREQ(XCVR_SESSION)
-                    $display("VIA: ORB WRITE = 0x%02x (TIP(PB5)=%b, BYTEACK(PB4)=%b)", data_in, data_in[5], data_in[4]);
+                    // Log ALL ORB writes for debugging
+                    $display("VIA ORB_W[%0t]: %02x TIP=%b BYTEACK=%b TREQ_in=%b",
+                             $time, data_in, ~data_in[5], ~data_in[4], ~port_b_i[3]);
 `endif
                     if (cb2_no_irq_clr == 1'b0) begin
                         irq_flags[3] <= 1'b0;
@@ -316,6 +322,10 @@ module via6522 (
                     
                 4'h2: begin // DDRB
                     pio_i_ddrb <= data_in;
+`ifdef SIMULATION
+                    $display("VIA DDRB_W[%0t]: %02x (PB5_dir=%b PB4_dir=%b PB3_dir=%b)",
+                             $time, data_in, data_in[5], data_in[4], data_in[3]);
+`endif
                 end
                 
                 4'h3: begin // DDRA
@@ -407,10 +417,10 @@ module via6522 (
                     data_out[7] <= timer_a_out;
                 end
 `ifdef SIMULATION
-                // Log ORB reads during shift register activity - shows TREQ value ROM sees
-                if (shift_active) begin
-                    $display("VIA: ORB READ = 0x%02x (TREQ(PB3)=%b, TIP(PB5)=%b) [SR active, bit_cnt=%d]",
-                             irb, irb[3], irb[5], bit_cnt);
+                // Log ORB reads when TREQ changes or during SR activity - shows what 68K sees
+                if (shift_active || !irb[3]) begin  // Log if SR active or TREQ asserted (low)
+                    $display("VIA ORB_R[%0t]: %02x TREQ=%b TIP=%b BYTEACK=%b [SR=%b cnt=%d]",
+                             $time, irb, ~irb[3], ~irb[5], ~irb[4], shift_active, bit_cnt);
                 end
 `endif
             end
@@ -660,6 +670,7 @@ module via6522 (
     reg [2:0]  bit_cnt = 3'd0;
     reg        shift_pulse;
     reg        shift_active_prev_rising = 1'b0;  // For detecting shift completion
+    reg        missed_ext_edge = 1'b0;           // CB1 edge happened while shift_active=0
 
     always @(*) begin
         case (shift_clk_sel)
@@ -672,15 +683,18 @@ module via6522 (
             end
             
             default: begin
-                shift_pulse = shift_clock & ~shift_clock_d;
+                // In external clock mode, use the latched edge to ensure falling phase sees it
+                shift_pulse = ext_edge_pending;
             end
         endcase
 
         if (shift_active == 1'b0) begin
             // Mode 0 still loads the shift register to external pulse (MMBEEB SD-Card interface uses this)
-            // External clock mode (shift_clk_sel == 2'b11) also pulses without trigger - needed for CUDA
-            if (shift_mode_control == 3'b000 || shift_clk_sel == 2'b11) begin
+            // External clock mode (ext_clock_mode) also pulses without trigger - needed for CUDA
+            if (shift_mode_control == 3'b000) begin
                 shift_pulse = shift_clock & ~shift_clock_d;
+            end else if (ext_clock_mode) begin
+                shift_pulse = ext_edge_pending;
             end else begin
                 shift_pulse = 1'b0;
             end
@@ -694,7 +708,7 @@ module via6522 (
         if (reset) cb1_i_prev <= 1'b1;
         else if (rising) begin
             cb1_i_prev <= cb1_i;
-            if (cb1_i != cb1_i_prev && shift_clk_sel == 2'b11) begin
+            if (cb1_i != cb1_i_prev && ext_clock_mode) begin
                 $display("VIA: CB1_i %s (ext_clk mode) - shift_active=%b bit_cnt=%d SR=0x%02x",
                          cb1_i ? "RISING" : "FALLING", shift_active, bit_cnt, shift_reg);
             end
@@ -702,14 +716,23 @@ module via6522 (
     end
 `endif
 
+    // In external clock mode, latch rising edges until consumed by falling phase
+    reg ext_edge_pending = 1'b0;
+
     always @(posedge clock) begin
         ser_cb2_c <= cb2_i;
-        if (rising == 1'b1) begin
-            // In external clock mode (shift_clk_sel == 2'b11), always follow cb1_i
-            // This allows the 8th shift to complete even as shift_active goes low
-            if (shift_clk_sel == 2'b11) begin
-                shift_clock <= cb1_i;
-            end else if (shift_active == 1'b0) begin
+
+        // In external clock mode (ext_clock_mode), sample CB1 on EVERY clock
+        // cycle to catch fast edges, then latch until consumed by falling phase
+        if (ext_clock_mode) begin
+            shift_clock <= cb1_i;
+            shift_clock_d <= shift_clock;
+            // Latch rising edge until falling phase consumes it
+            if (~shift_clock_d & shift_clock) begin
+                ext_edge_pending <= 1'b1;
+            end
+        end else if (rising == 1'b1) begin
+            if (shift_active == 1'b0) begin
                 if (shift_mode_control == 3'b000) begin
                     shift_clock <= cb1_i;
                 end else begin
@@ -718,22 +741,26 @@ module via6522 (
             end else if (shift_pulse == 1'b1) begin
                 shift_clock <= ~shift_clock;
             end
-
             shift_clock_d <= shift_clock;
         end
 
         if (falling == 1'b1) begin
             shift_timer_tick <= timer_b_tick;
+            // Clear the pending edge after falling phase processes it
+            if (ext_clock_mode && ext_edge_pending) begin
+                ext_edge_pending <= 1'b0;
+            end
         end
 
         if (reset == 1'b1) begin
             shift_clock <= 1'b1;
             shift_clock_d <= 1'b1;
+            ext_edge_pending <= 1'b0;
         end
     end
 
     always @(*) begin
-        cb1_t_int = (shift_clk_sel == 2'b11) ?
+        cb1_t_int = (ext_clock_mode) ?
                     1'b0 : serport_en;
         cb1_o_int = shift_clock_d;
         ser_cb2_o = shift_reg[7];
@@ -759,15 +786,19 @@ module via6522 (
                 /* verilator lint_on STMTDLY */
             end else if (shift_dir == 1'b1 && shift_tick_f == 1'b1) begin // output
                 shift_reg <= {shift_reg[6:0], shift_reg[7]};
-            end else if (shift_mode_control != 3'b000 && shift_dir == 1'b0 && shift_tick_r == 1'b1) begin // input (only when mode != 0)
-                // In external clock mode (mode 3), always shift on CB1 rising edge
+            end else if (shift_mode_control != 3'b000 && shift_dir == 1'b0) begin // input (only when mode != 0)
+                // In external clock mode (mode 3), use ext_edge_pending to catch CB1 edges
+                // that happen between falling phases. For internal clock modes, use shift_tick_r.
                 // The shift_active flag controls IRQ generation, not the actual shifting
                 // Per 6522 datasheet: "shift register counter is disabled" in mode 3
-                /* verilator lint_off STMTDLY */
-                $display("VIA: SR shift IN - CB2=%b (cb2_i=%b), SR 0x%02x -> 0x%02x, mode=%d, ext_clk=%b",
-                         ser_cb2_c, cb2_i, shift_reg, {shift_reg[6:0], cb2_i}, shift_mode_control, (shift_clk_sel == 2'b11));
-                /* verilator lint_on STMTDLY */
-                shift_reg <= {shift_reg[6:0], cb2_i};
+                if ((ext_clock_mode && ext_edge_pending == 1'b1) ||
+                    (shift_clk_sel != 2'b11 && shift_tick_r == 1'b1)) begin
+                    /* verilator lint_off STMTDLY */
+                    $display("VIA: SR shift IN - CB2=%b (cb2_i=%b), SR 0x%02x -> 0x%02x, mode=%d, ext_clk=%b",
+                             ser_cb2_c, cb2_i, shift_reg, {shift_reg[6:0], cb2_i}, shift_mode_control, (ext_clock_mode));
+                    /* verilator lint_on STMTDLY */
+                    shift_reg <= {shift_reg[6:0], cb2_i};
+                end
             end
         end
     end
@@ -793,32 +824,51 @@ module via6522 (
                          trigger_serial, shift_active, shift_mode_control, wen, ren);
             end
 `endif
+            // In external clock mode, track CB1 edges that happen while shift_active=0
+            // so we can account for them when the SR is later triggered
+            if (ext_clock_mode && shift_active == 1'b0 && shift_pulse == 1'b1) begin
+                missed_ext_edge <= 1'b1;
+            end
+
             if (shift_active == 1'b0 && shift_mode_control != 3'b000) begin
                 if (trigger_serial == 1'b1) begin
-                    bit_cnt <= 3'd7;
+                    // In external clock mode, if a CB1 rising edge happened while shift_active
+                    // was 0 (either now via shift_pulse, or earlier via missed_ext_edge),
+                    // that edge would be "lost". Account for it by starting at 6 instead of 7.
+                    if (ext_clock_mode && (shift_pulse == 1'b1 || missed_ext_edge == 1'b1)) begin
+                        bit_cnt <= 3'd6;
+                        missed_ext_edge <= 1'b0;  // Clear the flag
+                        /* verilator lint_off STMTDLY */
+                        $display("VIA: SR triggered + missed_edge - mode=%d, dir=%b, start_cnt=6",
+                                 shift_mode_control, shift_dir);
+                        /* verilator lint_on STMTDLY */
+                    end else begin
+                        bit_cnt <= 3'd7;
+                        /* verilator lint_off STMTDLY */
+                        $display("VIA: SR triggered - mode=%d, dir=%b, ext_clk=%b",
+                                 shift_mode_control, shift_dir, (ext_clock_mode));
+                        /* verilator lint_on STMTDLY */
+                    end
                     shift_active <= 1'b1;
-                    /* verilator lint_off STMTDLY */
-                    $display("VIA: SR triggered - mode=%d, dir=%b, ext_clk=%b",
-                             shift_mode_control, shift_dir, (shift_clk_sel == 2'b11));
-                    /* verilator lint_on STMTDLY */
-                end else if (shift_clk_sel == 2'b11 && shift_pulse == 1'b1 && shift_clock == 1'b1) begin
-                    // External clock mode: auto-start on CB1 rising edge without SR trigger
-                    // This is needed for CUDA/Egret which expects VIA to be "always listening"
-                    bit_cnt <= 3'd7;
-                    shift_active <= 1'b1;
-                    /* verilator lint_off STMTDLY */
-                    $display("VIA: SR auto-triggered by CB1 in ext clock mode - mode=%d, dir=%b",
-                             shift_mode_control, shift_dir);
-                    /* verilator lint_on STMTDLY */
+                // Auto-trigger on CB1 DISABLED - was causing protocol issues where
+                // stray CB1 edges after a transfer would trigger new shifts that
+                // never complete. The CPU should explicitly read/write SR to trigger.
+                // end else if (ext_clock_mode && shift_pulse == 1'b1 && shift_clock == 1'b1) begin
+                //     bit_cnt <= 3'd7;
+                //     shift_active <= 1'b1;
+                // end
                 end
             end else begin // we're active
 // SHIFT active debug disabled - too verbose
                 if (shift_clk_sel == 2'b00) begin
                     shift_active <= shift_dir;
                     // when '1' we're active, but for mode 000 we go inactive.
-                end else if (shift_pulse == 1'b1 && shift_clock == 1'b1) begin
+                // Per VIA schematic: bit counter responds to edge pulse, not current CB1 level
+                // In external clock mode, CB1 may have already gone low by falling phase
+                end else if (shift_pulse == 1'b1 && (ext_clock_mode || shift_clock == 1'b1)) begin
                     if (bit_cnt == 3'd0) begin
                         shift_active <= 1'b0;
+                        missed_ext_edge <= 1'b0;  // Clear so post-completion edges don't affect next transfer
                         /* verilator lint_off STMTDLY */
                         $display("VIA: SR shift complete - final SR=0x%02x", shift_reg);
                         /* verilator lint_on STMTDLY */
@@ -843,12 +893,13 @@ module via6522 (
             shift_active <= 1'b0;
             shift_active_prev_rising <= 1'b0;
             bit_cnt <= 3'd0;
+            missed_ext_edge <= 1'b0;
         end
     end
 
     // Shift register status outputs for CUDA interface
     assign sr_out_active = shift_active;
     assign sr_out_dir    = shift_dir;
-    assign sr_ext_clk    = (shift_clk_sel == 2'b11);  // External clock mode (CB1)
+    assign sr_ext_clk    = (ext_clock_mode);  // External clock mode (CB1)
 
 endmodule

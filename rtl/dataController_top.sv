@@ -363,8 +363,11 @@ assign cpuDataOut = selectIWM ? iwmDataOut :
 	wire pb3_cuda_pulling_low = cuda_treq;  // cuda_treq=1 means CUDA pulling TREQ low
 	wire pb3_open_drain = ~(pb3_via_pulling_low | pb3_cuda_pulling_low);
 	wire [7:0] pb_pin_level = {pb_pin_level_mux[7:4], pb3_open_drain, pb_pin_level_mux[2:0]};
-	// CUDA can override specific bits via cuda_pb_oe
-	assign via_pb_i = (pb_pin_level & ~cuda_pb_oe) | (cuda_pb_o & cuda_pb_oe);
+	// VIA Port B input - just use the pin level directly.
+	// Don't mix in Egret's Port B output (cuda_pb_o) - the two Port B registers are on
+	// different chips with completely different meanings. TREQ (bit 3) is already handled
+	// via the pb3_open_drain logic above.
+	assign via_pb_i = pb_pin_level;
 	assign snd_ena = ~via_pb_oe[7] | via_pb_o[7];
 
 	assign viaDataOut[7:0] = 8'hEF;
@@ -513,6 +516,20 @@ assign cpuDataOut = selectIWM ? iwmDataOut :
 	// Define USE_EGRET_CPU to use real 68HC05 CPU + Egret ROM (341s0850)
 	// Otherwise uses state machine implementation (cuda_maclc.sv)
 
+	// TIP latch: Hold TIP value when VIA is driving PB5 as output.
+	// The 68020 code frequently changes DDRB to read Port B (check TREQ),
+	// which temporarily makes PB5 an input. Without latching, this causes
+	// TIP to toggle HIGH (external pull-up), interrupting communication.
+	reg via_tip_latched;
+	always @(posedge clk32) begin
+		if (!_cpuReset) begin
+			via_tip_latched <= 1'b1;  // TIP idle HIGH (not asserted)
+		end else if (clk8_en_p && via_pb_oe[5]) begin
+			// Only update TIP when VIA is driving PB5 as output
+			via_tip_latched <= via_pb_o[5];
+		end
+	end
+
 `ifdef USE_EGRET_CPU
 	egret_wrapper egret_inst(
 		.clk            (clk32),
@@ -523,8 +540,10 @@ assign cpuDataOut = selectIWM ? iwmDataOut :
 		.timestamp      (timestamp),
 
 		// VIA Port B connections (Mac LC V8 protocol)
-		.via_tip        (via_pb_o[5]),     // TIP from VIA (PB5 = SYS_SESSION)
-		.via_byteack_in (via_pb_o[4]),     // BYTEACK from VIA (PB4 = VIA_FULL)
+		// TIP: Latch the value when VIA drives PB5 as output
+		// This prevents TIP from toggling when VIA temporarily makes PB5 an input to read Port B
+		.via_tip        (via_tip_latched),  // TIP from VIA (PB5 = SYS_SESSION)
+		.via_byteack_in (via_pb_o[4]),     // BYTEACK from VIA (PB4 = VIA_FULL) - direct
 		.cuda_treq      (cuda_treq),       // TREQ to VIA (PB3 = XCVR_SESSION)
 		.cuda_byteack   (cuda_byteack),    // Not used in Egret
 
@@ -563,8 +582,9 @@ assign cpuDataOut = selectIWM ? iwmDataOut :
 		.timestamp      (timestamp),
 
 		// VIA Port B connections (Mac LC V8 protocol)
-		.via_tip        (via_pb_o[5]),     // TIP from VIA (PB5 = SYS_SESSION)
-		.via_byteack_in (via_pb_o[4]),     // BYTEACK from VIA (PB4 = VIA_FULL)
+		// TIP: Use latched value to prevent toggling when VIA reads Port B
+		.via_tip        (via_tip_latched),  // TIP from VIA (PB5 = SYS_SESSION)
+		.via_byteack_in (via_pb_o[4]),     // BYTEACK from VIA (PB4 = VIA_FULL) - direct
 		.cuda_treq      (cuda_treq),       // TREQ to VIA (PB3 = XCVR_SESSION)
 		.cuda_byteack   (cuda_byteack),    // Not used in V8 protocol
 

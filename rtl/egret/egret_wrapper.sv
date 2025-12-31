@@ -243,6 +243,10 @@ end
 // - bit 6: DFAC data (tied high)
 // - bit 7: DFAC clock (output, external = 0)
 // Clock domain crossing synchronizers for VIA signals
+// CRITICAL: Sample on every system clock (32MHz), not just cen (4MHz)!
+// The 68020 runs at 8MHz+ and can set TIP=0, then TIP=1 before Egret
+// would see TIP=0 if we only sample at 4MHz. Sampling at 32MHz gives
+// Egret 3 system cycles (~94ns) to see TIP changes.
 reg [2:0] via_tip_sync;
 reg [2:0] via_cb2_in_sync;
 reg [2:0] via_byteack_in_sync;
@@ -252,7 +256,8 @@ always @(posedge clk) begin
         via_tip_sync <= 3'b111;       // TIP idle high
         via_cb2_in_sync <= 3'b000;
         via_byteack_in_sync <= 3'b000;
-    end else if (cen) begin
+    end else begin
+        // Sample on EVERY clock, not just cen, to catch fast TIP changes
         via_tip_sync <= {via_tip_sync[1:0], via_tip};
         via_cb2_in_sync <= {via_cb2_in_sync[1:0], via_cb2_in};
         via_byteack_in_sync <= {via_byteack_in_sync[1:0], via_byteack_in};
@@ -264,16 +269,17 @@ wire via_cb2_in_stable = via_cb2_in_sync[2];
 wire via_byteack_in_stable = via_byteack_in_sync[2];
 
 // pb_external represents external signals read by Egret firmware
-// BYTEACK (bit 2): Should be LOW when VIA is ready for data, HIGH when VIA is full
-// TODO: Implement proper BYTEACK based on VIA shift register state
-// For now, tie it LOW (always ready) so firmware can proceed to TREQ assertion
+// BYTEACK (bit 2): LOW when VIA is ready for data, HIGH when VIA has data pending
+// The firmware uses BYTEACK in two contexts:
+// - At 0x12AF: brset 2, $01, $12A1 - needs BYTEACK=0 to proceed (start of communication)
+// - At 0x14CE: brset 2, $01, $14D6 - needs BYTEACK=1 to call CB1 clocking (VIA has data)
 wire [7:0] pb_external = {
     1'b0,                   // Bit 7: DFAC clock (external reads as 0)
     1'b1,                   // Bit 6: DFAC data (tied high)
     via_cb2_in_stable,      // Bit 5: CB2 data from VIA (synchronized)
     1'b0,                   // Bit 4: CB1 clock (external reads as 0)
     via_tip_stable,         // Bit 3: TIP from VIA (synchronized)
-    1'b0,                   // Bit 2: VIA_FULL/BYTEACK - LOW = ready (TODO: proper SR state)
+    via_byteack_in_stable,  // Bit 2: VIA_FULL/BYTEACK - from VIA PB4
     1'b0,                   // Bit 1: TREQ (external reads as 0)
     1'b1                    // Bit 0: +5V sense (always active)
 };
@@ -371,17 +377,37 @@ always @(posedge clk) begin
 end
 
 // Output assignments
-// Gate CB1 output: only allow edges when TIP is asserted (TIP=0 means active)
-// This ensures VIA is ready and in external clock mode before seeing CB1 clocks
-// When TIP=1 (not asserted), hold CB1 low so no spurious edges are generated
-assign cuda_cb1    = (via_tip_stable == 1'b0) ? pb_out[4] : 1'b0;
+// CB1: Pass directly from Egret firmware. The V8 protocol uses TIP pulses as part
+// of the handshake, so we should NOT gate CB1 based on TIP. The firmware controls
+// CB1 timing explicitly for shift register clocking.
+assign cuda_cb1    = pb_out[4];
 assign cuda_cb2    = pb_out[5];
 assign cuda_cb2_oe = pb_ddr[5];
-// TREQ signal polarity:
-// - pb_out[1]=0 means Egret asserts TREQ (pulls pin LOW = has data to send)
-// - pb_out[1]=1 means Egret releases TREQ (pin floats HIGH = idle)
-// dataController expects cuda_treq=1 when TREQ is asserted, so invert pb_out[1]
-assign cuda_treq   = ~pb_out[1];
+// TREQ signal polarity with DDR gating and port test guard:
+// - pb_out[1]=0 AND pb_ddr[1]=1 means Egret asserts TREQ (drives pin LOW = has data)
+// - pb_out[1]=1 or pb_ddr[1]=0 means TREQ released (pin floats HIGH = idle)
+// CRITICAL: Must check DDR to prevent spurious TREQ assertion during early boot
+// when firmware clears port latches before setting DDR (pb_out=0x00, pb_ddr=0x00)
+// ALSO: Don't assert TREQ during port test phase (firmware init writes 0x00 to Port B)
+// dataController expects cuda_treq=1 when TREQ is asserted
+assign cuda_treq = port_test_done & pb_ddr[1] & ~pb_out[1];
+
+`ifdef SIMULATION
+// Debug cuda_treq formula - trace each component
+reg cuda_treq_prev;
+always @(posedge clk) begin
+    if (reset) begin
+        cuda_treq_prev <= 0;
+    end else if (cen) begin
+        if (cuda_treq != cuda_treq_prev) begin
+            $display("EGRET_TREQ[%0d]: cuda_treq=%b->%b (port_test_done=%b, pb_ddr[1]=%b, pb_out[1]=%b, pb_latch[1]=%b, pb_ddr=%02x, pb_out=%02x)",
+                     cycle_count, cuda_treq_prev, cuda_treq,
+                     port_test_done, pb_ddr[1], pb_out[1], pb_latch[1], pb_ddr, pb_out);
+        end
+        cuda_treq_prev <= cuda_treq;
+    end
+end
+`endif
 assign cuda_byteack = 1'b0;       // Not used in Egret
 
 assign cuda_portb    = pb_out;
@@ -404,38 +430,34 @@ assign cuda_portb_oe = pb_ddr;
 // 68020 stays in reset forever.
 wire [7:0] pc_in = {pc_latch[7:4], (pc_ddr[3] ? pc_latch[3] : 1'b0), pc_latch[2:0]};
 
-// Auto-release 68020 from reset after initialization
-// The Egret firmware expects VIA communication before releasing reset,
-// but the 68020 needs to run first to initialize the VIA.
-// Solution: Force reset release after a short delay.
-reg [19:0] reset_release_counter;
-reg reset_680x0_override;
+// 68020 reset control - match MAME behavior exactly
+// Per MAME egret.cpp: pc_out[3]=1 means ASSERT reset, pc_out[3]=0 means CLEAR reset
+// No artificial delay - let Egret firmware control reset timing directly.
+//
+// IMPORTANT: Hold 68020 in reset until firmware explicitly configures Port C.
+// This prevents early release during the ~20 cycles before DDR is set up.
+reg [19:0] reset_release_counter;  // Keep for debug logging
+reg pc_configured;  // Set when firmware writes Port C DDR or latch
 
 always @(posedge clk) begin
     if (reset) begin
         reset_release_counter <= 0;
-        reset_680x0_override <= 1'b1; // Hold in reset initially
+        pc_configured <= 1'b0;
     end else if (cen) begin
-        // Wait for Egret firmware to reach the TIP polling loop at address 0x12AC
-        // before releasing 68020. The firmware has delay loops after init that take
-        // ~270K cycles (0x1285-0x128D loop runs 20 times with ~10K cycles each).
-        // Without this delay, 68020 starts communicating before Egret is ready,
-        // causing TIP to time out before Egret can respond.
-        if (reset_release_counter < 20'h44000) begin  // ~278K cycles - after delay loop
-            reset_release_counter <= reset_release_counter + 1;
-            reset_680x0_override <= 1'b1; // Keep in reset
-        end else begin
-            reset_680x0_override <= 1'b0; // Release reset after ~64K cycles
+        reset_release_counter <= reset_release_counter + 1;
+        // Mark Port C as configured when firmware writes to DDR or latch
+        if (port_cs && !cpu_wr && (cpu_addr[4:0] == 5'h02 || cpu_addr[4:0] == 5'h06)) begin
+            pc_configured <= 1'b1;
         end
     end
 end
 
 always @(*) begin
-    // Hold 68020 in reset when either:
-    // 1. Auto-release timer hasn't expired yet, OR
-    // 2. Egret firmware sets Port C bit 3 high (1 = assert reset)
-    // Per MAME egret.cpp: pc_out[3]=1 means ASSERT reset, pc_out[3]=0 means CLEAR reset
-    reset_680x0 = reset_680x0_override | pc_out[3];  // Active high to 68000
+    // Match MAME: reset controlled by Egret firmware via Port C bit 3
+    // pc_out[3]=1 -> hold 68020 in reset
+    // pc_out[3]=0 -> release 68020 from reset
+    // Hold in reset until firmware configures Port C (prevents early release)
+    reset_680x0 = pc_configured ? pc_out[3] : 1'b1;
     nmi_680x0 = 1'b0;
 end
 
@@ -446,8 +468,8 @@ always @(posedge clk) begin
     if (reset) begin
         pa_out <= 8'h00;
         pb_out <= 8'h00;
-        pc_out <= 8'h00;
-        pc_bit3_prev <= 1'b0;
+        pc_out <= 8'h08;  // Bit 3 = 1: hold 68020 in reset initially (MAME behavior)
+        pc_bit3_prev <= 1'b1;  // Match initial pc_out[3]
         pram_loaded <= 1'b0;
     end else if (cen) begin
         pa_out <= (pa_latch & pa_ddr) | (pa_in & ~pa_ddr);
@@ -511,7 +533,7 @@ always @(posedge clk) begin
         pb_latch <= 8'h02;  // Bit 1 = 1 means TREQ inactive on startup (firmware writes 0x92 later)
         pc_latch <= 8'h00;
         pa_ddr   <= 8'h00;
-        pb_ddr   <= 8'hB2;  // 1011 0010: bits 7,5,4,1 are outputs (CB1, CB2, TREQ)
+        pb_ddr   <= 8'h00;  // All inputs on reset (firmware sets 0x92 = bits 7,4,1 outputs)
         pc_ddr   <= 8'h00;
     end else if (port_cs && !cpu_wr && cen) begin  // !cpu_wr means write
         case (cpu_addr[4:0])  // 5 bits for 0x00-0x1F
@@ -524,7 +546,7 @@ always @(posedge clk) begin
             end
             5'h02: pc_latch <= cpu_dout;
             5'h04: pa_ddr   <= cpu_dout;
-            // 5'h05: pb_ddr <= cpu_dout;  // BLOCKED - port test writes 0x0F which breaks CB1/CB2
+            5'h05: pb_ddr <= cpu_dout;  // Allow DDR writes - cuda_treq DDR gating prevents early TREQ
             5'h06: pc_ddr   <= cpu_dout;
             // M68HC05E1 registers
             5'h07: begin  // PLL control - sets timer rate
@@ -587,6 +609,13 @@ end
 always @(posedge clk) begin
     if (ram_cs && !cpu_wr && cen) begin  // !cpu_wr means write
         intram[ram_addr] <= cpu_dout;
+        `ifdef SIMULATION
+        // Debug writes to $A3 (intram[0x13]) - critical for tracking bit 7
+        if (ram_addr == 9'h13) begin
+            $display("EGRET_A3_WRITE[%0d]: PC~%04x addr=$A3 data=%02x (bit7=%b)",
+                     cycle_count, cpu_addr, cpu_dout, cpu_dout[7]);
+        end
+        `endif
     end
 end
 
@@ -642,7 +671,15 @@ always @(*) begin
             5'h04: cpu_din_r = pa_ddr;
             5'h05: cpu_din_r = pb_ddr;
             5'h06: cpu_din_r = pc_ddr;
-            5'h07: cpu_din_r = pll_ctrl;       // PLL control
+            5'h07: begin
+                cpu_din_r = pll_ctrl;       // PLL control
+                `ifdef SIMULATION
+                // Log early PLL reads (during init) and later reads (during handshake)
+                if (cycle_count <= 10000 || (cycle_count >= 276000 && cycle_count <= 280000))
+                    $display("EGRET_PLL_READ[%0d]: PC~%04x pll_ctrl=0x%02x bit6=%b",
+                             cycle_count, last_pc, pll_ctrl, pll_ctrl[6]);
+                `endif
+            end
             5'h08: cpu_din_r = timer_ctrl;     // Timer control
             5'h09: cpu_din_r = timer_counter;  // Timer counter (8-bit, free-running)
             5'h12: cpu_din_r = onesec_ctrl;    // One-second timer control
@@ -803,33 +840,25 @@ always @(posedge clk) begin
         // Track program counter
         if (rom_cs && cpu_wr) begin  // cpu_wr=1 means read
             last_pc <= cpu_addr;
-            // Log when firmware reaches key PC addresses (use masked 13-bit address)
-            // After TIP goes low (cycle ~279429), trace all ROM fetches to understand path
-            // Also log key addresses regardless of cycle count
-            if (cycle_count >= 279400 && cycle_count <= 280000) begin
-                $display("EGRET_PATH[%0d]: PC=0x%04x (13bit=0x%04x)", cycle_count, cpu_addr, addr13);
-            end
-            // Trace after 0x1246 is first hit
-            if (cycle_count >= 9500 && cycle_count <= 10500) begin
-                $display("EGRET_INIT[%0d]: PC=0x%04x (13bit=0x%04x)", cycle_count, cpu_addr, addr13);
-            end
-            // Trace the transition from init to main loop
-            if (cycle_count >= 275000 && cycle_count <= 276500) begin
-                $display("EGRET_TRANS[%0d]: PC=0x%04x (13bit=0x%04x)", cycle_count, cpu_addr, addr13);
-            end
-            // Additional key addresses
-            if (addr13 == 13'h1246 ||
-                addr13 == 13'h1640 ||
-                addr13 == 13'h1549 ||
-                addr13 == 13'h120A ||  // Entry point for timeout check
-                addr13 == 13'h1228 ||  // Timeout loop entry
-                addr13 == 13'h1236 ||  // Set $A3 bit 7
+            // Range-based tracing disabled - use KEY PC logging instead
+            // Uncomment specific ranges if needed for detailed debugging:
+            // if (cycle_count >= 279400 && cycle_count <= 280000)
+            //     $display("EGRET_PATH[%0d]: PC=%04x", cycle_count, addr13);
+            // Key firmware addresses (match MAME trace points)
+            if (addr13 == 13'h120A ||  // Init check loop entry
+                addr13 == 13'h1228 ||  // "Ready" branch target
+                addr13 == 13'h1236 ||  // BSET 7, $A3 (set init flag)
                 addr13 == 13'h123B ||  // Error exit
-                (addr13 >= 13'h14EF && addr13 <= 13'h152B) ||
-                (addr13 >= 13'h1F5C && addr13 <= 13'h1F70) ||
-                (addr13 >= 13'h1F80 && addr13 <= 13'h1F95))
-                $display("EGRET[%0d]: *** KEY PC: 0x%04x (13bit=0x%04x) PB_out=%02x TIP=%b ***",
-                         cycle_count, cpu_addr, addr13, pb_out, via_tip_stable);
+                addr13 == 13'h1246 ||  // Continue init
+                addr13 == 13'h12A3 ||  // CLI (enable interrupts)
+                addr13 == 13'h12AD ||  // TIP polling loop (BRSET 3, $01)
+                addr13 == 13'h14C8 ||  // Main message handler (JSR $1149)
+                addr13 == 13'h14CD ||  // Main loop TIP check
+                addr13 == 13'h1549 ||  // TREQ assertion (BCLR 1, $01)
+                addr13 == 13'h1640 ||  // TREQ setup
+                (addr13 >= 13'h14EF && addr13 <= 13'h152B))  // CB1 clocking
+                $display("EGRET[%0d]: KEY PC=0x%04x TIP=%b TREQ=%b",
+                         cycle_count, addr13, ~via_tip_stable, ~pb_out[1]);
         end
 
         // Debug Port A reads (especially in the wait loop around 0x0F9E)
@@ -839,26 +868,32 @@ always @(posedge clk) begin
         //              cycle_count, cpu_din_r, pa_out, pa_in, pa_ddr);
         // end
 
-        // Debug Port B reads - especially at TIP polling loop (PC ~0x12AC)
-        // This shows what value the CPU actually sees when executing brset 3, $01, addr
+        // MAME-format Port B read logging (matches EGRET pb_r format from egret.cpp)
+        // Format: "EGRET pb_r: %02x TIP=%d BYTEACK=%d (PC=%x)"
         if (port_cs && cpu_wr && cpu_addr[4:0] == 5'h01) begin
-            // Only log when TIP is low or near the polling loop
-            if (!via_tip_stable || (last_pc >= 16'h12A0 && last_pc <= 16'h12B5)) begin
-                $display("EGRET[%0d]: PORT_B_READ pc~%04x pb_in=%02x [bit3=%b] via_tip_stable=%b pb_latch=%02x pb_ddr=%02x pb_external=%02x port_test_done=%b",
-                         cycle_count, last_pc, pb_in, pb_in[3], via_tip_stable, pb_latch, pb_ddr, pb_external, port_test_done);
+            // Log when TIP is low (asserted) or periodically during polling
+            if (!via_tip_stable || (cycle_count[7:0] == 8'h00 && last_pc >= 16'h12A0 && last_pc <= 16'h12B5)) begin
+                $display("EGRET pb_r: %02x TIP=%b BYTEACK=%b (PC=%04x) [ext=%02x]",
+                         pb_in, ~via_tip_stable, ~via_byteack_in_stable, last_pc, pb_external);
             end
         end
 
-        // Log first 500 CPU cycles
-        if (cycle_count < 500) begin
-            $display("EGRET_CPU[%0d]: addr=%04x din=%02x dout=%02x wr=%b rom=%b ram=%b port=%b state=%x",
-                     cycle_count, cpu_addr, cpu_din, cpu_dout, cpu_wr,
-                     rom_cs, ram_cs, port_cs, cpu_state);
+        // MAME-format Port B write logging (matches EGRET pb_w format from egret.cpp)
+        // Format: "EGRET pb_w: %02x CB1=%d CB2=%d TREQ=%d (PC=%x)"
+        if (port_cs && !cpu_wr && cpu_addr[4:0] == 5'h01) begin
+            $display("EGRET pb_w: %02x CB1=%b CB2=%b TREQ=%b (PC=%04x)",
+                     cpu_dout, cpu_dout[4], cpu_dout[5], ~cpu_dout[1], last_pc);
+        end
+
+        // Log first 100 CPU cycles (reduced from 500 to minimize output)
+        if (cycle_count < 100) begin
+            $display("EGRET_CPU[%0d]: pc=%04x din=%02x dout=%02x",
+                     cycle_count, cpu_addr, cpu_din, cpu_dout);
         end
     end
 end
 
-// Periodic status
+// Periodic status - only log every ~1M cycles to reduce output
 reg [19:0] status_timer;
 always @(posedge clk) begin
     if (reset) begin
@@ -866,9 +901,9 @@ always @(posedge clk) begin
     end else if (cen) begin
         status_timer <= status_timer + 1;
         if (status_timer == 0) begin
-            // TREQ: pb_out[1]=0 means asserted, pb_out[1]=1 means deasserted
-            $display("EGRET STATUS: PC~%04x PB_out=%02x PB_ddr=%02x TREQ=%b TIP=%b CB1=%b CB2=%b state=%x",
-                     last_pc, pb_out, pb_ddr, pb_out[1], via_tip_stable, pb_out[4], pb_out[5], cpu_state);
+            // MAME-style status: show key signals
+            $display("EGRET[%0d] STATUS: PC=%04x TIP=%b TREQ=%b CB1=%b",
+                     cycle_count, last_pc, ~via_tip_stable, ~pb_out[1], pb_out[4]);
         end
     end
 end
