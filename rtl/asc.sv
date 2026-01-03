@@ -25,41 +25,61 @@ module asc(
 	// We implement a small register file for the control registers
 	reg [7:0] regs [0:15]; // 0x800 - 0x80F
 	
-	// FIFO Status: Bits 1 (A Empty) and 3 (B Empty) set by default
-	reg [7:0] fifo_stat;
+	// FIFO Simulation
+	reg [10:0] fifo_count; // Combined count for simplicity
+	reg [15:0] tick_div;   // Timer for draining FIFO
+	reg [7:0]  fifo_stat;
 	
 	always @(posedge clk) begin
+		// Drain FIFO periodically (simulates playback)
+		tick_div <= tick_div + 1'b1;
+		
 		if (reset) begin
 			irq <= 0;
-			fifo_stat <= 8'h0A; // FIFOs Empty
+			fifo_count <= 0;
+			fifo_stat <= 8'h00; // Fake: Not Empty to satisfy ROM?
 			regs[0] <= 8'hE8;   // Version (Read-Only)
 			regs[1] <= 0;       // Mode
 			regs[2] <= 0;       // Control
-		end else if (cs) begin
-			if (we) begin
-				// Write
-				if (addr >= 12'h800 && addr <= 12'h80F) begin
-					case (addr[3:0])
-						4'h0: ; // Version RO
-						4'h1: begin
-							regs[1] <= data_in; // Mode
-							// If Mode=1 (FIFO), maybe trigger IRQ if empty?
-							if (data_in == 1) irq <= 1; // Assert IRQ immediately (Empty)
-							else irq <= 0;
-						end
-						4'h4: begin
-							// Writing to FIFOSTAT might clear bits?
-							// MAME says reading clears.
-						end
-						default: regs[addr[3:0]] <= data_in;
-					endcase
+		end else begin
+			// FIFO Status Logic
+			// Force 0 for now to prevent "Empty" deadlock if ROM waits for data it didn't write
+			fifo_stat <= 8'h00; 
+			// fifo_stat[1] <= (fifo_count == 0); // A Empty
+			// fifo_stat[3] <= (fifo_count == 0); // B Empty
+			// fifo_stat[0] <= (fifo_count >= 256); // A Half
+			// fifo_stat[2] <= (fifo_count >= 256); // B Half
+
+			if (cs) begin
+				if (we) begin
+					// FIFO Write
+					if (addr < 12'h800) begin
+						if (fifo_count < 1024) fifo_count <= fifo_count + 1'b1;
+					end
+					// Register Write
+					else if (addr >= 12'h800 && addr <= 12'h80F) begin
+						case (addr[3:0])
+							4'h0: ; // Version RO
+							4'h1: begin
+								regs[1] <= data_in; // Mode
+								// If Mode=1 (FIFO), check IRQ
+								if (data_in == 1 && fifo_count == 0) irq <= 1; 
+								else irq <= 0;
+							end
+							4'h4: ; // FIFOSTAT RO/Clear
+							default: regs[addr[3:0]] <= data_in;
+						endcase
+					end
+				end else begin
+					// Read
+					if (addr == 12'h804) begin
+						irq <= 0; // Clear IRQ
+					end
 				end
 			end else begin
-				// Read - handled in comb/reg logic, but IRQ clearing is synchronous
-				if (addr == 12'h804) begin
-					// Reading FIFOSTAT clears interrupts
-					irq <= 0;
-				end
+				// Decrement if no write happening
+				if (tick_div == 0 && fifo_count > 0)
+					fifo_count <= fifo_count - 1'b1;
 			end
 		end
 	end
