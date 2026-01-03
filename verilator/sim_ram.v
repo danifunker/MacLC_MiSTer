@@ -33,6 +33,8 @@ integer    wr_count = 0;
 integer    vram_rd_count = 0;
 
 integer vram_wr_count = 0;
+integer rd_count = 0;
+integer rom_rd_count = 0;
 
 always @(posedge clk) begin
 	// Writes are allowed even during reset (needed for ROM loading)
@@ -44,10 +46,10 @@ always @(posedge clk) begin
 		last_wr_data <= din;
 		last_wr_valid <= 1;
 		wr_count <= wr_count + 1;
-		// Debug first 20 writes, then every 100000th
-		if (wr_count < 20 || wr_count % 100000 == 0)
-			$display("sim_ram WR[%0d]: addr=%h din=%h ds=%b",
-				wr_count, addr[21:0], din, ds);
+		// Debug first 100 writes, then every 10000th
+		if (wr_count < 100 || wr_count % 10000 == 0)
+			$display("sim_ram WR[%0d] @%0t: addr=%h din=%h ds=%b",
+				wr_count, $time, addr[21:0], din, ds);
 		// Debug VRAM writes (VRAM is at 0x1A0000-0x1DFFFF word address = 0x340000-0x3BFFFF byte)
 		if (addr[21:0] >= 22'h1A0000 && addr[21:0] < 22'h1E0000) begin
 			if (vram_wr_count < 20 || vram_wr_count % 1000 == 0)
@@ -63,10 +65,18 @@ always @(posedge clk) begin
 
 	if (reset) begin
 		last_wr_valid <= 0;
+		rd_count <= 0;
+		rom_rd_count <= 0;
 		// Don't reset wr_count so we can track all writes
 	end else begin
 		if (oe) begin
 			dout <= mem[addr[21:0]];
+							// ROM is at word address 0x240000 -> addr[21:18] == 4'h9
+							if (addr[21:18] == 4'h9 && rom_rd_count < 10000) begin
+								$display("sim_ram RD_ROM[%0d] @%0t: addr=%h dout=%h",
+									rom_rd_count, $time, addr[21:0], mem[addr[21:0]]);
+								rom_rd_count <= rom_rd_count + 1;
+							end			rd_count <= rd_count + 1;
 			// Debug video reads (VRAM is at 0x1A0000 = 0x340000 >> 1 in word address)
 			if (addr[21:0] >= 22'h1A0000 && addr[21:0] < 22'h1E0000) begin
 				if (vram_rd_count < 50)

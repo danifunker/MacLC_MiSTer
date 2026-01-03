@@ -32,11 +32,14 @@ module dataController_top(
 	input selectSEOverlay,
 	input _cpuVMA,
 	
+	input selectASC,
+	input [7:0] asc_data_in,
 	
 	input selectAriel,
 	input [7:0] ariel_data_in,
 	input selectPseudoVIA,
 	input [7:0] pseudovia_data_in,
+	input selectUnmapped,
 
 	// RAM/ROM:
 
@@ -149,7 +152,7 @@ module dataController_top(
 `ifdef SIMULATION
 		// In simulation, use shorter reset delay (~1ms at 8MHz)
 		// This allows faster boot testing while still giving hardware time to stabilize
-		resetDelay <= 20'h2000;  // 8192 cycles = ~1ms at 8MHz
+		resetDelay <= 20'h0020;  // 32 cycles = fast boot
 `else
 		resetDelay <= 20'hFFFFF;
 `endif
@@ -158,7 +161,7 @@ module dataController_top(
 	always @(posedge clk32 or negedge _systemReset) begin
 		if (_systemReset == 1'b0) begin
 `ifdef SIMULATION
-			resetDelay <= 20'h2000;
+			resetDelay <= 20'h0020;
 `else
 			resetDelay <= 20'hFFFFF;
 `endif
@@ -180,8 +183,10 @@ module dataController_top(
 	// The real Egret starts very early and controls when the 68000 comes out of reset
 	// IMPORTANT: In simulation, wait for _systemReset to go high (ROM download complete)
 	// before releasing Egret, otherwise Egret times out before 68020 can respond.
+	// ALSO: Wait for minResetPassed so Egret doesn't start (and assert TREQ) while
+	// 68020 is held in resetDelay.
 	reg [9:0] egretBootCounter = 0;
-	wire egretReset = (egretBootCounter < 10'd256);
+	wire egretReset = (egretBootCounter < 10'd256) || !minResetPassed;
 
 	always @(posedge clk32) begin
 		if (!_systemReset) begin
@@ -253,13 +258,51 @@ module dataController_top(
 	always @(posedge clk32) if (cpuBusControl && memoryLatch) cpu_data <= memoryDataIn;
 
 	// CPU-side data output mux
-assign cpuDataOut = selectIWM ? iwmDataOut :
-                    selectVIA ? viaDataOut :
-                    selectSCC ? { sccDataOut, 8'hEF } :
-                    selectSCSI ? { scsiDataOut, 8'hEF } :
-                    selectAriel ? {ariel_data_in, ariel_data_in} :
-                    selectPseudoVIA ? {pseudovia_data_in, pseudovia_data_in} :
-                    (cpuBusControl && memoryLatch) ? memoryDataIn : cpu_data;
+    wire [15:0] viaDataOut_full = viaDataOut;
+    wire [15:0] sccDataOut_full = { sccDataOut, 8'hEF };
+    wire [15:0] scsiDataOut_full = { scsiDataOut, 8'hEF };
+    wire [15:0] arielDataOut_full = {ariel_data_in, ariel_data_in};
+    wire [15:0] pviaDataOut_full = {pseudovia_data_in, pseudovia_data_in};
+    wire [15:0] ascDataOut_full = {asc_data_in, asc_data_in};
+
+    assign cpuDataOut = selectIWM ? iwmDataOut :
+                        selectVIA ? viaDataOut_full :
+                        selectSCC ? sccDataOut_full :
+                        selectSCSI ? scsiDataOut_full :
+                        selectAriel ? arielDataOut_full :
+                        selectPseudoVIA ? pviaDataOut_full :
+                        selectASC ? ascDataOut_full :
+                        selectUnmapped ? 16'h0000 :
+                        (cpuBusControl && memoryLatch) ? memoryDataIn : cpu_data;
+
+    always @(posedge clk32) begin
+        if (cpuBusControl && memoryLatch) begin
+            if (selectVIA) begin
+                if (_cpuRW)
+                    $display("PERIPH: READ VIA reg=%h data=%h @%0t", cpuAddrRegHi, viaDataOut_full, $time);
+                else
+                    $display("PERIPH: WRITE VIA reg=%h data=%h @%0t", cpuAddrRegHi, cpuDataIn, $time);
+            end
+            if (selectPseudoVIA) begin
+                if (_cpuRW)
+                    $display("PERIPH: READ PVIA reg=%h data=%h @%0t", {cpuAddrRegHi, cpuAddrRegMid, cpuAddrRegLo}, pviaDataOut_full, $time);
+                else
+                    $display("PERIPH: WRITE PVIA reg=%h data=%h @%0t", {cpuAddrRegHi, cpuAddrRegMid, cpuAddrRegLo}, cpuDataIn, $time);
+            end
+            if (selectASC) begin
+                if (_cpuRW)
+                    $display("PERIPH: READ ASC reg=%h data=%h @%0t", {cpuAddrRegHi, cpuAddrRegMid, cpuAddrRegLo}, ascDataOut_full, $time);
+                else
+                    $display("PERIPH: WRITE ASC reg=%h data=%h @%0t", {cpuAddrRegHi, cpuAddrRegMid, cpuAddrRegLo}, cpuDataIn, $time);
+            end
+            if (selectSCC) begin
+                if (_cpuRW)
+                    $display("PERIPH: READ SCC reg=%h data=%h @%0t", cpuAddrRegLo, sccDataOut_full, $time);
+                else
+                    $display("PERIPH: WRITE SCC reg=%h data=%h @%0t", cpuAddrRegLo, cpuDataIn, $time);
+            end
+        end
+    end
 	
 	// Memory-side
 	assign memoryDataOut = cpuDataIn;
@@ -311,10 +354,13 @@ assign cpuDataOut = selectIWM ? iwmDataOut :
 	// Mac SE ROM overlay switch
 	reg  SEOverlay;
 	always @(posedge clk32) begin
-		if (!_cpuReset)
+		if (!_cpuReset) begin
+			if (SEOverlay == 0) $display("DC: SEOverlay RESET to 1 @%0t", $time);
 			SEOverlay <= 1;
-		else if (selectSEOverlay)
+		end else if (selectSEOverlay) begin
+			if (SEOverlay == 1) $display("DC: SEOverlay CLEARED to 0 @%0t", $time);
 			SEOverlay <= 0;
+		end
 	end
 
 	// VIA
@@ -353,7 +399,8 @@ assign cpuDataOut = selectIWM ? iwmDataOut :
 	//
 	// TREQ polarity: cuda_treq=1 means CUDA is asserting TREQ (pin LOW = has data)
 	// So we invert cuda_treq when building the external value
-	wire [7:0] via_pb_external = {2'b11, 2'b11, ~cuda_treq, 3'b111};
+	// DEBUG: Connect _hblank to PB7, and force Sense=6 (110) on PB2-0
+	wire [7:0] via_pb_external = {_hblank, 1'b1, 2'b11, ~cuda_treq, 3'b110};
 	// Combine VIA outputs with CUDA inputs
 	// Standard MUX for most bits: VIA output when OE, external when input
 	wire [7:0] pb_pin_level_mux = (via_pb_oe & via_pb_o) | (~via_pb_oe & via_pb_external);
@@ -467,6 +514,23 @@ assign cpuDataOut = selectIWM ? iwmDataOut :
 `endif
 	/* verilator lint_on STMTDLY */
 
+	// 60.15 Hz Timer for VIA1 CA1
+	// The Mac LC has a dedicated timer for the 60.15 Hz System Tick, separate from the video VBL.
+	// 8.125 MHz / 60.15 Hz ~= 135,078 cycles
+	reg [17:0] tick_cnt;
+	reg tick_60hz;
+
+	always @(posedge clk32) begin
+		if (clk8_en_p) begin
+			if (tick_cnt >= 135078) begin
+				tick_cnt <= 0;
+				tick_60hz <= ~tick_60hz;
+			end else begin
+				tick_cnt <= tick_cnt + 1'b1;
+			end
+		end
+	end
+
 	via6522 via(
 		.clock      (clk32),
 		.rising     (E_rising),
@@ -491,7 +555,7 @@ assign cpuDataOut = selectIWM ? iwmDataOut :
 		.port_b_i   (via_pb_i),  // CUDA contribution already in via_pb_i
 
 		//-- handshake pins
-		.ca1_i      (_vblank),
+		.ca1_i      (tick_60hz),
 		.ca2_i      (onesec),
 
 		.cb1_i      (via_cb1_in),
@@ -523,7 +587,9 @@ assign cpuDataOut = selectIWM ? iwmDataOut :
 	reg via_tip_latched;
 	always @(posedge clk32) begin
 		if (!_cpuReset) begin
-			via_tip_latched <= 1'b1;  // TIP idle HIGH (not asserted)
+			// CRITICAL: Match MAME's m_sys_session=0 initial state (TIP asserted)
+			// This allows Egret firmware to proceed through initial handshake
+			via_tip_latched <= 1'b0;  // TIP asserted initially (matches MAME)
 		end else if (clk8_en_p && via_pb_oe[5]) begin
 			// Only update TIP when VIA is driving PB5 as output
 			via_tip_latched <= via_pb_o[5];

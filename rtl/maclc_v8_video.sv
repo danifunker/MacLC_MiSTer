@@ -95,6 +95,27 @@ always @(posedge clk_sys) begin
     de <= (h_count < h_active) && (v_count < v_active);
 end
 
+`ifdef SIMULATION
+reg vblank_prev;
+always @(posedge clk_sys) begin
+    if (vblank != vblank_prev) begin
+        $display("V8: VBLANK changed to %b (v_count=%d) @%0t", vblank, v_count, $time);
+        vblank_prev <= vblank;
+    end
+    if (v_count == 0 && h_count == 0) begin
+        $display("V8: Frame Start (v_count wrap) @%0t", $time);
+    end
+end
+
+reg [3:0] monitor_id_prev;
+always @(posedge clk_sys) begin
+    if (monitor_id != monitor_id_prev) begin
+        $display("V8: monitor_id changed to %h @%0t", monitor_id, $time);
+        monitor_id_prev <= monitor_id;
+    end
+end
+`endif
+
 // --- Video Address Generation ---
 // VRAM Stride is 1024 bytes (0x400)
 // We calculate the byte offset of the current pixel group

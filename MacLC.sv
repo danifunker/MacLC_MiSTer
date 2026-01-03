@@ -516,14 +516,13 @@ module emu
 
 		.br_n       ( 1'b1    ),
 		.bg_n       (  ),
-		.bgack_n    ( 1'b1 ),
-
-		.ipl        ( _cpuIPL ),
-		.berr       ( 1'b0 ),
-		.din        ( dataControllerDataOut ),
-		.dout       ( tg68_dout ),
-		.addr       ( tg68_a )
-	);
+				.bgack_n    ( 1'b1 ),
+				.ipl        ( _cpuIPL ),
+				.berr       ( cpuFC == 3'b111 ),
+				.din        ( dataControllerDataOut ),
+				.dout       ( tg68_dout ),
+				.addr       ( tg68_a )
+			);
 	
 	addrController_top ac0
 	(
@@ -580,17 +579,26 @@ module emu
 		.dskReadAckExt(dskReadAckExt)
 	);
 
+	always @(posedge clk_sys) begin
+		if (selectSEOverlay && !_cpuAS)
+			$display("DC: selectSEOverlay ACTIVE (addr=%h) @%0t", cpuAddr, $time);
+	end
+
 	wire [1:0] diskEject;
 	wire [1:0] diskMotor, diskAct;
 	
 	// Video Mode Selection Logic
 	// 0=1bpp, 1=2bpp, 2=4bpp, 3=8bpp, 4=16bpp
 	// Mapped from OSD (status[16:15]) for now:
+	// DEBUG: Allow CPU to set video mode (via PseudoVIA)
+	wire [2:0] v8_video_mode = pvia_video_config[2:0];
+	/*
 	wire [2:0] v8_video_mode = status[16:15] == 2'b00 ? 3'd2 : // 4bpp
 							   status[16:15] == 2'b01 ? 3'd1 : // 2bpp
 							   status[16:15] == 2'b10 ? 3'd0 : // 1bpp
 							   status[16:15] == 2'b11 ? 3'd3 : // 8bpp
 							   status[17] ? 3'd4 : 3'd2;       // 16bpp override
+	*/
 
 	// Monitor ID Selection
 	wire [3:0] v8_monitor_id = status[11:10] == 2'b00 ? 4'h6 : // 13" RGB
@@ -614,6 +622,8 @@ module emu
 	);
 
 	wire [7:0] pvia_video_config;
+	wire [7:0] asc_data_out;
+	wire asc_irq;
 
 	pseudovia pvia(
 		.clk_sys(clk_sys),
@@ -625,6 +635,7 @@ module emu
 		.req(selectPseudoVIA && cpuBusControl),
 		.vblank_irq(v8_vblank),
 		.slot_irq(1'b0),
+		.asc_irq(asc_irq),
 		.irq_out(pseudovia_irq),
 		.ram_config(configRAMSize),
 		.monitor_id(v8_monitor_id),
@@ -661,8 +672,40 @@ module emu
 		.palette_data(ariel_palette_data)
 	);
 
-	dataController_top #(SCSI_DEVS) dc0
-	(
+	asc asc_inst(
+		.clk(clk_sys),
+		.reset(~n_reset),
+		.cs(selectASC),
+		.addr(cpuAddr[11:0]),
+		.data_in(cpuDataOut[7:0]),
+		.data_out(asc_data_out),
+		.we(!_cpuRW && cpuBusControl),
+		.irq(asc_irq)
+	);
+
+	always @(posedge clk_sys) begin
+		if (!_cpuAS && clk8_en_p) begin
+			$display("DC: AS_active addr=%h fc=%d rw=%b @%0t", cpuAddr, cpuFC, _cpuRW, $time);
+		end
+	end
+
+	reg v8_vblank_prev;
+	always @(posedge clk_sys) begin
+		if (v8_vblank != v8_vblank_prev) begin
+			$display("DC: v8_vblank changed: %b @%0t", v8_vblank, $time);
+		end
+		v8_vblank_prev <= v8_vblank;
+	end
+
+	reg memoryOverlayOn_prev;
+	always @(posedge clk_sys) begin
+		if (memoryOverlayOn != memoryOverlayOn_prev) begin
+			$display("DC: memoryOverlayOn changed: %b @%0t", memoryOverlayOn, $time);
+		end
+		memoryOverlayOn_prev <= memoryOverlayOn;
+	end
+
+	dataController_top dataController (
 		.clk32(clk_sys),
 		.clk8_en_p(clk8_en_p),
 		.clk8_en_n(clk8_en_n),
@@ -685,6 +728,8 @@ module emu
 		.selectSCC(selectSCC),
 		.selectIWM(selectIWM),
 		.selectVIA(selectVIA),
+		.selectASC(selectASC),
+		.asc_data_in(asc_data_out),
 		.selectSEOverlay(selectSEOverlay),
 		.cpuBusControl(cpuBusControl),
 		.videoBusControl(videoBusControl),
@@ -695,6 +740,7 @@ module emu
 		.ariel_data_in(ariel_reg_dout),
 		.selectPseudoVIA(selectPseudoVIA),
 		.pseudovia_data_in(pseudovia_dout),
+		.selectUnmapped(selectUnmapped),
 		
 		// peripherals
 		.ps2_key(ps2_key), 

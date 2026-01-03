@@ -70,7 +70,7 @@ int cfg_memSize = 1;       // 0=1MB, 1=4MB
 
 // CPU trace
 // ---------
-bool cpu_trace_enable = false;  // Will enable after startup cycles
+bool cpu_trace_enable = false;  // Enable after ROM download
 bool cpu_trace_started = false;  // Wait for ROM load and reset
 FILE* cpu_trace_file = nullptr;
 const char* cpu_trace_filename = "cpu_trace.log";
@@ -328,30 +328,34 @@ int verilate() {
 		}
 #endif
 
-		// Output pixels on rising edge of pixel clock
-		if (clk_sys.IsRising() && VERTOPINTERN->CE_PIXEL) {
-			uint32_t colour = 0xFF000000 | VERTOPINTERN->VGA_B << 16 | VERTOPINTERN->VGA_G << 8 | VERTOPINTERN->VGA_R;
-			video.Clock(VERTOPINTERN->VGA_HB, VERTOPINTERN->VGA_VB, VERTOPINTERN->VGA_HS, VERTOPINTERN->VGA_VS, colour);
-		}
-
-		if (clk_sys.IsRising()) {
-			main_time++;
-			// Print progress every 10 million cycles (~300ms of simulated time at 32MHz)
-			if ((main_time % 10000000) == 0) {
-				fprintf(stderr, "Cycle %llu: PC=%08X Op=%04X\n",
-					(unsigned long long)main_time,
-					VERTOPINTERN->debug_pc,
-					VERTOPINTERN->debug_opcode);
+					// Output pixels on rising edge of pixel clock
+				if (clk_sys.IsRising() && VERTOPINTERN->CE_PIXEL) {
+					uint32_t colour = 0xFF000000 | VERTOPINTERN->VGA_B << 16 | VERTOPINTERN->VGA_G << 8 | VERTOPINTERN->VGA_R;
+					video.Clock(VERTOPINTERN->VGA_HB, VERTOPINTERN->VGA_VB, VERTOPINTERN->VGA_HS, VERTOPINTERN->VGA_VS, colour);
+				}
+		
+				if (clk_sys.IsRising()) {
+					main_time++;
+					// Print progress every 10 million cycles (~300ms of simulated time at 32MHz)
+					if ((main_time % 10000000) == 0) {
+						fprintf(stderr, "Cycle %llu: PC=%08X Op=%04X\n",
+							(unsigned long long)main_time,
+							VERTOPINTERN->debug_pc,
+							VERTOPINTERN->debug_opcode);
+					}
+					// Enable trace after download completes to see initial 68K execution
+					static bool last_download = false;
+					if (last_download && !*bus.ioctl_download && !cpu_trace_enable) {
+						cpu_trace_enable = true;
+						fprintf(stderr, "*** Enabling CPU trace after ROM download ***\n");
+						if (!cpu_trace_file) {
+							cpu_trace_file = fopen(cpu_trace_filename, "w");
+						}
+					}
+					last_download = *bus.ioctl_download;
+				}
+				return 1;
 			}
-			// Enable trace after 600M cycles to capture post-RAM-test activity
-			if (main_time == 600000000 && !cpu_trace_enable) {
-				cpu_trace_enable = true;
-				fprintf(stderr, "*** Enabling CPU trace at cycle 600M ***\n");
-			}
-		}
-		return 1;
-	}
-
 	// Stop verilating and cleanup
 	top->final();
 	delete top;

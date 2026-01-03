@@ -53,6 +53,7 @@
 module addrDecoder(
     input [23:0] address,
     input _cpuAS,
+    input _cpuRW,
     input memoryOverlayOn,
 
     output reg selectRAM,
@@ -60,13 +61,15 @@ module addrDecoder(
     output reg selectSCSI,
     output reg selectSCC,
     output reg selectIWM,
+    output reg selectASC,
     output reg selectVIA,
     output reg selectSEOverlay,  // Directly triggers overlay disable
 
     // Mac LC Specific Selects
     output reg selectAriel,
     output reg selectPseudoVIA,
-    output reg selectVRAM
+    output reg selectVRAM,
+    output reg selectUnmapped
 );
 
     always @(*) begin
@@ -76,13 +79,17 @@ module addrDecoder(
         selectSCSI = 0;
         selectSCC = 0;
         selectIWM = 0;
+        selectASC = 0;
         selectVIA = 0;
         selectSEOverlay = 0;
         selectAriel = 0;
         selectPseudoVIA = 0;
         selectVRAM = 0;
+        selectUnmapped = 0;
 
         if (!_cpuAS) begin
+            if (!_cpuRW)
+                $display("AD: WRITE addr=%h fc=%d @%0t", address, address[23:21], $time); // Wait! I'll use the proper FC signal later
             // ==========================================================
             // Mac LC (V8) Memory Map - CPU Addresses
             // ==========================================================
@@ -92,15 +99,16 @@ module addrDecoder(
             if (address[23:20] == 4'hA) begin
                 selectROM = 1;
                 selectSEOverlay = 1;  // Signal to disable overlay
+                $display("AD: selectSEOverlay ACTIVE (addr=%h) @%0t", address, $time);
             end
 
             // --- RAM or Overlay ROM ($000000 - $9FFFFF) ---
             else if (address[23:20] < 4'hA) begin
-                if (memoryOverlayOn) begin
-                    // Overlay active: ROM appears at $000000
+                if (memoryOverlayOn && _cpuRW) begin
+                    // Overlay active: ROM appears at $000000 for READS
                     selectROM = 1;
                 end else begin
-                    // Normal operation: RAM
+                    // Normal operation OR overlay WRITES: RAM
                     selectRAM = 1;
                 end
             end
@@ -123,8 +131,8 @@ module addrDecoder(
                     // SCSI DRQ: $F12000-$F13FFF
                     8'b0001_001?: selectSCSI = 1;
 
-                    // ASC: $F14000-$F15FFF (stub - no select signal yet)
-                    // 8'b0001_010?: selectASC = 1;
+                    // ASC: $F14000-$F15FFF
+                    8'b0001_010?: selectASC = 1;
 
                     // SWIM/IWM: $F16000-$F17FFF
                     8'b0001_011?: selectIWM = 1;
@@ -141,10 +149,13 @@ module addrDecoder(
                     8'b01??_????: selectVRAM = 1;  // $F40000-$F7FFFF
                     8'b10??_????: selectVRAM = 1;  // $F80000-$FBFFFF
 
-                    default: ;
+                    default: selectUnmapped = 1;
                 endcase
             end
-            // Addresses $B00000-$EFFFFF are unmapped (bus error territory)
+            // Addresses $B00000-$EFFFFF are unmapped
+            else begin
+                selectUnmapped = 1;
+            end
         end
     end
 endmodule

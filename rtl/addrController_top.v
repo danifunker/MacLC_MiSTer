@@ -34,6 +34,7 @@ module addrController_top(
 	output selectSCSI,
 	output selectSCC,
 	output selectIWM,
+	output selectASC,
 	output selectVIA,
 	output selectRAM,
 	output selectROM,
@@ -144,6 +145,13 @@ module addrController_top(
 	// RAM Write Enable: Active for RAM or VRAM writes
 	assign _ramWE = ~(cpuBusControl && (selectRAM || selectVRAM) && !_cpuRW);
 	
+	always @(posedge clk) begin
+		if (cpuBusControl && !_cpuRW)
+			$display("AC: CPU WRITE attempt selectRAM=%b selectVRAM=%b addr=%h @%0t", selectRAM, selectVRAM, cpuAddr, $time);
+		if (!_ramWE && cpuBusControl)
+			$display("AC: RAM WRITE addr=%h ds=%b @%0t", memoryAddr, {_memoryUDS, _memoryLDS}, $time);
+	end
+	
 	assign _memoryUDS = cpuBusControl ? _cpuUDS : 1'b0;
 	assign _memoryLDS = cpuBusControl ? _cpuLDS : 1'b0;
 	
@@ -188,20 +196,28 @@ module addrController_top(
 		macAddr;
 
 	addrDecoder ad(
-		.address(cpuAddr),
+		.address({cpuAddr[23:1], 1'b0}),
 		._cpuAS(_cpuAS),
+		._cpuRW(_cpuRW),
 		.memoryOverlayOn(memoryOverlayOn),
 		.selectRAM(selectRAM),
 		.selectROM(selectROM),
 		.selectSCSI(selectSCSI),
 		.selectSCC(selectSCC),
 		.selectIWM(selectIWM),
+		.selectASC(selectASC),
 		.selectVIA(selectVIA),
 		.selectSEOverlay(selectSEOverlay),
 		.selectAriel(selectAriel),
 		.selectPseudoVIA(selectPseudoVIA),
 		.selectVRAM(selectVRAM)
 	);
+
+	always @(posedge clk) begin
+		if (!_cpuAS && clk8_en_p)
+			$display("AC: ADDR cpuAddr=%h packed=%h selROM=%b selRAM=%b selOvr=%b @%0t", 
+				cpuAddr, {cpuAddr[23:1], 1'b0}, selectROM, selectRAM, selectSEOverlay, $time);
+	end
 
 	// Video timing for Mac LC uses V8 video controller
 	// The videoTimer is kept for hsync/vsync/_hblank/_vblank generation

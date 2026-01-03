@@ -253,7 +253,9 @@ reg [2:0] via_byteack_in_sync;
 
 always @(posedge clk) begin
     if (reset) begin
-        via_tip_sync <= 3'b111;       // TIP idle high
+        // CRITICAL: Match MAME's initial state where m_sys_session=0 (TIP asserted)
+        // This allows the Egret firmware to proceed through its initial handshake
+        via_tip_sync <= 3'b000;       // TIP asserted initially (matches MAME)
         via_cb2_in_sync <= 3'b000;
         via_byteack_in_sync <= 3'b000;
     end else begin
@@ -672,12 +674,12 @@ always @(*) begin
             5'h05: cpu_din_r = pb_ddr;
             5'h06: cpu_din_r = pc_ddr;
             5'h07: begin
-                cpu_din_r = pll_ctrl;       // PLL control
+                cpu_din_r = pll_ctrl | 8'h40;       // PLL control - bit 6 is LOCK
                 `ifdef SIMULATION
                 // Log early PLL reads (during init) and later reads (during handshake)
                 if (cycle_count <= 10000 || (cycle_count >= 276000 && cycle_count <= 280000))
                     $display("EGRET_PLL_READ[%0d]: PC~%04x pll_ctrl=0x%02x bit6=%b",
-                             cycle_count, last_pc, pll_ctrl, pll_ctrl[6]);
+                             cycle_count, last_pc, cpu_din_r, cpu_din_r[6]);
                 `endif
             end
             5'h08: cpu_din_r = timer_ctrl;     // Timer control
@@ -846,10 +848,20 @@ always @(posedge clk) begin
             //     $display("EGRET_PATH[%0d]: PC=%04x", cycle_count, addr13);
             // Key firmware addresses (match MAME trace points)
             if (addr13 == 13'h120A ||  // Init check loop entry
+                addr13 == 13'h1210 ||  // BCLR 6, $A3
+                addr13 == 13'h1212 ||  // BRSET 6, $07 (PLL check)
+                addr13 == 13'h1219 ||  // JSR $1E01
+                addr13 == 13'h121C ||  // BCLR 4, $07
+                addr13 == 13'h121E ||  // JSR $1E01 (2nd)
+                addr13 == 13'h1221 ||  // BRCLR 0, $01
+                addr13 == 13'h1224 ||  // BSET 6, $07 (set PLL bit)
+                addr13 == 13'h1226 ||  // After PLL check branch
                 addr13 == 13'h1228 ||  // "Ready" branch target
                 addr13 == 13'h1236 ||  // BSET 7, $A3 (set init flag)
                 addr13 == 13'h123B ||  // Error exit
                 addr13 == 13'h1246 ||  // Continue init
+                addr13 == 13'h1251 ||  // Main loop JSR $120A
+                addr13 == 13'h1E01 ||  // PLL wait subroutine
                 addr13 == 13'h12A3 ||  // CLI (enable interrupts)
                 addr13 == 13'h12AD ||  // TIP polling loop (BRSET 3, $01)
                 addr13 == 13'h14C8 ||  // Main message handler (JSR $1149)

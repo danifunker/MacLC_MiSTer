@@ -73,6 +73,7 @@ module emu
 	output        debug_selectSCSI,
 	output        debug_selectSCC,
 	output        debug_selectIWM,
+	output        debug_selectASC,
 	output [23:0] debug_cpuAddr,
 	output [15:0] debug_cpuDataIn,    // Data from CPU to peripherals
 	output [15:0] debug_cpuDataOut,   // Data from peripherals to CPU
@@ -401,6 +402,7 @@ module emu
 		.selectSCSI(selectSCSI),
 		.selectSCC(selectSCC),
 		.selectIWM(selectIWM),
+		.selectASC(selectASC),
 		.selectVIA(selectVIA),
 		.selectRAM(selectRAM),
 		.selectROM(selectROM),
@@ -433,6 +435,9 @@ module emu
 
 	// Video Mode Selection - from PVIA video_config register (bits 2:0 = bpp mode)
 	wire [7:0] pvia_video_config;
+	wire [7:0] asc_data_out;
+	wire asc_irq;
+
 	// Use actual video mode from pseudovia (ROM configures this via register 0x10)
 	wire [2:0] v8_video_mode = pvia_video_config[2:0];
 
@@ -466,10 +471,22 @@ module emu
 		.req(selectPseudoVIA && cpuBusControl),
 		.vblank_irq(v8_vblank),
 		.slot_irq(1'b0),
+		.asc_irq(asc_irq),
 		.irq_out(pseudovia_irq),
 		.ram_config(configRAMSize),
 		.monitor_id(v8_monitor_id),
 		.video_config(pvia_video_config)
+	);
+
+	asc asc_inst(
+		.clk(clk_sys),
+		.reset(~n_reset),
+		.cs(selectASC),
+		.addr(cpuAddr[11:0]),
+		.data_in(cpuDataOut[7:0]),
+		.data_out(asc_data_out),
+		.we(!_cpuRW && cpuBusControl),
+		.irq(asc_irq)
 	);
 
 	maclc_v8_video v8_video(
@@ -521,6 +538,8 @@ module emu
 		.selectSCC(selectSCC),
 		.selectIWM(selectIWM),
 		.selectVIA(selectVIA),
+		.selectASC(selectASC),
+		.asc_data_in(asc_data_out),
 		.selectSEOverlay(selectSEOverlay),
 		.cpuBusControl(cpuBusControl),
 		.videoBusControl(videoBusControl),
@@ -645,12 +664,6 @@ module emu
 	// This bypasses the multi-cycle handshake latency from dioBusControl
 	wire download_cycle = dio_download && ioctl_wr;
 
-	// Combinational version of dio_a for download (avoids register latency)
-	// Mac LC ROM at offset 0x40000 (512KB)
-	// Floppy disk images at higher offsets
-	wire [20:0] dio_a_comb = dio_index[1:0] ? {dio_index[1:0], dio_addr[18:0]} :
-	                         {3'b001, dio_addr[17:0]};  // LC ROM at offset 0x40000
-
 	// Address mapping for sim_ram:
 	// sim_ram uses addr[21:0] for a 4M word (8MB) array
 	//
@@ -658,12 +671,23 @@ module emu
 	//   - This gives addr[21:0] = {dskReadAck, memoryAddr[21:1]}
 	//   - Normal RAM (dskReadAck=0): uses 0x000000 - 0x1FFFFF (4MB = 2M words)
 	//
-	// For ROM path: Need bit 21 = 1 to avoid collision with RAM
-	//   - {3'b000, 1'b1, dio_a_comb[20:0]} gives addr[21:0] = {1, dio_a_comb[20:0]} = 0x200000 + dio_a_comb
-	wire [24:0] ram_addr = download_cycle ? {3'b000, 1'b1, dio_a_comb[20:0] } :  // ROM at 0x200000+ (bit 21 set)
+	// For ROM path: Need bit 21 = 1 to select ROM area in sim_ram (8MB capacity)
+	//   - dio_addr is byte address from ioctl.
+	//   - For index 0 (ROM), dio_a_comb should map to 0x200000 + 0x40000 (word offset).
+	
+	// Mac LC ROM at offset 0x40000 (512KB)
+	// Floppy disk images at higher offsets
+	wire [20:0] dio_a_raw = ioctl_addr[20:1];
+	wire [20:0] dio_a_comb = ioctl_index[1:0] ? {ioctl_index[1:0], dio_a_raw[18:0]} :
+	                         {3'b001, dio_a_raw[17:0]};  // LC ROM at offset 0x40000
+
+	wire [24:0] ram_addr = download_cycle ? {3'b000, 1'b1, dio_a_comb[20:0] } :  // ROM at word 0x200000 + dio_a_comb
 						   ~_romOE        ?
-						   {3'b000, 1'b1, 3'b001, memoryAddr[18:1]} :  // ROM reads at 0x200000+ offset 0x40000
-										  {3'b000, (dskReadAckInt || dskReadAckExt), memoryAddr[21:1]};  // RAM at 0x000000+
+						   {3'b000, 1'b1, 3'b001, memoryAddr[18:1]} :  // ROM reads at word 0x200000 + 0x40000
+										  {3'b000, (dskReadAckInt || dskReadAckExt), memoryAddr[21:1]};  // RAM at word 0x000000+
+
+
+
 	// Use ioctl_dout directly for download (bypass registered dio_data)
 	wire [15:0] ram_din  = download_cycle ? ioctl_dout            : memoryDataOut;
 	wire  [1:0] ram_ds   = download_cycle ? 2'b11                 : { !_memoryUDS, !_memoryLDS };
@@ -704,6 +728,7 @@ module emu
 	assign debug_selectSCSI = selectSCSI;
 	assign debug_selectSCC = selectSCC;
 	assign debug_selectIWM = selectIWM;
+	assign debug_selectASC = selectASC;
 	assign debug_cpuAddr = cpuAddr;
 	assign debug_cpuDataIn = cpuDataOut;  // CPU writes this to peripherals
 	assign debug_cpuDataOut = dataControllerDataOut;  // Peripherals send this to CPU

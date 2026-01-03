@@ -34,6 +34,7 @@ module pseudovia(
     // Interrupts
     input vblank_irq,    // Active high VBlank signal
     input slot_irq,      // Slot interrupt
+    input asc_irq,       // ASC interrupt
     output reg irq_out,
 
     // Config from top level
@@ -56,8 +57,10 @@ reg [7:0] port_b;
 
 // Slot interrupt status - active LOW
 // Bit 6: VBlank (active low = VBlank is happening)
-// Bits 3-5: Slot IRQs
-wire [7:0] slot_status = {1'b0, ~vblank_irq, ~slot_irq, 4'b1111, 1'b1};
+// Bit 5: Slot IRQ
+// Bit 4: ASC IRQ
+// Bits 3: Slot 0 IRQ
+wire [7:0] slot_status = {1'b0, ~vblank_irq, ~slot_irq, ~asc_irq, 3'b111, 1'b1};
 
 // IRQ recalculation
 wire [7:0] slot_irqs = (~regs[2]) & 8'h78;  // Check bits 3-6 (slots + vblank)
@@ -110,13 +113,17 @@ always @(posedge clk_sys) begin
                 // Native mode: offset 0x00-0xFF
                 if (we) begin
                     case (addr[7:0])
-                        8'h00: port_b <= data_in;  // Port B output
+                        8'h00: begin
+                            port_b <= data_in;  // Port B output
+                            $display("PVIA: WRITE Reg 0 (Port B) = %02x @%0t", data_in, $time);
+                        end
 
                         8'h01: ;  // Config - read only
 
                         8'h02: begin
                             // Write 1 to bit 6 to clear VBlank flag
                             regs[2] <= regs[2] | (data_in & 8'h40);
+                            $display("PVIA: WRITE Reg 2 (Slot Status) = %02x @%0t", data_in, $time);
                         end
 
                         8'h03: begin
@@ -125,13 +132,14 @@ always @(posedge clk_sys) begin
                                 regs[3] <= regs[3] | (data_in & 8'h7F);
                             else
                                 regs[3] <= regs[3] & ~(data_in & 8'h7F);
+                            $display("PVIA: WRITE Reg 3 (IFR) = %02x @%0t", data_in, $time);
                         end
 
                         8'h10: begin
                             regs[8'h10] <= data_in;
                             video_config <= data_in;
-                            $display("PVIA: Video config WRITE = %02x (bpp mode = %d) [prev=%02x]",
-                                     data_in, data_in[2:0], regs[8'h10]);
+                            $display("PVIA: Video config WRITE = %02x (bpp mode = %d) @%0t",
+                                     data_in, data_in[2:0], $time);
                         end
 
                         8'h12: begin
@@ -140,6 +148,7 @@ always @(posedge clk_sys) begin
                                 regs[8'h12] <= regs[8'h12] | (data_in & 8'h7F);
                             else
                                 regs[8'h12] <= regs[8'h12] & ~(data_in & 8'h7F);
+                            $display("PVIA: WRITE Reg 12 (Slot IER) = %02x @%0t", data_in, $time);
                         end
 
                         8'h13: begin
@@ -152,17 +161,24 @@ always @(posedge clk_sys) begin
                             end else begin
                                 regs[8'h13] <= regs[8'h13] & ~(data_in & 8'h7F);
                             end
+                            $display("PVIA: WRITE Reg 13 (IER) = %02x @%0t", data_in, $time);
                         end
 
-                        default: regs[addr[7:0]] <= data_in;
+                        default: begin
+                            regs[addr[7:0]] <= data_in;
+                            $display("PVIA: WRITE Reg %02x = %02x @%0t", addr[7:0], data_in, $time);
+                        end
                     endcase
                 end else begin
                     // Read native mode
                     case (addr[7:0])
-                        8'h00: data_out <= port_b;  // Port B
+                        8'h00: begin
+                            data_out <= port_b;  // Port B
+                            $display("PVIA: READ Reg 0 (Port B) -> %02x @%0t", port_b, $time);
+                        end
 
                         8'h01: begin
-                            // RAM config register (from v8 callbacks)
+                            // RAM config register (from v8 config callbacks)
                             // Return RAM size | 0x04 (bit 2 always set)
                             case (ram_config)
                                 2'b00: data_out <= 8'h04;  // 128K
@@ -170,10 +186,17 @@ always @(posedge clk_sys) begin
                                 2'b10: data_out <= 8'h06;  // 1MB
                                 2'b11: data_out <= 8'h07;  // 4MB
                             endcase
+                            $display("PVIA: READ Reg 1 (RAM Config) -> %02x @%0t", data_out, $time);
                         end
 
-                        8'h02: data_out <= regs[2];  // Slot/VBlank status
-                        8'h03: data_out <= regs[3];  // IFR
+                        8'h02: begin 
+                            data_out <= regs[2];  // Slot/VBlank status
+                            $display("PVIA: READ Reg 2 (Slot Status) -> %02x @%0t", regs[2], $time);
+                        end
+                        8'h03: begin
+                            data_out <= regs[3];  // IFR
+                            $display("PVIA: READ Reg 3 (IFR) -> %02x @%0t", regs[3], $time);
+                        end
 
                         8'h10: begin
                             // Video config read: preserve register value, overlay monitor ID in bits 5:3
@@ -181,14 +204,23 @@ always @(posedge clk_sys) begin
                             // Bits 5:3 = monitor_id (3 bits: 0-7), bits 2:0 = video mode
                             data_out <= (regs[8'h10] & 8'hC7) | ((monitor_id[2:0]) << 3);
                             pvia_reg10_reads <= pvia_reg10_reads + 1;
-                            $display("PVIA: Video config READ[%0d], reg=0x%02x monitor_id=%d, returning %02x",
-                                     pvia_reg10_reads, regs[8'h10], monitor_id, (regs[8'h10] & 8'hC7) | ((monitor_id[2:0]) << 3));
+                            $display("PVIA: Video config READ[%0d] -> %02x @%0t",
+                                     pvia_reg10_reads, (regs[8'h10] & 8'hC7) | ((monitor_id[2:0]) << 3), $time);
                         end
 
-                        8'h12: data_out <= regs[8'h12] & 8'h7F;  // Slot IER, bit 7 always 0
-                        8'h13: data_out <= regs[8'h13] & 8'h7F;  // IER, bit 7 always 0
+                        8'h12: begin
+                            data_out <= regs[8'h12] & 8'h7F;  // Slot IER, bit 7 always 0
+                            $display("PVIA: READ Reg 12 (Slot IER) -> %02x @%0t", regs[8'h12] & 8'h7F, $time);
+                        end
+                        8'h13: begin
+                            data_out <= regs[8'h13] & 8'h7F;  // IER, bit 7 always 0
+                            $display("PVIA: READ Reg 13 (IER) -> %02x @%0t", regs[8'h13] & 8'h7F, $time);
+                        end
 
-                        default: data_out <= regs[addr[7:0]];
+                        default: begin
+                             data_out <= regs[addr[7:0]];
+                             $display("PVIA: READ Reg %02x -> %02x @%0t", addr[7:0], regs[addr[7:0]], $time);
+                        end
                     endcase
                 end
             end else begin

@@ -212,6 +212,8 @@ module m68hc05_core (
                         mainFSM <= 4'h3;
                     end else begin
                         opcode <= datain;
+                        $display("HC05: TRACE PC=%04x opcode=%02x A=%02x X=%02x SP=%04x SR=%b%b%b%b%b @%0t",
+                                 regPC, datain, regA, regX, regSP, flagH, flagI, flagN, flagZ, flagC, $time);
                         
                         case (datain)
                             8'h82: begin  // RTT - return from trace
