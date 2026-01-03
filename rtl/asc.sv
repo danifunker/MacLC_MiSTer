@@ -31,7 +31,7 @@ module asc(
 	always @(posedge clk) begin
 		if (reset) begin
 			irq <= 0;
-			fifo_stat <= 8'h0A; // FIFOs Empty
+			fifo_stat <= 8'h0F; // FIFOs Empty AND Half-Empty (bits 0-3 all set)
 			regs[0] <= 8'hE8;   // Version (Read-Only)
 			regs[1] <= 0;       // Mode
 			regs[2] <= 0;       // Control
