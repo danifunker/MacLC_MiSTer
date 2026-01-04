@@ -27,7 +27,7 @@ module asc(
 	
 	// FIFO Simulation
 	reg [10:0] fifo_count; // Combined count for simplicity
-	reg [15:0] tick_div;   // Timer for draining FIFO
+	reg [9:0]  tick_div;   // Timer for draining FIFO (10-bit ~ 16kHz @ 16MHz)
 	reg [7:0]  fifo_stat;
 	
 	always @(posedge clk) begin
@@ -37,18 +37,16 @@ module asc(
 		if (reset) begin
 			irq <= 0;
 			fifo_count <= 0;
-			fifo_stat <= 8'h00; // Fake: Not Empty to satisfy ROM?
+			fifo_stat <= 8'h05; // Bits 0,2 (Space Avail) set. Bits 1,3 (Full) clear.
 			regs[0] <= 8'hE8;   // Version (Read-Only)
 			regs[1] <= 0;       // Mode
 			regs[2] <= 0;       // Control
 		end else begin
-			// FIFO Status Logic
-			// Force 0 for now to prevent "Empty" deadlock if ROM waits for data it didn't write
-			fifo_stat <= 8'h00; 
-			// fifo_stat[1] <= (fifo_count == 0); // A Empty
-			// fifo_stat[3] <= (fifo_count == 0); // B Empty
-			// fifo_stat[0] <= (fifo_count >= 256); // A Half
-			// fifo_stat[2] <= (fifo_count >= 256); // B Half
+			// FIFO Status Logic (Hypothesis: Bit 1 = Full)
+			fifo_stat[0] <= (fifo_count < 1024); // A Space Avail
+			fifo_stat[1] <= (fifo_count >= 1024); // A Full
+			fifo_stat[2] <= (fifo_count < 1024); // B Space Avail
+			fifo_stat[3] <= (fifo_count >= 1024); // B Full
 
 			if (cs) begin
 				if (we) begin
@@ -76,10 +74,12 @@ module asc(
 						irq <= 0; // Clear IRQ
 					end
 				end
-			end else begin
-				// Decrement if no write happening
-				if (tick_div == 0 && fifo_count > 0)
-					fifo_count <= fifo_count - 1'b1;
+			end 
+			
+			// Decrement if no write happening (moved outside CS to allow drain during polling)
+			// Drain always (slowly) to satisfy boot checks that fill then wait for space.
+			else if (tick_div == 0 && fifo_count > 0) begin
+				fifo_count <= fifo_count - 1'b1;
 			end
 		end
 	end

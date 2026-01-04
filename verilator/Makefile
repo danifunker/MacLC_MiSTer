@@ -74,6 +74,7 @@ V_SRC = \
 	$(RTL)/pseudovia.sv \
 	$(RTL)/via6522.sv \
 	$(RTL)/adb.sv \
+	$(RTL)/asc.sv \
 	$(RTL)/ps2_kbd.sv \
 	$(RTL)/ps2_mouse.v \
 	$(RTL)/iwm.v \
