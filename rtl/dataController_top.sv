@@ -279,28 +279,32 @@ module dataController_top(
     always @(posedge clk32) begin
         if (cpuBusControl && memoryLatch) begin
             if (selectVIA) begin
-                if (_cpuRW)
-                    $display("PERIPH: READ VIA reg=%h data=%h @%0t", cpuAddrRegHi, viaDataOut_full, $time);
-                else
-                    $display("PERIPH: WRITE VIA reg=%h data=%h @%0t", cpuAddrRegHi, cpuDataIn, $time);
+                if (_cpuRW) begin
+                    // $display("PERIPH: READ VIA reg=%h data=%h @%0t", cpuAddrRegHi, viaDataOut_full, $time);
+                end else begin
+                    // $display("PERIPH: WRITE VIA reg=%h data=%h @%0t", cpuAddrRegHi, cpuDataIn, $time);
+                end
             end
             if (selectPseudoVIA) begin
-                if (_cpuRW)
-                    $display("PERIPH: READ PVIA reg=%h data=%h @%0t", {cpuAddrRegHi, cpuAddrRegMid, cpuAddrRegLo}, pviaDataOut_full, $time);
-                else
-                    $display("PERIPH: WRITE PVIA reg=%h data=%h @%0t", {cpuAddrRegHi, cpuAddrRegMid, cpuAddrRegLo}, cpuDataIn, $time);
+                if (_cpuRW) begin
+                    // $display("PERIPH: READ PVIA reg=%h data=%h @%0t", {cpuAddrRegHi, cpuAddrRegMid, cpuAddrRegLo}, pviaDataOut_full, $time);
+                end else begin
+                    // $display("PERIPH: WRITE PVIA reg=%h data=%h @%0t", {cpuAddrRegHi, cpuAddrRegMid, cpuAddrRegLo}, cpuDataIn, $time);
+                end
             end
             if (selectASC) begin
-                if (_cpuRW)
-                    $display("PERIPH: READ ASC reg=%h data=%h @%0t", {cpuAddrRegHi, cpuAddrRegMid, cpuAddrRegLo}, ascDataOut_full, $time);
-                else
-                    $display("PERIPH: WRITE ASC reg=%h data=%h @%0t", {cpuAddrRegHi, cpuAddrRegMid, cpuAddrRegLo}, cpuDataIn, $time);
+                if (_cpuRW) begin
+                    // $display("PERIPH: READ ASC reg=%h data=%h @%0t", {cpuAddrRegHi, cpuAddrRegMid, cpuAddrRegLo}, ascDataOut_full, $time);
+                end else begin
+                    // $display("PERIPH: WRITE ASC reg=%h data=%h @%0t", {cpuAddrRegHi, cpuAddrRegMid, cpuAddrRegLo}, cpuDataIn, $time);
+                end
             end
             if (selectSCC) begin
-                if (_cpuRW)
-                    $display("PERIPH: READ SCC reg=%h data=%h @%0t", cpuAddrRegLo, sccDataOut_full, $time);
-                else
-                    $display("PERIPH: WRITE SCC reg=%h data=%h @%0t", cpuAddrRegLo, cpuDataIn, $time);
+                if (_cpuRW) begin
+                    // $display("PERIPH: READ SCC reg=%h data=%h @%0t", cpuAddrRegLo, sccDataOut_full, $time);
+                end else begin
+                    // $display("PERIPH: WRITE SCC reg=%h data=%h @%0t", cpuAddrRegLo, cpuDataIn, $time);
+                end
             end
         end
     end
@@ -346,6 +350,7 @@ module dataController_top(
 				end
 				else begin
 					vblankCount <= 6'h0;
+					$display("DC: ONE SECOND TICK @%0t", $time);
 				end
 			end
 		end
@@ -376,12 +381,11 @@ module dataController_top(
 	assign _viaIrq = ~viaIrq;
 
 	// Port A - Mac LC configuration
-	// Mac LC V8 returns 0xD5 for Port A reads (machine identification)
-	// This is a fixed value that tells the ROM this is a Mac LC
-	// 0xD5 = 1101 0101
-	//   Bit 7 = 1 (SCC wait/request - directly directly directly directly directly directly directly directly directly directly overridden by sccWReq for compatibility)
+	// Mac LC V8 returns 0x55 for Port A reads (machine identification)
+	// 0x55 = 0101 0101
+	//   Bit 7 = 0 (SCC wait/request - matches expected state for boot)
 	//   Bits 6-0 = 1010101 (Mac LC identification pattern)
-	assign via_pa_i = 8'hD5;
+	assign via_pa_i = 8'h55;
 	// Sound volume still comes from PA[2:0] output latch
 	assign snd_vol = ~via_pa_oe[2:0] | via_pa_o[2:0];
 	assign snd_alt = 1'b0;  // LC doesn't use alternate sound buffer
@@ -588,9 +592,8 @@ module dataController_top(
 	reg via_tip_latched;
 	always @(posedge clk32) begin
 		if (!_cpuReset) begin
-			// CRITICAL: Match MAME's m_sys_session=0 initial state (TIP asserted)
-			// This allows Egret firmware to proceed through initial handshake
-			via_tip_latched <= 1'b0;  // TIP asserted initially (matches MAME)
+			// Mac LC: TIP is idle (high) at reset
+			via_tip_latched <= 1'b1; 
 		end else if (clk8_en_p && via_pb_oe[5]) begin
 			// Only update TIP when VIA is driving PB5 as output
 			via_tip_latched <= via_pb_o[5];

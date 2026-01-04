@@ -163,6 +163,7 @@ reg [31:0] cycle_total;  // Total cycles for timer counter
 // Timer prescaler based on PLL setting
 reg [15:0] timer_prescale;
 reg [15:0] timer_prescale_max;
+reg [15:0] pll_lock_counter;
 
 always @(posedge clk) begin
     if (reset) begin
@@ -172,7 +173,15 @@ always @(posedge clk) begin
         cycle_total <= 32'h0;
         timer_prescale <= 16'h0;
         timer_prescale_max <= 16'd1024;  // Default divider
+        pll_lock_counter <= 16'h0;
     end else if (cen) begin
+        // Simulate PLL lock after 500 cycles
+        if (pll_lock_counter < 16'd500) begin
+            pll_lock_counter <= pll_lock_counter + 1;
+        end else begin
+            pll_ctrl[6] <= 1'b1;  // Set LOCK bit
+        end
+
         // Count total cycles for timer counter
         cycle_total <= cycle_total + 1;
 
@@ -209,11 +218,21 @@ wire [7:0] timer_counter = cycle_total[9:2];  // Divide by 4, take lower 8 bits
 // Bit 2 (I): Keyboard power switch
 // Bit 1-0: PSU control
 
-// Port A input - use latch values for port test compatibility
-// Real ADB handling would require external signal reading, but for now
-// we return latch values so the port test passes.
-// TODO: Add proper ADB support later when needed
-wire [7:0] pa_in = pa_latch;
+// Port A input - bit 5 is system type (1 = Mac LC)
+wire [7:0] pa_external = {
+    1'b1,                   // Bit 7: tied high
+    adb_data_in,            // Bit 6: ADB data in
+    1'b1,                   // Bit 5: System type (1 = Mac LC)
+    1'b1,                   // Bit 4: tied high
+    1'b1,                   // Bit 3: tied high
+    1'b1,                   // Bit 2: tied high
+    1'b1,                   // Bit 1: tied high
+    1'b1                    // Bit 0: tied high
+};
+
+wire [7:0] pa_in = port_test_done ?
+    ((pa_latch & pa_ddr) | (pa_external & ~pa_ddr)) :
+    pa_latch;
 
 always @(*) begin
     adb_data_out = pa_out[7];
@@ -253,11 +272,9 @@ reg [2:0] via_byteack_in_sync;
 
 always @(posedge clk) begin
     if (reset) begin
-        // CRITICAL: Match MAME's initial state where m_sys_session=0 (TIP asserted)
-        // This allows the Egret firmware to proceed through its initial handshake
-        via_tip_sync <= 3'b000;       // TIP asserted initially (matches MAME)
-        via_cb2_in_sync <= 3'b000;
-        via_byteack_in_sync <= 3'b000;
+        via_tip_sync <= 3'b111;       // TIP idle high initially
+        via_cb2_in_sync <= 3'b111;
+        via_byteack_in_sync <= 3'b111;
     end else begin
         // Sample on EVERY clock, not just cen, to catch fast TIP changes
         via_tip_sync <= {via_tip_sync[1:0], via_tip};
@@ -612,10 +629,20 @@ always @(posedge clk) begin
     if (ram_cs && !cpu_wr && cen) begin  // !cpu_wr means write
         intram[ram_addr] <= cpu_dout;
         `ifdef SIMULATION
+        // Debug writes to $94 (intram[0x04])
+        if (ram_addr == 9'h04) begin
+            $display("EGRET_RAM_WRITE[%0d]: PC=%04x addr=$94 data=%02x",
+                     cycle_count, last_pc, cpu_dout);
+        end
+        // Debug writes to $CC (intram[0x3C])
+        if (ram_addr == 9'h3C) begin
+            $display("EGRET_RAM_WRITE[%0d]: PC=%04x addr=$CC data=%02x",
+                     cycle_count, last_pc, cpu_dout);
+        end
         // Debug writes to $A3 (intram[0x13]) - critical for tracking bit 7
         if (ram_addr == 9'h13) begin
-            $display("EGRET_A3_WRITE[%0d]: PC~%04x addr=$A3 data=%02x (bit7=%b)",
-                     cycle_count, cpu_addr, cpu_dout, cpu_dout[7]);
+            $display("EGRET_A3_WRITE[%0d]: PC=%04x addr=$A3 data=%02x (bit7=%b)",
+                     cycle_count, last_pc, cpu_dout, cpu_dout[7]);
         end
         `endif
     end
@@ -667,14 +694,21 @@ reg [7:0] cpu_din_r;
 always @(*) begin
     if (port_cs) begin
         case (cpu_addr[4:0])  // 5 bits for 0x00-0x1F
-            5'h00: cpu_din_r = pa_in;
+            5'h00: begin
+                cpu_din_r = pa_in;
+                `ifdef SIMULATION
+                if (cycle_count < 10000)
+                    $display("EGRET[%0d]: PORT A READ = 0x%02x (pa_out=%02x pa_in=%02x pa_ddr=%02x)",
+                             cycle_count, cpu_din_r, pa_out, pa_in, pa_ddr);
+                `endif
+            end
             5'h01: cpu_din_r = pb_in;
             5'h02: cpu_din_r = pc_out;  // Full 8-bit read for port test
             5'h04: cpu_din_r = pa_ddr;
             5'h05: cpu_din_r = pb_ddr;
             5'h06: cpu_din_r = pc_ddr;
             5'h07: begin
-                cpu_din_r = pll_ctrl | 8'h40;       // PLL control - bit 6 is LOCK
+                cpu_din_r = pll_ctrl;       // PLL control
                 `ifdef SIMULATION
                 // Log early PLL reads (during init) and later reads (during handshake)
                 if (cycle_count <= 10000 || (cycle_count >= 276000 && cycle_count <= 280000))
@@ -809,6 +843,13 @@ always @(posedge clk) begin
         //     $display("EGRET[%0d]: Port B access addr=%04x wr=%b din=%02x dout=%02x",
         //              cycle_count, cpu_addr, cpu_wr, cpu_din, cpu_dout);
         // end
+
+        // Log Port B accesses (for communication tracking)
+        if (port_cs && cpu_addr[4:0] == 5'h01) begin
+            $display("EGRET[%0d]: PB %s data=0x%02x (PC=0x%04x) TIP=%b BYTEACK=%b",
+                     cycle_count, cpu_wr ? "READ" : "WRITE", cpu_wr ? cpu_din : cpu_dout, 
+                     last_pc, ~via_tip_stable, ~via_byteack_in_stable);
+        end
 
         // Log Port B output changes
         // TREQ: pb_out[1]=0 means asserted (LOW), pb_out[1]=1 means deasserted (HIGH)

@@ -74,6 +74,7 @@ module emu
 	output        debug_selectSCC,
 	output        debug_selectIWM,
 	output        debug_selectASC,
+	output        debug_selectVRAM,
 	output [23:0] debug_cpuAddr,
 	output [15:0] debug_cpuDataIn,    // Data from CPU to peripherals
 	output [15:0] debug_cpuDataOut,   // Data from peripherals to CPU
@@ -373,6 +374,12 @@ module emu
 	assign debug_pc = last_fetch_pc;
 	assign debug_opcode = last_fetch_opcode;
 	assign debug_fetch_valid = fetch_valid;
+
+	always @(posedge clk_sys) begin
+		if (n_reset && debug_pc == 32'h00A4639C && debug_fetch_valid) begin
+			$display("SIM: D3 LOAD at PC=A4639C! D0 (last data read) was %h", dataControllerDataOut);
+		end
+	end
 
 	addrController_top ac0
 	(
@@ -729,6 +736,7 @@ module emu
 	assign debug_selectSCC = selectSCC;
 	assign debug_selectIWM = selectIWM;
 	assign debug_selectASC = selectASC;
+	assign debug_selectVRAM = selectVRAM;
 	assign debug_cpuAddr = cpuAddr;
 	assign debug_cpuDataIn = cpuDataOut;  // CPU writes this to peripherals
 	assign debug_cpuDataOut = dataControllerDataOut;  // Peripherals send this to CPU

@@ -146,10 +146,12 @@ module addrController_top(
 	assign _ramWE = ~(cpuBusControl && (selectRAM || selectVRAM) && !_cpuRW);
 	
 	always @(posedge clk) begin
-		if (cpuBusControl && !_cpuRW)
-			$display("AC: CPU WRITE attempt selectRAM=%b selectVRAM=%b addr=%h @%0t", selectRAM, selectVRAM, cpuAddr, $time);
-		if (!_ramWE && cpuBusControl)
-			$display("AC: RAM WRITE addr=%h ds=%b @%0t", memoryAddr, {_memoryUDS, _memoryLDS}, $time);
+		if (cpuBusControl && !_cpuRW) begin
+			// $display("AC: CPU WRITE attempt selectRAM=%b selectVRAM=%b addr=%h @%0t", selectRAM, selectVRAM, cpuAddr, $time);
+		end
+		if (!_ramWE && cpuBusControl) begin
+			// $display("AC: RAM WRITE addr=%h ds=%b @%0t", memoryAddr, {_memoryUDS, _memoryLDS}, $time);
+		end
 	end
 	
 	assign _memoryUDS = cpuBusControl ? _cpuUDS : 1'b0;
@@ -214,9 +216,9 @@ module addrController_top(
 	);
 
 	always @(posedge clk) begin
-		if (!_cpuAS && clk8_en_p)
-			$display("AC: ADDR cpuAddr=%h packed=%h selROM=%b selRAM=%b selOvr=%b @%0t", 
-				cpuAddr, {cpuAddr[23:1], 1'b0}, selectROM, selectRAM, selectSEOverlay, $time);
+		if (!_cpuAS && clk8_en_p) begin
+			// $display("AC: ADDR cpuAddr=%h packed=%h selROM=%b selRAM=%b selOvr=%b @%0t", cpuAddr, {cpuAddr[23:1], 1'b0}, selectROM, selectRAM, selectSEOverlay, $time);
+		end
 	end
 
 	// Video timing for Mac LC uses V8 video controller

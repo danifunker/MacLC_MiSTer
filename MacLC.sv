@@ -685,11 +685,13 @@ module emu
 		.irq(asc_irq)
 	);
 
+	/*
 	always @(posedge clk_sys) begin
 		if (!_cpuAS && clk8_en_p) begin
 			$display("DC: AS_active addr=%h fc=%d rw=%b @%0t", cpuAddr, cpuFC, _cpuRW, $time);
 		end
 	end
+	*/
 
 	reg v8_vblank_prev;
 	always @(posedge clk_sys) begin

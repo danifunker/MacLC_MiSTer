@@ -75,7 +75,7 @@ bool cpu_trace_started = false;  // Wait for ROM load and reset
 FILE* cpu_trace_file = nullptr;
 const char* cpu_trace_filename = "cpu_trace.log";
 int cpu_trace_count = 0;
-const int cpu_trace_max = 500000;  // Stop after this many instructions
+const int cpu_trace_max = 5000000;  // Stop after this many instructions
 int post_download_delay = 0;  // Delay after ROM load before tracing
 uint32_t cpu_trace_last_pc = 0xFFFFFFFF;  // For edge detection (new instruction)
 
@@ -85,15 +85,15 @@ bool ram_debug_enable = false;  // Disable for speed
 FILE* ram_debug_file = nullptr;
 const char* ram_debug_filename = "ram_debug.log";
 int ram_debug_count = 0;
-const int ram_debug_max = 5000;  // Stop after this many RAM accesses
+const int ram_debug_max = 10000000;  // Stop after this many RAM accesses
 
 // Peripheral debug
 // ----------------
-bool periph_debug_enable = false;  // Disable for speed
+bool periph_debug_enable = true;  // Disable for speed
 FILE* periph_debug_file = nullptr;
 const char* periph_debug_filename = "periph_debug.log";
 int periph_debug_count = 0;
-const int periph_debug_max = 5000;  // Stop after this many peripheral accesses
+const int periph_debug_max = 5000000;  // Stop after this many peripheral accesses
 bool periph_debug_prev_bus_control = false;  // For edge detection
 
 // Screenshot functionality
@@ -288,8 +288,9 @@ int verilate() {
 					bool selectSCSI = VERTOPINTERN->debug_selectSCSI;
 					bool selectSCC = VERTOPINTERN->debug_selectSCC;
 					bool selectIWM = VERTOPINTERN->debug_selectIWM;
+					bool selectVRAM = VERTOPINTERN->debug_selectVRAM;
 
-					if ((selectVIA || selectAriel || selectPseudoVIA || selectSCSI || selectSCC || selectIWM)
+					if ((selectVIA || selectAriel || selectPseudoVIA || selectSCSI || selectSCC || selectIWM || selectVRAM)
 					    && periph_debug_count < periph_debug_max) {
 						uint32_t addr = VERTOPINTERN->debug_cpuAddr;
 						uint16_t data_in = VERTOPINTERN->debug_cpuDataIn;
@@ -301,9 +302,11 @@ int verilate() {
 						                          selectPseudoVIA ? "PVIA" :
 						                          selectSCSI ? "SCSI" :
 						                          selectSCC ? "SCC" :
-						                          selectIWM ? "IWM" : "???";
+						                          selectIWM ? "IWM" : 
+						                          selectVRAM ? "VRAM" : "???";
 
-						fprintf(periph_debug_file, "%s %s addr=%06X data_in=%04X data_out=%04X\n",
+						fprintf(periph_debug_file, "[%llu] %s %s addr=%06X data_in=%04X data_out=%04X\n",
+							(unsigned long long)main_time,
 							rw ? "RD" : "WR",
 							periph_name,
 							addr,

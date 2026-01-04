@@ -285,6 +285,11 @@ module via6522 (
         // Interrupt logic
         irq_flags <= irq_flags |
                      irq_events;
+        
+        // Ensure serial flag is set directly from event
+        if (serial_event) begin
+            irq_flags[2] <= 1'b1;
+        end
 
 `ifdef SIMULATION
         // Debug: trace when serial_event gets captured into irq_flags
