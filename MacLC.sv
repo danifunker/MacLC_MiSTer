@@ -350,7 +350,9 @@ module emu
 	wire [7:0] pseudovia_dout;
 	wire pseudovia_irq;
 
-	assign serialIn =  UART_RXD;
+	// GEMINI: Force serialIn to 1 (Idle) to prevent SCC Break detection loop in ROM
+	// assign serialIn =  UART_RXD;
+	assign serialIn = 1'b1; 
 	assign UART_TXD = serialOut;
 	assign UART_RTS = serialRTS ;
 	assign UART_DTR = UART_DSR;

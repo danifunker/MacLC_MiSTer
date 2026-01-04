@@ -152,7 +152,8 @@ module dataController_top(
 `ifdef SIMULATION
 		// In simulation, use shorter reset delay (~1ms at 8MHz)
 		// This allows faster boot testing while still giving hardware time to stabilize
-		resetDelay <= 20'h0020;  // 32 cycles = fast boot
+		// GEMINI: Increased to 0x0200 (512 cycles) to ensure Egret starts (256 cycles) BEFORE CPU.
+		resetDelay <= 20'h0200;  
 `else
 		resetDelay <= 20'hFFFFF;
 `endif
@@ -161,7 +162,7 @@ module dataController_top(
 	always @(posedge clk32 or negedge _systemReset) begin
 		if (_systemReset == 1'b0) begin
 `ifdef SIMULATION
-			resetDelay <= 20'h0020;
+			resetDelay <= 20'h0200;
 `else
 			resetDelay <= 20'hFFFFF;
 `endif
