@@ -329,7 +329,12 @@ module emu
 	assign AUDIO_MIX = 0;
 
 	// Mac LC memory configuration
-	wire [1:0] configRAMSize = 2'b11; // 4MB RAM
+	// V8 RAM config byte (MAME encoding):
+	//   Bits 7:6 = SIMM size (00=0MB, 01=2MB, 10=4MB, 11=8MB)
+	//   Bit 5 = Motherboard (0=4MB, 1=2MB)
+	//   Bit 2 = Always set on read (handled in pseudovia)
+	// Mac LC (2MB soldered): 2MB=$24, 4MB=$64, 6MB=$A4, 10MB=$E4
+	wire [7:0] configRAMSize = 8'hE4; // 10MB: 8MB SIMM + 2MB board
 				  
 	// Serial Ports
 	wire serialOut;

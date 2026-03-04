@@ -4,21 +4,13 @@
 // Mapped at $F26000-$F27FFF in CPU space (V8 internal 0x526000)
 // Two access modes:
 //   - Native mode (offset < 0x100): Direct register access
-//   - VIA-compat mode (offset >= 0x100): offset >> 9 gives register 0-15
+//   - VIA-compat mode (offset >= 0x100): Aliases native Group 0 registers
 //
-// Native mode registers:
-//   0x00: Port B output
-//   0x01: RAM Config (read-only, from v8 config callbacks)
-//   0x02: Slot/VBlank interrupt status (active low)
-//   0x03: IFR (interrupt flag register)
-//   0x10: Video config (monitor ID in bits 5:3)
-//   0x12: Slot IER (interrupt enable)
-//   0x13: IER (legacy VIA style)
+// Native mode decodes only addr[4] (group) and addr[1:0] (register):
+//   Group 0 (addr[4]=0): Port B, RAM Config, Slot Status, IFR
+//   Group 1 (addr[4]=1): Video Config, (unused), Slot IER, IER
 //
-// VIA-compat mode (offset >> 9):
-//   1: Port A
-//   13: IFR
-//   14: IER
+// VIA-compat mode (offset >= 0x100) decodes addr[1:0] to access Group 0.
 
 module pseudovia(
     input clk_sys,
@@ -38,22 +30,21 @@ module pseudovia(
     output reg irq_out,
 
     // Config from top level
-    input [1:0] ram_config,  // 0=128K, 1=512K, 2=1MB, 3=4MB
+    input [7:0] ram_config,  // V8 RAM config byte (MAME encoding)
     input [3:0] monitor_id,  // Monitor ID for video config
 
     // Video config output (set by ROM, bits 2:0 = bpp mode)
     output reg [7:0] video_config
 );
 
-// Internal registers (256 bytes for native mode)
-reg [7:0] regs [0:255];
-
-// VIA-style IER and IFR (for VIA-compat mode access)
-reg [7:0] ier;
-reg [7:0] ifr;
-
-// Port B data
+// Native registers (8 total, 2 groups of 4)
+// Group 0: port_b, ram_cfg, slot_status, ifr
+// Group 1: video_cfg, (unused), slot_ier, ier
 reg [7:0] port_b;
+reg [7:0] ram_cfg;      // Writable RAM config register
+reg [7:0] ifr;          // Interrupt flag register
+reg [7:0] slot_ier;     // Slot interrupt enable register
+reg [7:0] ier;          // Main interrupt enable register
 
 // Slot interrupt status - active LOW
 // Bit 6: VBlank (active low = VBlank is happening)
@@ -63,199 +54,192 @@ reg [7:0] port_b;
 wire [7:0] slot_status = {1'b0, ~vblank_irq, ~slot_irq, ~asc_irq, 3'b111, 1'b1};
 
 // IRQ recalculation
-wire [7:0] slot_irqs = (~regs[2]) & 8'h78;  // Check bits 3-6 (slots + vblank)
-wire [7:0] slot_irqs_masked = slot_irqs & (regs[8'h12] & 8'h78);
+wire [7:0] slot_irqs = (~slot_status) & 8'h78;  // Check bits 3-6 (slots + vblank)
+wire [7:0] slot_irqs_masked = slot_irqs & (slot_ier & 8'h78);
 wire any_slot_irq = |slot_irqs_masked;
 
-wire [7:0] active_ifr = regs[3] & ier & 8'h1B;
+wire [7:0] active_ifr = ifr & ier & 8'h1B;
 wire irq_pending = |active_ifr;
 
 // Debug counter
-integer pvia_access_count = 0;
 integer pvia_reg10_reads = 0;
+
+// Register decode: {addr[4], addr[1:0]} for native mode
+wire [2:0] reg_sel = {addr[4], addr[1:0]};
+
+// VIA-compat mode uses addr[1:0] to alias Group 0
+wire is_native = (addr[12:8] == 5'b00000);
+wire [1:0] compat_reg = addr[1:0];
 
 always @(posedge clk_sys) begin
     if (reset) begin
-        ier <= 8'h00;
-        ifr <= 8'h00;
         port_b <= 8'h00;
+        ram_cfg <= 8'h00;
+        ifr <= 8'h00;
+        slot_ier <= 8'h00;
+        ier <= 8'h00;
         irq_out <= 1'b0;
         video_config <= 8'h02;  // Default to 4bpp mode
-        // Initialize regs
-        regs[2] <= 8'h7F;  // All slot IRQs inactive (high = no IRQ)
-        regs[3] <= 8'h00;
-        regs[8'h12] <= 8'h00;
-        regs[8'h13] <= 8'h00;
     end else begin
-        // Update slot/vblank status (active low)
-        regs[2] <= slot_status;
-
         // Update slot IRQ summary in IFR (bit 1 = any slot)
         if (any_slot_irq)
-            regs[3][1] <= 1'b1;
+            ifr[1] <= 1'b1;
         else
-            regs[3][1] <= 1'b0;
+            ifr[1] <= 1'b0;
 
         // Update IRQ output
         if (irq_pending) begin
-            regs[3][7] <= 1'b1;
-            ifr <= active_ifr | 8'h80;
+            ifr[7] <= 1'b1;
             irq_out <= 1'b1;
         end else begin
-            regs[3][7] <= 1'b0;
-            ifr <= 8'h00;
+            ifr[7] <= 1'b0;
             irq_out <= 1'b0;
         end
 
         if (req) begin
-// PVIA access logging disabled - too verbose
-            if (addr[12:8] == 5'b00000) begin
-                // Native mode: offset 0x00-0xFF
+            if (is_native) begin
+                // Native mode: decode {addr[4], addr[1:0]}
                 if (we) begin
-                    case (addr[7:0])
-                        8'h00: begin
-                            port_b <= data_in;  // Port B output
-                            $display("PVIA: WRITE Reg 0 (Port B) = %02x @%0t", data_in, $time);
+                    case (reg_sel)
+                        3'b000: begin  // $00: Port B
+                            port_b <= data_in;
+                            $display("PVIA: WRITE Port B = %02x @%0t", data_in, $time);
                         end
 
-                        8'h01: ;  // Config - read only
+                        3'b001: begin  // $01: RAM Config (writable per MAME)
+                            ram_cfg <= data_in;
+                            $display("PVIA: WRITE RAM Config = %02x @%0t", data_in, $time);
+                        end
 
-                        8'h02: begin
+                        3'b010: begin  // $02: Slot Status
                             // Write 1 to bit 6 to clear VBlank flag
-                            regs[2] <= regs[2] | (data_in & 8'h40);
-                            $display("PVIA: WRITE Reg 2 (Slot Status) = %02x @%0t", data_in, $time);
+                            $display("PVIA: WRITE Slot Status = %02x @%0t", data_in, $time);
                         end
 
-                        8'h03: begin
-                            // IFR write - bit 7 controls set/clear
+                        3'b011: begin  // $03: IFR
                             if (data_in[7])
-                                regs[3] <= regs[3] | (data_in & 8'h7F);
+                                ifr <= ifr | (data_in & 8'h7F);
                             else
-                                regs[3] <= regs[3] & ~(data_in & 8'h7F);
-                            $display("PVIA: WRITE Reg 3 (IFR) = %02x @%0t", data_in, $time);
+                                ifr <= ifr & ~(data_in & 8'h7F);
+                            $display("PVIA: WRITE IFR = %02x @%0t", data_in, $time);
                         end
 
-                        8'h10: begin
-                            regs[8'h10] <= data_in;
+                        3'b100: begin  // $10: Video Config
                             video_config <= data_in;
-                            $display("PVIA: Video config WRITE = %02x (bpp mode = %d) @%0t",
+                            $display("PVIA: WRITE Video Config = %02x (bpp mode = %d) @%0t",
                                      data_in, data_in[2:0], $time);
                         end
 
-                        8'h12: begin
-                            // Slot IER - bit 7 controls set/clear
+                        3'b101: ;  // $11: unused
+
+                        3'b110: begin  // $12: Slot IER
                             if (data_in[7])
-                                regs[8'h12] <= regs[8'h12] | (data_in & 8'h7F);
+                                slot_ier <= slot_ier | (data_in & 8'h7F);
                             else
-                                regs[8'h12] <= regs[8'h12] & ~(data_in & 8'h7F);
-                            $display("PVIA: WRITE Reg 12 (Slot IER) = %02x @%0t", data_in, $time);
+                                slot_ier <= slot_ier & ~(data_in & 8'h7F);
+                            $display("PVIA: WRITE Slot IER = %02x @%0t", data_in, $time);
                         end
 
-                        8'h13: begin
-                            // IER - bit 7 controls set/clear
+                        3'b111: begin  // $13: IER
                             if (data_in[7]) begin
-                                regs[8'h13] <= regs[8'h13] | (data_in & 8'h7F);
-                                // Special case from MAME
+                                ier <= ier | (data_in & 8'h7F);
                                 if (data_in == 8'hFF)
-                                    regs[8'h13] <= 8'h1F;
+                                    ier <= 8'h1F;
                             end else begin
-                                regs[8'h13] <= regs[8'h13] & ~(data_in & 8'h7F);
+                                ier <= ier & ~(data_in & 8'h7F);
                             end
-                            $display("PVIA: WRITE Reg 13 (IER) = %02x @%0t", data_in, $time);
-                        end
-
-                        default: begin
-                            regs[addr[7:0]] <= data_in;
-                            $display("PVIA: WRITE Reg %02x = %02x @%0t", addr[7:0], data_in, $time);
+                            $display("PVIA: WRITE IER = %02x @%0t", data_in, $time);
                         end
                     endcase
                 end else begin
                     // Read native mode
-                    case (addr[7:0])
-                        8'h00: begin
-                            data_out <= port_b;  // Port B
-                            $display("PVIA: READ Reg 0 (Port B) -> %02x @%0t", port_b, $time);
+                    case (reg_sel)
+                        3'b000: begin  // $00: Port B
+                            data_out <= port_b;
+                            $display("PVIA: READ Port B -> %02x @%0t", port_b, $time);
                         end
 
-                        8'h01: begin
-                            // RAM config register (from v8 config callbacks)
-                            // Return RAM size | 0x04 (bit 2 always set)
-                            case (ram_config)
-                                2'b00: data_out <= 8'h04;  // 128K
-                                2'b01: data_out <= 8'h05;  // 512K
-                                2'b10: data_out <= 8'h06;  // 1MB
-                                2'b11: data_out <= 8'h07;  // 4MB
-                            endcase
-                            $display("PVIA: READ Reg 1 (RAM Config) -> %02x @%0t", data_out, $time);
+                        3'b001: begin  // $01: RAM Config (OR bit 2 on read)
+                            data_out <= ram_cfg | 8'h04;
+                            $display("PVIA: READ RAM Config -> %02x @%0t", ram_cfg | 8'h04, $time);
                         end
 
-                        8'h02: begin 
-                            data_out <= regs[2];  // Slot/VBlank status
-                            $display("PVIA: READ Reg 2 (Slot Status) -> %02x @%0t", regs[2], $time);
-                        end
-                        8'h03: begin
-                            data_out <= regs[3];  // IFR
-                            $display("PVIA: READ Reg 3 (IFR) -> %02x @%0t", regs[3], $time);
+                        3'b010: begin  // $02: Slot Status
+                            data_out <= slot_status;
+                            $display("PVIA: READ Slot Status -> %02x @%0t", slot_status, $time);
                         end
 
-                        8'h10: begin
-                            // Video config read: preserve register value, overlay monitor ID in bits 5:3
-                            // MAME: data &= ~0x38; data |= (montype << 3);
-                            // Bits 5:3 = monitor_id (3 bits: 0-7), bits 2:0 = video mode
-                            data_out <= (regs[8'h10] & 8'hC7) | ((monitor_id[2:0]) << 3);
+                        3'b011: begin  // $03: IFR
+                            data_out <= ifr;
+                            $display("PVIA: READ IFR -> %02x @%0t", ifr, $time);
+                        end
+
+                        3'b100: begin  // $10: Video Config
+                            data_out <= (video_config & 8'hC7) | ((monitor_id[2:0]) << 3);
                             pvia_reg10_reads <= pvia_reg10_reads + 1;
-                            $display("PVIA: Video config READ[%0d] -> %02x @%0t",
-                                     pvia_reg10_reads, (regs[8'h10] & 8'hC7) | ((monitor_id[2:0]) << 3), $time);
+                            $display("PVIA: READ Video Config -> %02x @%0t",
+                                     (video_config & 8'hC7) | ((monitor_id[2:0]) << 3), $time);
                         end
 
-                        8'h12: begin
-                            data_out <= regs[8'h12] & 8'h7F;  // Slot IER, bit 7 always 0
-                            $display("PVIA: READ Reg 12 (Slot IER) -> %02x @%0t", regs[8'h12] & 8'h7F, $time);
-                        end
-                        8'h13: begin
-                            data_out <= regs[8'h13] & 8'h7F;  // IER, bit 7 always 0
-                            $display("PVIA: READ Reg 13 (IER) -> %02x @%0t", regs[8'h13] & 8'h7F, $time);
+                        3'b101: begin  // $11: unused
+                            data_out <= 8'h00;
                         end
 
-                        default: begin
-                             data_out <= regs[addr[7:0]];
-                             $display("PVIA: READ Reg %02x -> %02x @%0t", addr[7:0], regs[addr[7:0]], $time);
+                        3'b110: begin  // $12: Slot IER
+                            data_out <= slot_ier & 8'h7F;
+                            $display("PVIA: READ Slot IER -> %02x @%0t", slot_ier & 8'h7F, $time);
+                        end
+
+                        3'b111: begin  // $13: IER
+                            data_out <= ier & 8'h7F;
+                            $display("PVIA: READ IER -> %02x @%0t", ier & 8'h7F, $time);
                         end
                     endcase
                 end
             end else begin
                 // VIA-compat mode: offset >= 0x100
-                // Register = offset >> 9 (bits 12:9)
-                case (addr[12:9])
-                    4'd1: begin  // Port A
-                        if (we)
-                            ; // Port A output - could connect to handler
-                        else
-                            data_out <= 8'hD5;  // Default Port A read value (from MAME)
-                    end
-
-                    4'd13: begin  // IFR
-                        if (we) begin
-                            if (data_in[7])
-                                ifr <= 8'h7F;  // Writing 0x80+ clears all
-                        end else begin
-                            data_out <= ifr;
+                // Aliases Group 0 native registers via addr[1:0]
+                if (we) begin
+                    case (compat_reg)
+                        2'b00: begin  // Port B
+                            port_b <= data_in;
+                            $display("PVIA COMPAT: WRITE Port B = %02x @%0t", data_in, $time);
                         end
-                    end
-
-                    4'd14: begin  // IER
-                        if (we) begin
+                        2'b01: begin  // RAM Config
+                            ram_cfg <= data_in;
+                            $display("PVIA COMPAT: WRITE RAM Config = %02x @%0t", data_in, $time);
+                        end
+                        2'b10: begin  // Slot Status
+                            $display("PVIA COMPAT: WRITE Slot Status = %02x @%0t", data_in, $time);
+                        end
+                        2'b11: begin  // IFR
                             if (data_in[7])
-                                ier <= ier | (data_in & 8'h7F);
+                                ifr <= ifr | (data_in & 8'h7F);
                             else
-                                ier <= ier & ~(data_in & 8'h7F);
-                        end else begin
-                            data_out <= ier;
+                                ifr <= ifr & ~(data_in & 8'h7F);
+                            $display("PVIA COMPAT: WRITE IFR = %02x @%0t", data_in, $time);
                         end
-                    end
-
-                    default: data_out <= 8'h00;
-                endcase
+                    endcase
+                end else begin
+                    case (compat_reg)
+                        2'b00: begin
+                            data_out <= port_b;
+                            $display("PVIA COMPAT: READ Port B -> %02x @%0t", port_b, $time);
+                        end
+                        2'b01: begin
+                            data_out <= ram_cfg | 8'h04;
+                            $display("PVIA COMPAT: READ RAM Config -> %02x @%0t", ram_cfg | 8'h04, $time);
+                        end
+                        2'b10: begin
+                            data_out <= slot_status;
+                            $display("PVIA COMPAT: READ Slot Status -> %02x @%0t", slot_status, $time);
+                        end
+                        2'b11: begin
+                            data_out <= ifr;
+                            $display("PVIA COMPAT: READ IFR -> %02x @%0t", ifr, $time);
+                        end
+                    endcase
+                end
             end
         end
     end
