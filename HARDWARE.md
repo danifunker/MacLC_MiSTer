@@ -92,7 +92,7 @@ to a real MC68020. This may cause timing-sensitive software to behave differentl
 | $A00000-$A7FFFF | ROM (512 KB) | YES | Checksum $350EACF0 confirmed |
 | $F00000-$F01FFF | VIA1 | YES | 512-byte stride, upper byte of data bus |
 | $F04000-$F05FFF | SCC | YES | 2-byte register stride, both channels respond |
-| $F06000-$F07FFF | SCSI DRQ Window 1 | **BUS ERROR** | Not accessible when SCSI idle! |
+| $F06000-$F07FFF | SCSI DRQ Window 1 | **BUS ERROR (2x)** | Confirmed in two sessions - not accessible when SCSI idle |
 | $F10000-$F11FFF | SCSI (NCR5380) | YES | 8-byte stride registers |
 | $F12000-$F13FFF | SCSI DRQ Window 2 | YES | Returns $0E when idle |
 | $F14000-$F15FFF | ASC | YES | FIFO=$80, Version=$E8 at +$800 |
@@ -116,22 +116,32 @@ Full analysis in `MACSBUG_RESULTS.md`. Key findings:
    Our core decodes full addr[7:0] with 256 unique registers. Software writing to
    "mirrored" addresses may behave differently.
 
-3. **SCSI DRQ Window at $F06000 = BUS ERROR** - Our core maps this unconditionally.
-   Real hardware only allows access during active SCSI DMA transfers.
+3. **SCSI DRQ Window at $F06000 = BUS ERROR** - Confirmed in two sessions. Our core
+   maps this unconditionally. Real hardware only allows access during active SCSI DMA.
 
-4. **ASC FIFO buffer** - Real hardware reads $80 (silence) in the 2x1KB FIFO area.
+4. **PseudoVIA VIA-compat mode** - Real V8 does NOT have a separate VIA-compat register
+   bank. All VIA-compat addresses ($F26100-$F27FFF) return native Group 0 register data.
+   Our core implements a separate register space (Port A=$D5, independent IFR/IER) that
+   doesn't match real hardware. Confirmed: $F26200, $F27A00, $F27C00 all return Group 0.
+
+5. **ASC FIFO buffer** - Real hardware reads $80 (silence) in the 2x1KB FIFO area.
    Our stub has no FIFO memory at all.
 
-5. **SWIM vs IWM** - Real hardware shows SWIM-specific alternating $72/$3D byte pattern.
+6. **ASC registers** - Real hardware has Mode=$01, Volume=$60, FIFO IRQ=$03.
+   Our stub may not track these correctly.
+
+7. **SWIM vs IWM** - Real hardware shows SWIM-specific alternating $72/$3D byte pattern.
    Our core implements IWM only.
 
 ### Values Confirmed Correct
 
 - ASC Version register = $E8 (our stub returns this correctly)
 - PseudoVIA Slot/VBlank status format matches our implementation
+- PseudoVIA 4-byte register mirroring confirmed across two sessions
+- PseudoVIA Port B is dynamic (bit 3 = Egret input toggles live: $4F/$47)
 - ROM checksum $350EACF0 at $A00000 confirmed
 - SCC idle state ($54/$44 for Ch B/A RR0) is normal
-- SCSI bus idle (all zeros) is normal
+- SCSI bus idle (all zeros, Reg 1 Initiator Command = $00) is normal
 - VRAM mapped at $F40000 confirmed
 - All memory map boundaries confirmed (bus errors at expected locations)
 

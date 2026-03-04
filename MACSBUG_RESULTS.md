@@ -97,7 +97,7 @@ Ch B has Sync/Hunt set (bit 4), Ch A does not. This is a valid idle configuratio
 | Addr | Reg | Name | Value | Notes |
 |------|-----|------|-------|-------|
 | $F10000 | 0 | Current SCSI Data | $00 | No data on bus |
-| $F10008 | 1 | Initiator Command | (missed - typo) | |
+| $F10008 | 1 | Initiator Command | **$00** | Idle (confirmed in 2nd session) |
 | $F10010 | 2 | Mode | $00 | |
 | $F10018 | 3 | Target Command | $00 | |
 | $F10020 | 4 | Bus Status | $00 | Bus idle |
@@ -169,6 +169,7 @@ The $80 value represents silence (midpoint of unsigned 8-bit audio).
 | $F16600 | 6 (LSTRB off) | $72/$3D | |
 | $F16700 | 7 (LSTRB on) | $72/$3D | |
 | $F16800 | 8 (ENABLE off) | $FF | |
+| $F16900 | 9 (ENABLE on) | $FF | Confirmed in 2nd session |
 | $F16A00 | 10 (SELECT off) | $72/$3D | |
 | $F16B00 | 11 (SELECT on) | $72/$3D | |
 | $F16C00 | 12 (Q6 off) | $FF | |
@@ -253,13 +254,23 @@ group, plus **bit A4** to select between two groups. Registers mirror every 4 by
 
 ### VIA-Compatible Mode
 
-$F27A00 (IFR, reg 13) and $F27C00 (IER, reg 14) both return the same `4FE63F92`
-pattern as native Group 0. This may indicate:
-1. VIA-compat mode reads alias to native Group 0 registers, OR
-2. The address decoding for VIA-compat mode differs from our implementation
+All VIA-compat mode reads return native Group 0 register data:
 
-**Note:** The $F26200 (Port A, VIA-compat reg 1) read was mistyped as `d26200` and
-hit RAM instead. Needs re-verification with `dm F26200 2`.
+| Addr | VIA-compat Reg | Expected | Actual | Notes |
+|------|---------------|----------|--------|-------|
+| $F26200 | 1 (Port A) | Port A data | **$47 E6 3F 92** | Returns native Group 0 pattern |
+| $F27A00 | 13 (IFR) | IFR value | **$4F E6 3F 92** | Returns native Group 0 pattern |
+| $F27C00 | 14 (IER) | IER value | **$4F E6 3F 92** | Returns native Group 0 pattern |
+
+**IMPORTANT FINDING:** VIA-compat mode does NOT provide a separate register bank on real
+V8 hardware. All three tested VIA-compat registers return the same native Group 0 data
+(Port B, RAM Config, Slot Status, IFR). The $47 vs $4F difference in Port B between
+sessions is expected - bit 3 is a live Egret input that toggles dynamically.
+
+Our `pseudovia.sv` implements VIA-compat mode as a separate register space (Port A returns
+$D5, IFR/IER have independent storage). This does not match real hardware. The VIA-compat
+mode address range ($F26100-$F27FFF) likely just aliases to the native registers, with the
+upper address bits being ignored.
 
 ### PseudoVIA Analysis
 
@@ -299,6 +310,11 @@ mirrors with only ~6 decoded address bits (A4, A1, A0 minimum). This means our c
 accepts writes to "registers" $04-$0F as separate storage, but real hardware treats them
 as mirrors of $00-$03. This could cause bugs if software writes to mirrored addresses
 expecting them to alias.
+
+**Port B is dynamic:** Confirmed across two sessions - Port B value changed from $4F to
+$47 (bit 3 toggled). Bit 3 is the Egret input line and changes in real-time. The 4-byte
+mirroring pattern reflects this: the mirror at offset $04 shows the same live value as
+offset $00.
 
 ---
 
@@ -363,22 +379,20 @@ No bus errors at any RAM boundary, confirming full 10MB contiguous RAM.
 6. **SWIM vs IWM:** Real hardware shows SWIM-specific behavior ($72/$3D alternating
    pattern). Our core only implements IWM.
 
-### Minor / Needs Re-verification
+### Minor / Still Outstanding
 
-7. **VIA-compat mode PseudoVIA:** Returns Group 0 pattern at IFR/IER addresses.
-   Need to re-test with correct addresses ($F26200, $F27A00, $F27C00).
+7. **VIA-compat mode PseudoVIA:** Now confirmed - all VIA-compat reads return native
+   Group 0 data. Our core's separate VIA-compat register bank is wrong.
 
-8. **VIA1 Reg 11 (ACR):** Missing from dump. Need: `dm F01600 2`
+8. **VIA1 Reg 4 (T1C-L):** Still missing. Need: `dm F00800 2` (low priority - timer counter)
 
-9. **SCSI Reg 1:** Typo in command. Need: `dm F10008 2`
+9. **VIA1 Reg 11 (ACR):** Still missing. Need: `dm F01600 2` (useful - shows timer/SR modes)
 
-## Commands to Re-run
+## Remaining Commands
 
-These commands had typos and should be re-run on the real LC:
+These two VIA1 registers are still unread (low priority):
 
 ```
-dm F00800 2       ; VIA1 Reg 4 - Timer 1 Counter Low (was mistyped as F0000)
-dm F01600 2       ; VIA1 Reg 11 - ACR (was missing entirely)
-dm F10008 2       ; SCSI Reg 1 - Initiator Command (was mistyped as f100008)
-dm F26200 2       ; PseudoVIA VIA-compat Port A (was mistyped as d26200)
+dm F00800 2       ; VIA1 Reg 4 - Timer 1 Counter Low
+dm F01600 2       ; VIA1 Reg 11 - ACR (Auxiliary Control Register)
 ```
