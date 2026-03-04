@@ -27,7 +27,7 @@ module maclc_v8_video(
     input [23:0] palette_data
 );
 
-localparam [21:0] VRAM_BASE = 22'h340000;
+localparam [21:0] VRAM_BASE = 22'h0;  // Outputs byte offset; SDRAM base added in addrController
 
 reg [10:0] h_total, h_active, h_sync_start, h_sync_end;
 reg [9:0] v_total, v_active, v_sync_start, v_sync_end;

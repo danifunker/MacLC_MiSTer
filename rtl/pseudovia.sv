@@ -34,8 +34,14 @@ module pseudovia(
     input [3:0] monitor_id,  // Monitor ID for video config
 
     // Video config output (set by ROM, bits 2:0 = bpp mode)
-    output reg [7:0] video_config
+    output reg [7:0] video_config,
+
+    // RAM config output (active value, writable by ROM)
+    output [7:0] ram_config_out
 );
+
+// RAM config output: expose current value for address controller
+assign ram_config_out = ram_cfg;
 
 // Native registers (8 total, 2 groups of 4)
 // Group 0: port_b, ram_cfg, slot_status, ifr
@@ -74,7 +80,7 @@ wire [1:0] compat_reg = addr[1:0];
 always @(posedge clk_sys) begin
     if (reset) begin
         port_b <= 8'h00;
-        ram_cfg <= 8'h00;
+        ram_cfg <= ram_config;  // Init from hardware config (MAME: ram_size(0xC0))
         ifr <= 8'h00;
         slot_ier <= 8'h00;
         ier <= 8'h00;

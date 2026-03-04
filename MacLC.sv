@@ -335,6 +335,7 @@ module emu
 	//   Bit 2 = Always set on read (handled in pseudovia)
 	// Mac LC (2MB soldered): 2MB=$24, 4MB=$64, 6MB=$A4, 10MB=$E4
 	wire [7:0] configRAMSize = 8'hE4; // 10MB: 8MB SIMM + 2MB board
+	wire [7:0] pvia_ram_config_out;   // Active RAM config from pseudovia
 				  
 	// Serial Ports
 	wire serialOut;
@@ -383,7 +384,7 @@ module emu
 	wire videoBusControl;
 	wire dioBusControl;
 	wire cpuBusControl;
-	wire [21:0] memoryAddr;
+	wire [22:0] memoryAddr;  // 23-bit SDRAM word address from address controller
 	wire [15:0] memoryDataOut;
 	wire memoryLatch;
 	// Video latch: only pulse when memoryLatch AND in video bus cycle
@@ -545,7 +546,7 @@ module emu
 		._cpuRW(_cpuRW),
 		._cpuAS(_cpuAS),
 		.turbo(status_turbo),
-		.configRAMSize(configRAMSize),
+		.ram_config(pvia_ram_config_out),
 		.memoryAddr(memoryAddr),
 		.memoryLatch(memoryLatch),
 		._memoryUDS(_memoryUDS),
@@ -646,7 +647,8 @@ module emu
 		.irq_out(pseudovia_irq),
 		.ram_config(configRAMSize),
 		.monitor_id(v8_monitor_id),
-		.video_config(pvia_video_config)
+		.video_config(pvia_video_config),
+		.ram_config_out(pvia_ram_config_out)
 	);
 
 	maclc_v8_video v8_video(
@@ -654,8 +656,7 @@ module emu
 		.clk8_en_p(clk8_en_p),
 		.reset(~n_reset),
 		
-		// VRAM Interface
-		// Addr is offset from VRAM base (0x340000 in word addr space)
+		// VRAM Interface (byte offset from VRAM start, translated in addrController)
 		.video_addr(v8_video_addr),
 		.video_data_in(sdram_do), // Data from SDRAM (valid when video_latch=1)
 		.video_latch(v8_video_latch),
@@ -863,8 +864,11 @@ module emu
 		end
 	end
 
-	// disk images are being stored right after os rom at word offset 0x80000 and 0x100000 
-	reg [20:0] dio_a;
+	// Download addresses (SDRAM word addresses):
+	//   ROM:      $500000 + offset
+	//   Floppy 1: $600000 + offset
+	//   Floppy 2: $700000 + offset
+	reg [22:0] dio_a;
 	reg [15:0] dio_data;
 	reg        dio_write;
 
@@ -872,10 +876,11 @@ module emu
 		reg old_cyc = 0;
 		if(ioctl_write) begin
 			dio_data <= {ioctl_data[7:0], ioctl_data[15:8]};
-			// Mac LC: ROM goes to SDRAM offset 0x40000 (bit 18 high)
-			// Floppy images at indexes 1,2 go to higher addresses
-			dio_a <= dio_index[1:0] ? {dio_index[1:0], dio_addr[18:0]} :
-			                          {3'b001, dio_addr[17:0]};
+			case (dio_index[1:0])
+				2'b01:   dio_a <= 23'h600000 + {3'b0, dio_addr[19:0]};  // Floppy 1
+				2'b10:   dio_a <= 23'h700000 + {3'b0, dio_addr[19:0]};  // Floppy 2
+				default: dio_a <= {5'b01010, dio_addr[17:0]};            // ROM at $500000
+			endcase
 			ioctl_wait <= 1;
 		end
 
@@ -889,12 +894,11 @@ module emu
 	wire download_cycle = dio_download && dioBusControl;
 	////////////////////////// SDRAM /////////////////////////////////
 
-	// SDRAM Address mapping for Mac LC:
-	// ROM: SDRAM 0x100000 + offset (bit 18 selects LC ROM location)
-	// RAM: SDRAM 0x000000 + offset
-	wire [24:0] sdram_addr = download_cycle ? {4'b0001, dio_a[20:0] } :
-	                         ~_romOE        ? {4'b0001, 2'b00, 1'b1, memoryAddr[18:1]} :
-	                                          {3'b000, (dskReadAckInt || dskReadAckExt), memoryAddr[21:1]};
+	// SDRAM Address mapping for Mac LC (V8-style):
+	// memoryAddr[22:0] is already the SDRAM word address from addrController
+	// Download path uses dio_a[22:0] directly
+	wire [24:0] sdram_addr = download_cycle ? {2'b00, dio_a[22:0]} :
+	                                          {2'b00, memoryAddr[22:0]};
 	wire [15:0] sdram_din  = download_cycle ? dio_data              : memoryDataOut;
 	wire  [1:0] sdram_ds   = download_cycle ? 2'b11                 : { !_memoryUDS, !_memoryLDS };
 	wire        sdram_we   = download_cycle ?

@@ -167,6 +167,7 @@ module emu
 
 	// Mac LC memory configuration
 	wire [7:0] configRAMSize = 8'hE4; // 10MB: 8MB SIMM + 2MB board
+	wire [7:0] pvia_ram_config_out;   // Active RAM config from pseudovia
 
 	// Serial Ports (loopback for sim)
 	wire serialOut;
@@ -206,7 +207,7 @@ module emu
 	wire videoBusControl;
 	wire dioBusControl;
 	wire cpuBusControl;
-	wire [21:0] memoryAddr;
+	wire [22:0] memoryAddr;  // 23-bit SDRAM word address from address controller
 	wire [15:0] memoryDataOut;
 	wire memoryLatch;
 	// Video latch: only pulse when memoryLatch AND in video bus cycle
@@ -395,7 +396,7 @@ module emu
 		._cpuRW(_cpuRW),
 		._cpuAS(_cpuAS),
 		.turbo(status_turbo),
-		.configRAMSize(configRAMSize),
+		.ram_config(pvia_ram_config_out),
 		.memoryAddr(memoryAddr),
 		.memoryLatch(memoryLatch),
 		._memoryUDS(_memoryUDS),
@@ -482,7 +483,8 @@ module emu
 		.irq_out(pseudovia_irq),
 		.ram_config(configRAMSize),
 		.monitor_id(v8_monitor_id),
-		.video_config(pvia_video_config)
+		.video_config(pvia_video_config),
+		.ram_config_out(pvia_ram_config_out)
 	);
 
 	asc asc_inst(
@@ -641,7 +643,11 @@ module emu
 		end
 	end
 
-	reg [20:0] dio_a;
+	// Download addresses (SDRAM word addresses):
+	//   ROM:      $500000 + offset
+	//   Floppy 1: $600000 + offset
+	//   Floppy 2: $700000 + offset
+	reg [22:0] dio_a;
 	reg [15:0] dio_data;
 	reg        dio_write;
 	reg        dio_old_cyc = 0;
@@ -650,10 +656,11 @@ module emu
 		if(ioctl_wr) begin
 			// Don't byte-swap for sim_ram (original swaps for SDRAM byte ordering)
 			dio_data <= ioctl_dout;
-			// Mac LC ROM at offset 0x40000 (512KB)
-			// Floppy disk images at higher offsets
-			dio_a <= dio_index[1:0] ? {dio_index[1:0], dio_addr[18:0]} :
-				{3'b001, dio_addr[17:0]};  // LC ROM at offset 0x40000
+			case (dio_index[1:0])
+				2'b01:   dio_a <= 23'h600000 + {3'b0, dio_addr[19:0]};  // Floppy 1
+				2'b10:   dio_a <= 23'h700000 + {3'b0, dio_addr[19:0]};  // Floppy 2
+				default: dio_a <= {5'b01010, dio_addr[17:0]};            // ROM at $500000
+			endcase
 			ioctl_wait <= 1;
 		end
 
@@ -664,34 +671,19 @@ module emu
 
 	////////////////////////// RAM /////////////////////////////////
 
-	// Original download_cycle used dioBusControl handshake (for SDRAM timing)
-	// wire download_cycle = dio_download && dioBusControl;
-
 	// For simulation with synchronous RAM, use simplified direct download path
-	// This bypasses the multi-cycle handshake latency from dioBusControl
 	wire download_cycle = dio_download && ioctl_wr;
 
-	// Address mapping for sim_ram:
-	// sim_ram uses addr[21:0] for a 4M word (8MB) array
-	//
-	// For RAM path: {3'b000, dskReadAck, memoryAddr[21:1]}
-	//   - This gives addr[21:0] = {dskReadAck, memoryAddr[21:1]}
-	//   - Normal RAM (dskReadAck=0): uses 0x000000 - 0x1FFFFF (4MB = 2M words)
-	//
-	// For ROM path: Need bit 21 = 1 to select ROM area in sim_ram (8MB capacity)
-	//   - dio_addr is byte address from ioctl.
-	//   - For index 0 (ROM), dio_a_comb should map to 0x200000 + 0x40000 (word offset).
-	
-	// Mac LC ROM at offset 0x40000 (512KB)
-	// Floppy disk images at higher offsets
-	wire [20:0] dio_a_raw = ioctl_addr[20:1];
-	wire [20:0] dio_a_comb = ioctl_index[1:0] ? {ioctl_index[1:0], dio_a_raw[18:0]} :
-	                         {3'b001, dio_a_raw[17:0]};  // LC ROM at offset 0x40000
+	// SDRAM word address mapping:
+	// memoryAddr[22:0] is already the SDRAM word address from addrController
+	// Download path uses dio_a_comb[22:0] directly
+	wire [22:0] dio_a_comb;
+	assign dio_a_comb = (ioctl_index[1:0] == 2'b01) ? 23'h600000 + {3'b0, ioctl_addr[20:1]} :  // Floppy 1
+	                    (ioctl_index[1:0] == 2'b10) ? 23'h700000 + {3'b0, ioctl_addr[20:1]} :  // Floppy 2
+	                    {5'b01010, ioctl_addr[18:1]};                                            // ROM at $500000
 
-	wire [24:0] ram_addr = download_cycle ? {3'b000, 1'b1, dio_a_comb[20:0] } :  // ROM at word 0x200000 + dio_a_comb
-						   ~_romOE        ?
-						   {3'b000, 1'b1, 3'b001, memoryAddr[18:1]} :  // ROM reads at word 0x200000 + 0x40000
-										  {3'b000, (dskReadAckInt || dskReadAckExt), memoryAddr[21:1]};  // RAM at word 0x000000+
+	wire [24:0] ram_addr = download_cycle ? {2'b00, dio_a_comb[22:0]} :
+	                                        {2'b00, memoryAddr[22:0]};
 
 
 
