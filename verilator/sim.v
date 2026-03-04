@@ -166,7 +166,7 @@ module emu
 	assign AUDIO_R = {audio[10:0], 5'b00000};
 
 	// Mac LC memory configuration
-	wire [1:0] configRAMSize = 2'b11; // 4MB
+	wire [7:0] configRAMSize = 8'hE4; // 10MB: 8MB SIMM + 2MB board
 
 	// Serial Ports (loopback for sim)
 	wire serialOut;
