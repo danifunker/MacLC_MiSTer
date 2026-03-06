@@ -504,18 +504,12 @@ wire [7:0] pc_in = {pc_latch[7:4], (pc_ddr[3] ? pc_latch[3] : 1'b0), pc_latch[2:
 // IMPORTANT: Hold 68020 in reset until firmware explicitly configures Port C.
 // This prevents early release during the ~20 cycles before DDR is set up.
 reg [19:0] reset_release_counter;  // Keep for debug logging
-reg pc_configured;  // Set when firmware writes Port C DDR or latch
 
 always @(posedge clk) begin
     if (reset) begin
         reset_release_counter <= 0;
-        pc_configured <= 1'b0;
     end else if (cen) begin
         reset_release_counter <= reset_release_counter + 1;
-        // Mark Port C as configured when firmware writes to DDR or latch
-        if (port_cs && !cpu_wr && (cpu_addr[4:0] == 5'h02 || cpu_addr[4:0] == 5'h06)) begin
-            pc_configured <= 1'b1;
-        end
     end
 end
 
@@ -523,8 +517,10 @@ always @(*) begin
     // Match MAME: reset controlled by Egret firmware via Port C bit 3
     // pc_out[3]=1 -> hold 68020 in reset
     // pc_out[3]=0 -> release 68020 from reset
-    // Hold in reset until firmware configures Port C (prevents early release)
-    reset_680x0 = pc_configured ? pc_out[3] : 1'b1;
+    // Hold in reset until port test is done AND firmware has configured PC bit 3 as output.
+    // This prevents early release during port test (which writes to PC latch/DDR but
+    // leaves DDR[3]=0, causing pc_out[3]=0 and spurious reset release at cycle ~21).
+    reset_680x0 = (port_test_done && pc_ddr[3]) ? pc_out[3] : 1'b1;
     nmi_680x0 = 1'b0;
 end
 
