@@ -131,9 +131,9 @@ module emu
 			end
 			else if(rst_cnt) begin
 				rst_cnt <= rst_cnt - 1'd1;
-				// Debug: show countdown progress every 0x1000 cycles
-				if (rst_cnt[11:0] == 12'h000) begin
-					$display("SIM: rst_cnt=%04x n_reset=%b", rst_cnt, n_reset);
+				// Debug: show countdown at key points only
+				if (rst_cnt == 16'h0001) begin
+					$display("SIM: rst_cnt about to expire, n_reset will go high");
 				end
 			end
 			else begin
@@ -376,11 +376,7 @@ module emu
 	assign debug_opcode = last_fetch_opcode;
 	assign debug_fetch_valid = fetch_valid;
 
-	always @(posedge clk_sys) begin
-		if (n_reset && debug_pc == 32'h00A4639C && debug_fetch_valid) begin
-			$display("SIM: D3 LOAD at PC=A4639C! D0 (last data read) was %h", dataControllerDataOut);
-		end
-	end
+	// PC-specific debug removed - add back as needed for targeted debugging
 
 	addrController_top ac0
 	(

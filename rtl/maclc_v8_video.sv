@@ -96,17 +96,6 @@ always @(posedge clk_sys) begin
 end
 
 `ifdef SIMULATION
-reg vblank_prev;
-always @(posedge clk_sys) begin
-    if (vblank != vblank_prev) begin
-        $display("V8: VBLANK changed to %b (v_count=%d) @%0t", vblank, v_count, $time);
-        vblank_prev <= vblank;
-    end
-    if (v_count == 0 && h_count == 0) begin
-        $display("V8: Frame Start (v_count wrap) @%0t", $time);
-    end
-end
-
 reg [3:0] monitor_id_prev;
 always @(posedge clk_sys) begin
     if (monitor_id != monitor_id_prev) begin

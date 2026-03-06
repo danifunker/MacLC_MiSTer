@@ -9,7 +9,9 @@ module m68hc05_core (
     input  logic        clk,
     input  logic        cen,    // Clock enable (active high)
     input  logic        rst,
-    input  logic        irq,
+    input  logic        irq,        // External IRQ (active-low) -> vector $FFFA
+    input  logic        timer_irq,  // Timer interrupt (active-low) -> vector $FFF8
+    input  logic        onesec_irq, // One-second timer (active-low) -> vector $FFF6
     output logic [15:0] addr,
     output logic        wr,
     input  logic [7:0]  datain,
@@ -72,7 +74,10 @@ module m68hc05_core (
     
     // IRQ handling
     logic irq_d;
+    logic timer_irq_d;
+    logic onesec_irq_d;
     logic irqRequest;
+    logic [1:0] irq_source;  // 0=ext IRQ, 1=timer, 2=one-second
     
     // Trace support (for debugging)
     logic trace;
@@ -162,7 +167,10 @@ module m68hc05_core (
             dataMux <= outA;
             addrMux <= addrTM;
             irq_d   <= 1'b1;
+            timer_irq_d <= 1'b1;
+            onesec_irq_d <= 1'b1;
             irqRequest <= 1'b0;
+            irq_source <= 2'd0;
             mainFSM <= 4'h0;
             
             trace   <= 1'b0;
@@ -170,18 +178,40 @@ module m68hc05_core (
 
         end else if (cen) begin
             // Clock enabled - normal operation
-            // IRQ edge detection
+            // IRQ edge detection for all three sources
+            // Priority: one-second (highest) > timer > external IRQ (lowest)
             irq_d <= irq;
-            if ((irq == 1'b0) && (irq_d == 1'b1) && (flagI == 1'b0)) begin
-                irqRequest <= 1'b1;
-                `ifdef SIMULATION
-                $display("HC05: IRQ request set! PC=%04x flagI=%b", regPC, flagI);
-                `endif
+            timer_irq_d <= timer_irq;
+            onesec_irq_d <= onesec_irq;
+            if (flagI == 1'b0 && !irqRequest) begin
+                if ((onesec_irq == 1'b0) && (onesec_irq_d == 1'b1)) begin
+                    irqRequest <= 1'b1;
+                    irq_source <= 2'd2;
+                    `ifdef SIMULATION
+                    $display("HC05: ONE-SEC IRQ request! PC=%04x", regPC);
+                    `endif
+                end else if ((timer_irq == 1'b0) && (timer_irq_d == 1'b1)) begin
+                    irqRequest <= 1'b1;
+                    irq_source <= 2'd1;
+                    `ifdef SIMULATION
+                    $display("HC05: TIMER IRQ request! PC=%04x", regPC);
+                    `endif
+                end else if ((irq == 1'b0) && (irq_d == 1'b1)) begin
+                    irqRequest <= 1'b1;
+                    irq_source <= 2'd0;
+                    `ifdef SIMULATION
+                    $display("HC05: EXT IRQ request! PC=%04x", regPC);
+                    `endif
+                end
             end
             `ifdef SIMULATION
-            // Debug: Log when IRQ edge is seen but flagI blocks it
-            if ((irq == 1'b0) && (irq_d == 1'b1) && (flagI == 1'b1)) begin
-                $display("HC05: IRQ edge seen but BLOCKED (flagI=1) PC=%04x mainFSM=%d", regPC, mainFSM);
+            if (flagI == 1'b1) begin
+                if ((onesec_irq == 1'b0) && (onesec_irq_d == 1'b1))
+                    $display("HC05: ONE-SEC IRQ edge BLOCKED (flagI=1) PC=%04x", regPC);
+                if ((timer_irq == 1'b0) && (timer_irq_d == 1'b1))
+                    $display("HC05: TIMER IRQ edge BLOCKED (flagI=1) PC=%04x", regPC);
+                if ((irq == 1'b0) && (irq_d == 1'b1))
+                    $display("HC05: EXT IRQ edge BLOCKED (flagI=1) PC=%04x", regPC);
             end
             `endif
             
@@ -1383,7 +1413,7 @@ module m68hc05_core (
                             mainFSM <= 4'h2;
                         end
                         
-                        8'h83: begin  // SWI
+                        8'h83: begin  // SWI / IRQ entry
                             regSP <= regSP - 16'h0001;
                             dataMux <= outHelp;
                             flagI <= 1'b1;
@@ -1392,14 +1422,31 @@ module m68hc05_core (
                                 if (!irqRequest) begin
                                     temp <= 16'hFFFC;  // SWI vector
                                     `ifdef SIMULATION
-                                    $display("HC05: SWI at PC=%04x, flagI=1, vector=FFFC", regPC);
+                                    $display("HC05: SWI at PC=%04x, vector=FFFC", regPC);
                                     `endif
                                 end else begin
                                     irqRequest <= 1'b0;
-                                    temp <= 16'hFFFA;  // IRQ vector
-                                    `ifdef SIMULATION
-                                    $display("HC05: IRQ taken at PC=%04x, flagI=1, vector=FFFA", regPC);
-                                    `endif
+                                    // M68HC05E1 interrupt vectors by source
+                                    case (irq_source)
+                                        2'd2: begin
+                                            temp <= 16'hFFF6;  // One-second timer vector
+                                            `ifdef SIMULATION
+                                            $display("HC05: ONE-SEC IRQ taken at PC=%04x, vector=FFF6", regPC);
+                                            `endif
+                                        end
+                                        2'd1: begin
+                                            temp <= 16'hFFF8;  // Timer vector
+                                            `ifdef SIMULATION
+                                            $display("HC05: TIMER IRQ taken at PC=%04x, vector=FFF8", regPC);
+                                            `endif
+                                        end
+                                        default: begin
+                                            temp <= 16'hFFFA;  // External IRQ vector
+                                            `ifdef SIMULATION
+                                            $display("HC05: EXT IRQ taken at PC=%04x, vector=FFFA", regPC);
+                                            `endif
+                                        end
+                                    endcase
                                 end
                                 mainFSM <= 4'h8;
                             end else begin

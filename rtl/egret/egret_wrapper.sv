@@ -208,6 +208,54 @@ wire timer_irq_n = ~(timer_ctrl[7] & timer_ctrl[5]);
 wire [7:0] timer_counter = cycle_total[9:2];  // Divide by 4, take lower 8 bits
 
 // ============================================================================
+// One-second timer (M68HC05E1-specific)
+// ============================================================================
+// The M68HC05E1 has a dedicated one-second timer that:
+// 1. Generates an interrupt (vector $FFF6) -> ISR at $1E10 increments $CC
+// 2. Sets Port C bit 1 as a hardware flag (for polling by firmware)
+// Register $12 bit 4 enables the timer, bit 6 is cleared by ISR
+//
+// Real hardware: 32.768 kHz crystal / 32768 = 1 Hz
+// Our approximation: count cen ticks (4 MHz). Use shorter period for simulation.
+`ifdef SIMULATION
+localparam ONESEC_PERIOD = 22'd8192;    // ~2ms at 4 MHz (fast for simulation)
+`else
+localparam ONESEC_PERIOD = 22'd4000000; // ~1 second at 4 MHz
+`endif
+
+reg [21:0] onesec_counter;
+reg        onesec_irq_flag;  // Sticky flag, generates interrupt edge
+wire       onesec_irq_n = ~onesec_irq_flag;
+
+always @(posedge clk) begin
+    if (reset) begin
+        onesec_counter <= 22'd0;
+        onesec_irq_flag <= 1'b0;
+    end else if (cen) begin
+        // Count when one-second timer is enabled (onesec_ctrl bit 4)
+        if (onesec_ctrl[4]) begin
+            if (onesec_counter >= ONESEC_PERIOD) begin
+                onesec_counter <= 22'd0;
+                onesec_irq_flag <= 1'b1;
+                `ifdef SIMULATION
+                $display("EGRET_ONESEC[%0d]: Timer fired! Setting PC1 and IRQ", cycle_count);
+                `endif
+            end else begin
+                onesec_counter <= onesec_counter + 22'd1;
+            end
+        end
+
+        // Clear IRQ flag when firmware clears bit 6 of onesec_ctrl ($12)
+        // The ISR does "BCLR 6,$12" as its last action before RTI
+        if (port_cs && !cpu_wr && cpu_addr[4:0] == 5'h12) begin
+            if (!(cpu_dout & 8'h40)) begin  // Writing 0 to bit 6
+                onesec_irq_flag <= 1'b0;
+            end
+        end
+    end
+end
+
+// ============================================================================
 // Port A - ADB and system control
 // ============================================================================
 // Bit 7 (O): ADB data line out
@@ -594,6 +642,16 @@ always @(posedge clk) begin
                 onesec_ctrl <= cpu_dout;
             end
         endcase
+    end else if (cen) begin
+        // One-second timer hardware: set Port C bit 1 when timer fires
+        // Per MAME m68hc05e1: m_portc_data |= 0x02 on one-second tick
+        // This flag persists until firmware clears it (via Port C write)
+        if (onesec_irq_flag && !pc_latch[1]) begin
+            pc_latch[1] <= 1'b1;
+            `ifdef SIMULATION
+            $display("EGRET_ONESEC[%0d]: Setting PC1 flag (Port C bit 1)", cycle_count);
+            `endif
+        end
     end
 end
 
@@ -734,12 +792,13 @@ end
 assign cpu_din = cpu_din_r;
 
 // ============================================================================
-// IRQ generation - timer only (firmware polls TIP, doesn't use IRQ for it)
+// IRQ generation - M68HC05E1 has three interrupt sources
 // ============================================================================
-// Note: The real Egret uses polling for TIP detection, not interrupts.
-// MAME logs show IRQs at regular intervals (timer) but CB1 toggling happens
-// in the main loop at PC=0x1246, not in an interrupt handler.
-wire combined_irq_n = timer_irq_n;  // Only timer generates IRQ
+// Each source has its own vector in the CPU core:
+// - onesec_irq_n -> $FFF6 (one-second timer ISR)
+// - timer_irq_n  -> $FFF8 (timer/counter ISR)
+// - combined_irq_n -> $FFFA (external IRQ ISR)
+wire combined_irq_n = 1'b1;  // No external IRQ source currently
 
 // Track TIP for edge detection in debug/display only
 reg via_tip_prev;
@@ -759,7 +818,9 @@ m68hc05_core u_cpu (
     .clk(clk),
     .cen(cen),         // 4 MHz clock enable (32 MHz / 8)
     .rst(~reset),      // m68hc05_core uses active-low reset
-    .irq(combined_irq_n),   // Active-low IRQ, combined timer + TIP edge
+    .irq(combined_irq_n),     // External IRQ (active-low) -> $FFFA
+    .timer_irq(timer_irq_n),  // Timer interrupt (active-low) -> $FFF8
+    .onesec_irq(onesec_irq_n),// One-second timer (active-low) -> $FFF6
     .addr(cpu_addr),
     .wr(cpu_wr),
     .datain(cpu_din),

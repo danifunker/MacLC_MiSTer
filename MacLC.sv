@@ -699,13 +699,7 @@ module emu
 	end
 	*/
 
-	reg v8_vblank_prev;
-	always @(posedge clk_sys) begin
-		if (v8_vblank != v8_vblank_prev) begin
-			$display("DC: v8_vblank changed: %b @%0t", v8_vblank, $time);
-		end
-		v8_vblank_prev <= v8_vblank;
-	end
+	// v8_vblank debug removed - fires every frame, too noisy
 
 	reg memoryOverlayOn_prev;
 	always @(posedge clk_sys) begin
