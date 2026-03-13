@@ -391,7 +391,7 @@ module emu
 	wire v8_video_latch = memoryLatch && videoBusControl;
 	// peripherals
 	wire vid_alt, loadPixels, pixelOut, _hblank, _vblank, hsync, vsync;
-	wire memoryOverlayOn, selectSCSI, selectSCC, selectIWM, selectVIA, selectRAM, selectROM, selectSEOverlay;
+	wire memoryOverlayOn, selectSCSI, selectSCC, selectIWM, selectVIA, selectRAM, selectROM, selectSEOverlay, selectASC, selectUnmapped;
 	wire [15:0] dataControllerDataOut;
 
 	// audio
