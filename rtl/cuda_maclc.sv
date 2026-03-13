@@ -187,29 +187,6 @@ module cuda_maclc (
     end
 
     //==========================================================================
-    // RTC Counter
-    //==========================================================================
-    always @(posedge clk) begin
-        if (reset) begin
-            rtc_seconds <= 32'h0;
-            rtc_tick_counter <= 24'h0;
-            rtc_initialized <= 1'b0;
-        end else if (clk8_en) begin
-            if (!rtc_initialized && timestamp != 0) begin
-                rtc_seconds <= timestamp[31:0] + MAC_UNIX_DELTA;
-                rtc_initialized <= 1'b1;
-            end else begin
-                if (rtc_tick_counter >= 24'd7_999_999) begin
-                    rtc_tick_counter <= 24'h0;
-                    rtc_seconds <= rtc_seconds + 1'd1;
-                end else begin
-                    rtc_tick_counter <= rtc_tick_counter + 1'd1;
-                end
-            end
-        end
-    end
-
-    //==========================================================================
     // Main State Machine
     //==========================================================================
     reg [3:0] prev_state;
@@ -417,9 +394,25 @@ module cuda_maclc (
             adb_data_out <= 1'b1;
             autopoll_enabled <= 1'b0;
             sr_write_seen <= 1'b0;
+            rtc_seconds <= 32'h0;
+            rtc_tick_counter <= 24'h0;
+            rtc_initialized <= 1'b0;
 
         end else if (clk8_en) begin
             cuda_sr_irq <= 1'b0;
+
+            // RTC tick counter
+            if (!rtc_initialized && timestamp != 0) begin
+                rtc_seconds <= timestamp[31:0] + MAC_UNIX_DELTA;
+                rtc_initialized <= 1'b1;
+            end else begin
+                if (rtc_tick_counter >= 24'd7_999_999) begin
+                    rtc_tick_counter <= 24'h0;
+                    rtc_seconds <= rtc_seconds + 1'd1;
+                end else begin
+                    rtc_tick_counter <= rtc_tick_counter + 1'd1;
+                end
+            end
 
             // Track SR write events for clocking control
             if (via_sr_write && !via_sr_write_prev)
