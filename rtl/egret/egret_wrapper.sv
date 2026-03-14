@@ -550,39 +550,8 @@ always @(posedge clk) begin
     end
 end
 
-// PRAM loading - copy to internal RAM when 680x0 reset asserts
-// Per MAME egret.cpp: write_internal_ram(0x70 + byte, data)
-// intram[x] corresponds to CPU address 0x90 + x (RAM mapped at 0x90-0x1FF)
-// So PRAM goes to intram[0x70-0x16F] = CPU addresses 0x100-0x1FF
-// This does NOT overlap with stack (CPU 0xF0-0xFF = intram[0x60-0x6F])
-integer pram_idx;
-always @(posedge clk) begin
-    if (pc_bit3_prev && !pc_out[3] && !pram_loaded && cen) begin
-        // Copy PRAM to internal RAM: PRAM[0-255] -> CPU 0x100-0x1FF
-        // Offset 0x70 = (0x100 - 0x90) to convert CPU address to intram index
-        for (pram_idx = 0; pram_idx < 256; pram_idx = pram_idx + 1) begin
-            intram[pram_idx + 16'h70] = pram[pram_idx];
-        end
-
-        // Initialize RTC time (use timestamp input)
-        // RTC seconds at CPU addresses 0xAB-0xAE -> intram[0x1B-0x1E]
-        intram[16'hAB - 16'h90] = timestamp[31:24];  // Seconds bits 31-24
-        intram[16'hAC - 16'h90] = timestamp[23:16];  // Seconds bits 23-16
-        intram[16'hAD - 16'h90] = timestamp[15:8];   // Seconds bits 15-8
-        intram[16'hAE - 16'h90] = timestamp[7:0];    // Seconds bits 7-0
-
-        `ifdef SIMULATION
-        // Debug: Show what was loaded (addresses use base 0x90)
-        $display("EGRET_PRAM: RAM[$94] = 0x%02x (should have bit 3 set, i.e., >= 0x08)",
-                 intram[16'h94 - 16'h90]);
-        $display("EGRET_PRAM: RAM[$AB-$AE] RTC = %02x %02x %02x %02x (timestamp input = %d)",
-                 intram[16'hAB - 16'h90], intram[16'hAC - 16'h90],
-                 intram[16'hAD - 16'h90], intram[16'hAE - 16'h90],
-                 timestamp);
-        $display("EGRET_PRAM: PRAM source byte[0x24] = 0x%02x", pram[8'h24]);
-        `endif
-    end
-end
+// PRAM loading flag - actual copy is done in the intram write block below
+// to avoid multiple drivers on intram
 
 // ============================================================================
 // Port and DDR register writes
@@ -676,21 +645,39 @@ always @(posedge clk) begin
 end
 `endif
 
+// PRAM loading and normal RAM writes - single always block to avoid multiple drivers
+// PRAM loading: copy to internal RAM when 680x0 reset asserts (PC bit 3: 1->0)
+// Per MAME egret.cpp: write_internal_ram(0x70 + byte, data)
+// intram[x] corresponds to CPU address 0x90 + x (RAM mapped at 0x90-0x1FF)
+// So PRAM goes to intram[0x70-0x16F] = CPU addresses 0x100-0x1FF
+integer pram_idx;
 always @(posedge clk) begin
-    if (ram_cs && !cpu_wr && cen) begin  // !cpu_wr means write
+    if (pc_bit3_prev && !pc_out[3] && !pram_loaded && cen) begin
+        // Copy PRAM to internal RAM: PRAM[0-255] -> CPU 0x100-0x1FF
+        // Offset 0x70 = (0x100 - 0x90) to convert CPU address to intram index
+        for (pram_idx = 0; pram_idx < 256; pram_idx = pram_idx + 1) begin
+            intram[pram_idx + 16'h70] <= pram[pram_idx];
+        end
+        // Initialize RTC time (use timestamp input)
+        // RTC seconds at CPU addresses 0xAB-0xAE -> intram[0x1B-0x1E]
+        intram[16'hAB - 16'h90] <= timestamp[31:24];
+        intram[16'hAC - 16'h90] <= timestamp[23:16];
+        intram[16'hAD - 16'h90] <= timestamp[15:8];
+        intram[16'hAE - 16'h90] <= timestamp[7:0];
+        `ifdef SIMULATION
+        $display("EGRET_PRAM: Loading PRAM and RTC time");
+        `endif
+    end else if (ram_cs && !cpu_wr && cen) begin  // !cpu_wr means write
         intram[ram_addr] <= cpu_dout;
         `ifdef SIMULATION
-        // Debug writes to $94 (intram[0x04])
         if (ram_addr == 9'h04) begin
             $display("EGRET_RAM_WRITE[%0d]: PC=%04x addr=$94 data=%02x",
                      cycle_count, last_pc, cpu_dout);
         end
-        // Debug writes to $CC (intram[0x3C])
         if (ram_addr == 9'h3C) begin
             $display("EGRET_RAM_WRITE[%0d]: PC=%04x addr=$CC data=%02x",
                      cycle_count, last_pc, cpu_dout);
         end
-        // Debug writes to $A3 (intram[0x13]) - critical for tracking bit 7
         if (ram_addr == 9'h13) begin
             $display("EGRET_A3_WRITE[%0d]: PC=%04x addr=$A3 data=%02x (bit7=%b)",
                      cycle_count, last_pc, cpu_dout, cpu_dout[7]);
