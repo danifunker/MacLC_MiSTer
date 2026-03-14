@@ -165,40 +165,8 @@ reg [15:0] timer_prescale;
 reg [15:0] timer_prescale_max;
 reg [15:0] pll_lock_counter;
 
-always @(posedge clk) begin
-    if (reset) begin
-        pll_ctrl <= 8'h00;
-        timer_ctrl <= 8'h00;
-        onesec_ctrl <= 8'h00;
-        cycle_total <= 32'h0;
-        timer_prescale <= 16'h0;
-        timer_prescale_max <= 16'd1024;  // Default divider
-        pll_lock_counter <= 16'h0;
-    end else if (cen) begin
-        // Simulate PLL lock after 500 cycles
-        if (pll_lock_counter < 16'd500) begin
-            pll_lock_counter <= pll_lock_counter + 1;
-        end else begin
-            pll_ctrl[6] <= 1'b1;  // Set LOCK bit
-        end
-
-        // Count total cycles for timer counter
-        cycle_total <= cycle_total + 1;
-
-        // Prescaled timer tick based on PLL setting
-        timer_prescale <= timer_prescale + 1;
-        if (timer_prescale >= timer_prescale_max) begin
-            timer_prescale <= 0;
-
-            // Set timer flag (bit 7) on overflow
-            timer_ctrl[7] <= 1'b1;
-            `ifdef SIMULATION
-            if (timer_ctrl[5] && !timer_ctrl[7])
-                $display("TIMER[%0d]: Tick, flag set (timer_ctrl=%02x)", cycle_count, timer_ctrl);
-            `endif
-        end
-    end
-end
+// Timer hardware logic is merged into the port/register write block below
+// to avoid multiple drivers on pll_ctrl, timer_ctrl, onesec_ctrl
 
 // Timer IRQ is level-sensitive: stays asserted while timer flag (bit 7) AND enable (bit 5) are set
 // Firmware clears by writing 0 to bit 7 of timer_ctrl
@@ -564,7 +532,36 @@ always @(posedge clk) begin
         pa_ddr   <= 8'h00;
         pb_ddr   <= 8'h00;  // All inputs on reset (firmware sets 0x92 = bits 7,4,1 outputs)
         pc_ddr   <= 8'h00;
-    end else if (port_cs && !cpu_wr && cen) begin  // !cpu_wr means write
+        pll_ctrl <= 8'h00;
+        timer_ctrl <= 8'h00;
+        onesec_ctrl <= 8'h00;
+        cycle_total <= 32'h0;
+        timer_prescale <= 16'h0;
+        timer_prescale_max <= 16'd1024;
+        pll_lock_counter <= 16'h0;
+    end else if (cen) begin
+        // --- Timer hardware (runs every cen tick) ---
+        // PLL lock after 500 cycles
+        if (pll_lock_counter < 16'd500) begin
+            pll_lock_counter <= pll_lock_counter + 1;
+        end else begin
+            pll_ctrl[6] <= 1'b1;  // Set LOCK bit
+        end
+        // Total cycle counter for timer
+        cycle_total <= cycle_total + 1;
+        // Prescaled timer tick
+        timer_prescale <= timer_prescale + 1;
+        if (timer_prescale >= timer_prescale_max) begin
+            timer_prescale <= 0;
+            timer_ctrl[7] <= 1'b1;
+            `ifdef SIMULATION
+            if (timer_ctrl[5] && !timer_ctrl[7])
+                $display("TIMER[%0d]: Tick, flag set (timer_ctrl=%02x)", cycle_count, timer_ctrl);
+            `endif
+        end
+
+        // --- Port/register writes from CPU ---
+        if (port_cs && !cpu_wr) begin  // !cpu_wr means write
         case (cpu_addr[4:0])  // 5 bits for 0x00-0x1F
             5'h00: pa_latch <= cpu_dout;
             5'h01: begin
@@ -604,7 +601,8 @@ always @(posedge clk) begin
                 onesec_ctrl <= cpu_dout;
             end
         endcase
-    end else if (cen) begin
+        end // port_cs write
+
         // One-second timer hardware: set Port C bit 1 when timer fires
         // Per MAME m68hc05e1: m_portc_data |= 0x02 on one-second tick
         // This flag persists until firmware clears it (via Port C write)
@@ -614,7 +612,7 @@ always @(posedge clk) begin
             $display("EGRET_ONESEC[%0d]: Setting PC1 flag (Port C bit 1)", cycle_count);
             `endif
         end
-    end
+    end // cen
 end
 
 // ============================================================================
