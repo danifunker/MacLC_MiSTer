@@ -239,7 +239,7 @@ module dataController_top(
 	wire SEL;
 	wire _viaIrq, _sccIrq, sccWReq;
 	wire [15:0] viaDataOut;
-	wire [15:0] iwmDataOut;
+	wire [15:0] swimDataOut;
 	wire [7:0] sccDataOut;
 	wire [7:0] scsiDataOut;
 	wire mouseX1, mouseX2, mouseY1, mouseY2, mouseButton;
@@ -266,7 +266,7 @@ module dataController_top(
     wire [15:0] pviaDataOut_full = {pseudovia_data_in, pseudovia_data_in};
     wire [15:0] ascDataOut_full = {asc_data_in, asc_data_in};
 
-    assign cpuDataOut = selectIWM ? iwmDataOut :
+    assign cpuDataOut = selectIWM ? swimDataOut :
                         selectVIA ? viaDataOut_full :
                         selectSCC ? sccDataOut_full :
                         selectSCSI ? scsiDataOut_full :
@@ -772,20 +772,20 @@ module dataController_top(
 		end
 	end
 
-	// IWM
-	iwm i(
+	// SWIM (IWM + ISM dual-mode floppy controller)
+	swim sw(
 		.clk(clk32),
 		.cep(clk8_en_p),
 		.cen(clk8_en_n),
 		._reset(_cpuReset),
-		.selectIWM(selectIWM),
+		.selectSWIM(selectIWM),
 		._cpuRW(_cpuRW),
 		._cpuLDS(_cpuLDS),
 		.dataIn(cpuDataIn),
 		.cpuAddrRegHi(cpuAddrRegHi),
 		.SEL(SEL),
 		.driveSel(driveSel),
-		.dataOut(iwmDataOut),
+		.dataOut(swimDataOut),
 		.insertDisk(insertDisk),
 		.diskSides(diskSides),
 		.diskEject(diskEject),

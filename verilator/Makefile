@@ -77,7 +77,7 @@ V_SRC = \
 	$(RTL)/asc.sv \
 	$(RTL)/ps2_kbd.sv \
 	$(RTL)/ps2_mouse.v \
-	$(RTL)/iwm.v \
+	$(RTL)/swim.v \
 	$(RTL)/floppy.v \
 	$(RTL)/floppy_track_encoder.v \
 	$(RTL)/scsi.v \

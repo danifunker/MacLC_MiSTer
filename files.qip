@@ -11,7 +11,7 @@ set_global_assignment -name VERILOG_FILE rtl/ps2_mouse.v
 set_global_assignment -name VERILOG_FILE rtl/scc.v
 set_global_assignment -name VERILOG_FILE rtl/uart/txuart.v
 set_global_assignment -name VERILOG_FILE rtl/uart/rxuart.v
-set_global_assignment -name VERILOG_FILE rtl/iwm.v
+set_global_assignment -name VERILOG_FILE rtl/swim.v
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/via6522.sv
 set_global_assignment -name VERILOG_FILE rtl/addrDecoder.v
 set_global_assignment -name VERILOG_FILE rtl/addrController_top.v

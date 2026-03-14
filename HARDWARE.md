@@ -16,7 +16,7 @@ Reference: TattleTech report from real Macintosh LC (ID=19g), manufactured 1/2/8
 - **Machine:** Macintosh LC (ID=19g)
 - **CPU:** MC68020 @ 16 MHz (instruction cache enabled, no data cache)
 - **FPU:** None installed (PDS slot available for 68882)
-- **MMU:** Address Management Unit (built into 68020)
+- **MMU:** None (68020 has no built-in MMU; no external 68851 PMMU installed)
 - **RAM:** 10 MB (10,485,760 bytes) - 2 MB soldered + 8 MB SIMM
 - **ROM:** 512 KB, version $67C (124), checksum $350EACF0, Universal, 32-bit clean
 - **ROM Start:** $00A00000
@@ -52,7 +52,7 @@ variants but is not cycle-accurate.
 | **VDAC (Ariel)** | Yes | `rtl/ariel_ramdac.sv` | T | 343S1045 RAMDAC. 256-entry CLUT, 24-bit RGB. Has a palette hack (ignores 0x7F writes). |
 | **ASC** | Yes | `rtl/asc.sv` | B | Stub only. Returns version 0xE8 and satisfies ROM boot checks, but no actual sound synthesis. No FIFO, no wavetable. |
 | **SCC (Z8530)** | Yes | `rtl/scc.v` | T | Dual-channel serial. TX and interrupt logic need verification. DCD lines used for mouse. |
-| **IWM/SWIM** | Yes (SWIM) | `rtl/iwm.v` | T | IWM only (not SWIM). Read-only. Won't read at 16 MHz CPU speed. |
+| **SWIM** | Yes (SWIM) | `rtl/swim.v` | T | IWM + ISM dual-mode. ISM mode switch detection, registers, and FIFO. Read-only. Won't read at 16 MHz CPU speed. |
 | **SCSI (NCR5380)** | Yes (no DMA) | `rtl/ncr5380.sv`, `rtl/scsi.v` | T | Dual device support (SCSI ID 5 & 6). Writes experimental. No IRQ handling. |
 | **ADB** | Yes (Extended kbd) | `rtl/adb.sv` | T | PS/2 keyboard/mouse converted to ADB. Extended ADB keyboard supported. |
 | **Egret (68HC05)** | Yes | `rtl/egret.sv` | T | Microcontroller with real 341S0850 ROM. Handles ADB, RTC/PRAM, reset control. |
@@ -76,9 +76,10 @@ ROM boot checks. No actual audio output from ASC wavetable synthesis or FIFO pla
 The core currently supports 1 MB / 4 MB configurations. The real LC has 10 MB (2 MB
 soldered + 8 MB SIMM). This may limit software compatibility.
 
-### IWM vs SWIM
-The real LC has a SWIM (Super Woz Integrated Machine) chip, but the core only implements
-the older IWM. Floppy is read-only and doesn't work at 16 MHz.
+### SWIM ISM Mode
+The SWIM now supports both IWM and ISM modes. The IWM-to-ISM mode switch sequence is
+detected, and ISM registers/FIFO respond correctly. Full ISM data path (clock recovery,
+CSM/TSM state machines) is not yet implemented. Floppy is read-only and doesn't work at 16 MHz.
 
 ### TG68K Not Cycle-Accurate
 The TG68K core in 68020 mode has the correct instruction set but is not cycle-accurate

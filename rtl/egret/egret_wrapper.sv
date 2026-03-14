@@ -498,29 +498,26 @@ assign cuda_portb_oe = pb_ddr;
 wire [7:0] pc_in = {pc_latch[7:4], (pc_ddr[3] ? pc_latch[3] : 1'b0), pc_latch[2:0]};
 
 // 68020 reset control - match MAME behavior exactly
-// Per MAME egret.cpp: pc_out[3]=1 means ASSERT reset, pc_out[3]=0 means CLEAR reset
-// No artificial delay - let Egret firmware control reset timing directly.
+// Per MAME egret.cpp and egret.sv: pc_out[3]=1 means RELEASE, pc_out[3]=0 means HOLD
+// (egret.sv uses: reset_680x0 = ~pc_out[3], so pc_out[3]=1 → reset_680x0=0 → release)
 //
-// IMPORTANT: Hold 68020 in reset until firmware explicitly configures Port C.
-// This prevents early release during the ~20 cycles before DDR is set up.
-reg [19:0] reset_release_counter;  // Keep for debug logging
+// We latch the reset state so that when the firmware switches pc_ddr[3] back to input
+// (at $1291: BCLR3 $06), the 68020 stays in its last commanded state (released).
+// Hold in reset until port_test_done AND firmware has configured PC bit 3 as output.
+reg reset_680x0_latched;
 
 always @(posedge clk) begin
     if (reset) begin
-        reset_release_counter <= 0;
-    end else if (cen) begin
-        reset_release_counter <= reset_release_counter + 1;
+        reset_680x0_latched <= 1'b1;  // Hold 68020 in reset during Egret reset
+    end else if (cen && port_test_done && pc_ddr[3]) begin
+        // Only update when firmware is actively driving PC bit 3 as output
+        // Invert: pc_out[3]=1 means release (reset_680x0=0), pc_out[3]=0 means hold (reset_680x0=1)
+        reset_680x0_latched <= ~pc_out[3];
     end
 end
 
 always @(*) begin
-    // Match MAME: reset controlled by Egret firmware via Port C bit 3
-    // pc_out[3]=1 -> hold 68020 in reset
-    // pc_out[3]=0 -> release 68020 from reset
-    // Hold in reset until port test is done AND firmware has configured PC bit 3 as output.
-    // This prevents early release during port test (which writes to PC latch/DDR but
-    // leaves DDR[3]=0, causing pc_out[3]=0 and spurious reset release at cycle ~21).
-    reset_680x0 = (port_test_done && pc_ddr[3]) ? pc_out[3] : 1'b1;
+    reset_680x0 = reset_680x0_latched;
     nmi_680x0 = 1'b0;
 end
 
@@ -867,8 +864,8 @@ always @(posedge clk) begin
             if (reset_680x0)
                 $display("EGRET[%0d]: *** 68020 RESET ASSERTED ***", cycle_count);
             else
-                $display("EGRET[%0d]: *** 68020 RESET RELEASED (counter=%0d, pc_out[3]=%b) ***", 
-                         cycle_count, reset_release_counter, pc_out[3]);
+                $display("EGRET[%0d]: *** 68020 RESET RELEASED (pc_out[3]=%b, pc_ddr[3]=%b) ***",
+                         cycle_count, pc_out[3], pc_ddr[3]);
         end
 
         // Log Port B and C latch/DDR writes
