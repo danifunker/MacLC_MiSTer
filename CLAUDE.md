@@ -38,6 +38,12 @@ Key options:
 - `--trace` - Enable FST waveform tracing (outputs to `trace.fst`)
 
 Note: Boot takes approximately 360 frames to reach the Mac desktop.
+Note: No hard drive is configured in the simulator, so the desktop won't fully load.
+
+#### Simulation Logs
+- **CPU trace log:** `verilator/cpu_trace.log` - Contains 68K CPU instruction trace
+- **Console output (stderr):** Contains HC05 (Egret) traces, VIA/peripheral debug messages
+- **Important:** Do NOT re-run the simulator multiple times when diagnosing. Run once, then analyze the log files.
 
 ## Architecture
 
