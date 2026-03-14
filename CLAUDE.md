@@ -40,6 +40,15 @@ Key options:
 Note: Boot takes approximately 360 frames to reach the Mac desktop.
 Note: No hard drive is configured in the simulator, so the desktop won't fully load.
 
+#### Boot Verification
+```bash
+cd verilator
+./check_boot.sh              # Analyze existing cpu_trace.log
+./check_boot.sh --run        # Run 30 frames + analyze
+./check_boot.sh --run 100    # Run N frames + analyze
+```
+Exit codes: 0=PASS, 1=FAIL, 2=missing log. Suitable for pre-commit hooks.
+
 #### Simulation Logs
 - **CPU trace log:** `verilator/cpu_trace.log` - Contains 68K CPU instruction trace
 - **Console output (stderr):** Contains HC05 (Egret) traces, VIA/peripheral debug messages
@@ -102,6 +111,17 @@ When working with CPU cores, see `how-to-convert-cpu.txt` for GHDL-based VHDL to
 ```bash
 ghdl synth -fsynopsys -fexplicit --latches --out=verilog
 ```
+
+## Verilator vs Quartus Compatibility
+
+**Critical:** Verilator allows multiple `always` blocks to drive the same `reg`, but Quartus does not (Error 10028: "Can't resolve multiple constant drivers"). When writing or modifying RTL:
+
+- Each `reg` must be driven from exactly **one** `always` block for Quartus synthesis
+- If timer logic, PRAM loading, or other hardware needs to write the same register as a CPU write path, **merge them into a single `always` block**
+- Use `if/else if` priority within the block to handle the different write sources
+- Verilator builds (`make` in `verilator/`) will succeed even with multiple drivers — always verify the design is Quartus-clean before targeting FPGA
+
+**Conditional compilation:** `USE_EGRET_CPU` and `SIMULATION` are defined in `verilator/Makefile` for simulation. For FPGA, `USE_EGRET_CPU` is set in `MacLC.qsf`. Guard simulation-only code (`$display`, debug counters) with `` `ifdef SIMULATION ``.
 
 ## Known Limitations
 
