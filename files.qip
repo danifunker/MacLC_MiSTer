@@ -23,4 +23,7 @@ set_global_assignment -name VERILOG_FILE rtl/videoTimer.v
 set_global_assignment -name VERILOG_FILE rtl/videoShifter.v
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/pseudovia.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/asc.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/egret/egret_wrapper.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/egret/m68hc05_alu.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/egret/m68hc05_core.sv
 set_global_assignment -name SYSTEMVERILOG_FILE MacLC.sv
