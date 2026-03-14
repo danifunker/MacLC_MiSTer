@@ -253,31 +253,8 @@ module swim
 		end
 	end
 
-	// update IWM bit registers
-	always @(posedge clk or negedge _reset) begin
-		if (_reset == 1'b0) begin
-			ca0 <= 0;
-			ca1 <= 0;
-			ca2 <= 0;
-			lstrb <= 0;
-			diskEnableExt <= 0;
-			diskEnableInt <= 0;
-			selectExternalDrive <= 0;
-			q6 <= 0;
-			q7 <= 0;
-		end
-		else begin
-			ca0 <= ca0Next;
-			ca1 <= ca1Next;
-			ca2 <= ca2Next;
-			lstrb <= lstrbNext;
-			diskEnableExt <= diskEnableExtNext;
-			diskEnableInt <= diskEnableIntNext;
-			selectExternalDrive <= selectExternalDriveNext;
-			q6 <= q6Next;
-			q7 <= q7Next;
-		end
-	end
+	// IWM bit register update is merged into the write logic block below
+	// to avoid multiple drivers on ca0/ca1/ca2/lstrb (Quartus requirement)
 
 	// ================================================================
 	// Read mux: IWM mode vs ISM mode
@@ -357,8 +334,29 @@ module swim
 			iwm_to_ism_counter <= 0;
 			ism_fifo[0] <= 0;
 			ism_fifo[1] <= 0;
+			// IWM bit registers (merged here to avoid multiple drivers)
+			ca0 <= 0;
+			ca1 <= 0;
+			ca2 <= 0;
+			lstrb <= 0;
+			diskEnableExt <= 0;
+			diskEnableInt <= 0;
+			selectExternalDrive <= 0;
+			q6 <= 0;
+			q7 <= 0;
 		end
 		else if(cen) begin
+			// Default: update IWM bit registers from combinational next-state
+			ca0 <= ca0Next;
+			ca1 <= ca1Next;
+			ca2 <= ca2Next;
+			lstrb <= lstrbNext;
+			diskEnableExt <= diskEnableExtNext;
+			diskEnableInt <= diskEnableIntNext;
+			selectExternalDrive <= selectExternalDriveNext;
+			q6 <= q6Next;
+			q7 <= q7Next;
+
 			if (_cpuRW == 0 && selectSWIM == 1'b1 && _cpuLDS == 1'b0) begin
 				if (ism_mode) begin
 					// ============================================
