@@ -200,7 +200,7 @@ module emu
 		"O1011,Monitor,512x384 12in RGB,640x480 VGA,Portrait;",
 		"-;",
 		"O5,Speed,Normal,16MHz;",
-		"ODE,CPU,68000,68010,68020;",
+		"ODE,CPU,68020;",
 		"O4,Memory,4MB;",
 		"-;",
 		"R0,Reset & Apply CPU+Memory;",
@@ -221,7 +221,7 @@ module emu
 	);
 
 	reg       status_mem = 1'b1;
-	reg [1:0] status_cpu = 2'b10;
+	localparam [1:0] status_cpu = 2'b10; // 68020
 	reg       n_reset = 0;
 	wire      status_turbo = 1'b1;
 	always @(posedge clk_sys) begin
@@ -236,7 +236,6 @@ module emu
 			else if(rst_cnt) begin
 				rst_cnt    <= rst_cnt - 1'd1;
 				status_mem <= status[4];
-				status_cpu <= status[14:13];
 			end
 			else begin
 				n_reset <= 1;
@@ -421,71 +420,20 @@ module emu
 	assign      _cpuDTACK = ~(!_cpuAS && cpuAddr[23:21] != 3'b111) | (status_turbo & !turbo_dtack_en);
 	wire        cpu_en_p      = status_turbo ? clk16_en_p : clk8_en_p;
 	wire        cpu_en_n      = status_turbo ? clk16_en_n : clk8_en_n;
-	wire        is68000       = status_cpu == 0;
-	assign      _cpuReset_o   = is68000 ? fx68_reset_n : tg68_reset_n;
-	assign      _cpuRW        = is68000 ? fx68_rw : tg68_rw;
-	assign      _cpuAS        = is68000 ? fx68_as_n : tg68_as_n;
-	assign      _cpuUDS       = is68000 ? fx68_uds_n : tg68_uds_n;
-	assign      _cpuLDS       = is68000 ? fx68_lds_n : tg68_lds_n;
-	assign      E_falling     = is68000 ? fx68_E_falling : tg68_E_falling;
-	assign      E_rising      = is68000 ? fx68_E_rising : tg68_E_rising;
-	assign      _cpuVMA       = is68000 ? fx68_vma_n : tg68_vma_n;
-	assign      cpuFC[0]      = is68000 ? fx68_fc0 : tg68_fc0;
-	assign      cpuFC[1]      = is68000 ? fx68_fc1 : tg68_fc1;
-	assign      cpuFC[2]      = is68000 ? fx68_fc2 : tg68_fc2;
-	assign      cpuAddr[23:1] = is68000 ? fx68_a : tg68_a[23:1];
-	assign      cpuDataOut    = is68000 ? fx68_dout : tg68_dout;
-	
-	wire        fx68_rw;
-	wire        fx68_as_n;
-	wire        fx68_uds_n;
-	wire        fx68_lds_n;
-	wire        fx68_E_falling;
-	wire        fx68_E_rising;
-	wire        fx68_vma_n;
-	wire        fx68_fc0;
-	wire        fx68_fc1;
-	wire        fx68_fc2;
-	wire [15:0] fx68_dout;
-	wire [23:1] fx68_a;
-	wire        fx68_reset_n;
-	
-	fx68k fx68k (
-		.clk        ( clk_sys ),
-		.extReset   ( !_cpuReset ),
-		.pwrUp      ( !_cpuReset ),
-		.enPhi1     ( cpu_en_p   ),
-		.enPhi2     ( cpu_en_n   ),
+	assign      _cpuReset_o   = tg68_reset_n;
+	assign      _cpuRW        = tg68_rw;
+	assign      _cpuAS        = tg68_as_n;
+	assign      _cpuUDS       = tg68_uds_n;
+	assign      _cpuLDS       = tg68_lds_n;
+	assign      E_falling     = tg68_E_falling;
+	assign      E_rising      = tg68_E_rising;
+	assign      _cpuVMA       = tg68_vma_n;
+	assign      cpuFC[0]      = tg68_fc0;
+	assign      cpuFC[1]      = tg68_fc1;
+	assign      cpuFC[2]      = tg68_fc2;
+	assign      cpuAddr[23:1] = tg68_a[23:1];
+	assign      cpuDataOut    = tg68_dout;
 
-		.eRWn       ( fx68_rw ),
-		.ASn        ( fx68_as_n ),
-		.LDSn       ( fx68_lds_n ),
-		.UDSn       ( fx68_uds_n ),
-		.E          ( ),
-		.E_div      ( status_turbo ),
-		.E_PosClkEn ( fx68_E_falling ),
-		.E_NegClkEn ( fx68_E_rising ),
-		.VMAn       ( fx68_vma_n ),
-		.FC0        ( fx68_fc0 ),
-		.FC1        ( fx68_fc1 ),
-		.FC2        ( fx68_fc2 ),
-		.BGn        ( ),
-		.oRESETn    ( fx68_reset_n ),
-		.oHALTEDn   ( ),
-		.DTACKn     ( _cpuDTACK ),
-		.VPAn       ( _cpuVPA ),
-		.HALTn      ( 1'b1 ),
-		.BERRn      ( 1'b1 ),
-		.BRn        ( 1'b1 ),
-		.BGACKn     ( 1'b1 ),
-		.IPL0n      ( _cpuIPL[0] ),
-		.IPL1n      ( _cpuIPL[1] ),
-		.IPL2n      ( _cpuIPL[2] ),
-		.iEdb       ( dataControllerDataOut ),
-		.oEdb       ( fx68_dout ),
-		.eab        ( fx68_a )
-	);
-	
 	wire        tg68_rw;
 	wire        tg68_as_n;
 	wire        tg68_uds_n;
@@ -567,6 +515,7 @@ module emu
 		.selectAriel(selectAriel),
 		.selectPseudoVIA(selectPseudoVIA),
 		.selectVRAM(selectVRAM),
+		.selectUnmapped(selectUnmapped),
 		.hsync(hsync),
 		.vsync(vsync),
 		._hblank(_hblank),

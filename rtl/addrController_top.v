@@ -44,6 +44,7 @@ module addrController_top(
 	output selectAriel,
 	output selectPseudoVIA,
 	output selectVRAM,
+	output selectUnmapped,
 
 	// video:
 	output hsync,
@@ -251,7 +252,8 @@ module addrController_top(
 		.selectSEOverlay(selectSEOverlay),
 		.selectAriel(selectAriel),
 		.selectPseudoVIA(selectPseudoVIA),
-		.selectVRAM(selectVRAM)
+		.selectVRAM(selectVRAM),
+		.selectUnmapped(selectUnmapped)
 	);
 
 	// ============================================================
