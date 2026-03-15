@@ -916,11 +916,15 @@ wire [30:0] uart_setup_rx_a = { 1'b0, bit_per_char_a, 1'b0, parity_ena_a, 1'b0, 
 wire [30:0] uart_setup_tx_a = { 1'b0, bit_per_char_a, 1'b0, parity_ena_a, 1'b0, parity_even_a, baud_divid_speed_a  } ;
 //wire [30:0] uart_setup_rx_a = { 1'b0, 1'b0, 1'b0, 1'b0, 1'b0, 1'b0, baud_divid_speed_a  } ;
 //wire [30:0] uart_setup_tx_a = { 1'b0, 1'b0, 1'b0, 1'b0, 1'b0, 1'b0, baud_divid_speed_a  } ;
+
+// GEMINI: Implement Local Loopback (WR14 bit 4)
+wire rxd_internal_a = wr14_a[4] ? txd : rxd;
+
 rxuart rxuart_a (
 	.i_clk(clk), 
 	.i_reset(reset_a|reset_hw), 
 	.i_setup(uart_setup_rx_a), 
-	.i_uart_rx(rxd), 
+	.i_uart_rx(rxd_internal_a), 
 	.o_wr(rx_wr_a), // TODO -- check on this flag
 	.o_data(data_a),   // TODO we need to save this off only if wreq is set, and mux it into data_a in the right spot
 	.o_break(break_a),

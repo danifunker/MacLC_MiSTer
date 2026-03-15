@@ -32,7 +32,10 @@ module tg68k (
 	input berr,
 	input [15:0] din,
 	output [15:0] dout,
-	output reg [31:0] addr
+	output reg [31:0] addr,
+
+	// Debug outputs
+	output [1:0] busstate
 );
 
 wire  [1:0] tg68_busstate;
@@ -203,24 +206,31 @@ always @(posedge clk) begin
 	end
 end
 
-TG68KdotC_Kernel #(2,2,2,2,2,2,2,1) tg68k (
-	.clk            ( clk           ),
-	.nReset         ( ~reset        ),
-	.clkena_in      ( tg68_clkena   ),
-	.data_in        ( tg68_din_r    ),
-	.IPL            ( ipl           ),
-	.IPL_autovector ( 1'b0          ),
-	.berr           ( berr          ),
-	.clr_berr       ( /*tg68_clr_berr*/ ),
-	.CPU            ( cpu           ), // 00->68000  01->68010  11->68020(only some parts - yet)
-	.addr_out       ( tg68_addr     ),
-	.data_write     ( dout          ),
-	.nUDS           ( tg68_uds_n    ),
-	.nLDS           ( tg68_lds_n    ),
-	.nWr            ( tg68_rw       ),
-	.busstate       ( tg68_busstate ), // 00-> fetch code 10->read data 11->write data 01->no memaccess
-	.nResetOut      ( reset_n       ),
-	.FC             ( fc            )
-);
+	TG68KdotC_Kernel tg68k (
+		.clk            ( clk           ),
+		.nReset         ( ~reset        ),
+		.clkena_in      ( tg68_clkena   ),
+		.data_in        ( tg68_din_r    ),
+		.IPL            ( ipl           ),
+		.IPL_autovector ( 1'b0          ),
+		.berr           ( berr          ),
+		.clr_berr       ( /*tg68_clr_berr*/ ),
+		.CPU            ( cpu           ), // 00->68000  01->68010  11->68020(only some parts - yet)
+		.addr_out       ( tg68_addr     ),
+		.data_write     ( dout          ),
+		.nUDS           ( tg68_uds_n    ),
+		.nLDS           ( tg68_lds_n    ),
+		.nWr            ( tg68_rw       ),
+		.busstate       ( tg68_busstate ), // 00-> fetch code 10->read data 11->write data 01->no memaccess
+		.nResetOut      ( reset_n       ),
+		.FC             ( fc            )
+	);
+
+	always @(posedge clk) begin
+		if (tg68_clkena && tg68_busstate == 2'b00)
+			$display("TG68: FETCH PC=%h opcode=%h @%0t", tg68_addr, tg68_din_r, $time);
+	end
+// Expose busstate for debugging
+assign busstate = tg68_busstate;
 
 endmodule

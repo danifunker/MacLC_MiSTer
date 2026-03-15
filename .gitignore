@@ -38,3 +38,8 @@ c5_pin_model_dump.txt
 *_netlist
 *.cdf
 .DS_Store
+imgui.ini
+cpu_trace.log
+ram_debug.log
+verilator/obj_dir
+verilator/*.png
