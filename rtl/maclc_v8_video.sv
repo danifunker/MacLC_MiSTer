@@ -210,15 +210,25 @@ end
 
 assign palette_addr = pixel_index;
 
+// Pipeline delay: palette RAM read is synchronous (1-cycle latency),
+// so delay de, video_mode, and video_data to align with palette_data output.
+reg        de_d1;
+reg [2:0]  video_mode_d1;
+reg [15:0] video_data_d1;
+
 always @(posedge clk_sys) begin
-    if (de) begin
-        if (video_mode == 3'd4) begin
+    de_d1         <= de;
+    video_mode_d1 <= video_mode;
+    video_data_d1 <= video_data;
+end
+
+always @(posedge clk_sys) begin
+    if (de_d1) begin
+        if (video_mode_d1 == 3'd4) begin
             // 16bpp Direct Color (X-5-5-5)
-            // Note: Use 'video_data' directly here or ensure pixel_shift is loaded correctly
-            // For 16bpp, we fetch every cycle, so video_data is the pixel.
-            vga_r <= {video_data[14:10], 3'b000};
-            vga_g <= {video_data[9:5],   3'b000};
-            vga_b <= {video_data[4:0],   3'b000};
+            vga_r <= {video_data_d1[14:10], 3'b000};
+            vga_g <= {video_data_d1[9:5],   3'b000};
+            vga_b <= {video_data_d1[4:0],   3'b000};
         end else begin
             // Palette Lookup
             vga_r <= palette_data[23:16];
