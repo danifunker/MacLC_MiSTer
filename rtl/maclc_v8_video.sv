@@ -106,18 +106,50 @@ end
 `endif
 
 // --- Video Address Generation ---
-// VRAM Stride is 1024 bytes (0x400)
-// We calculate the byte offset of the current pixel group
-// h_count must be masked to align with the fetch width (16, 8, 4, or 2 bytes)
-// However, since we fetch 16-bit words, we just multiply h_count by BPP/8
-// Simplified: Address = Base + (Y * 1024) + (X * BPP / 8)
-// Since video_data_in is 16-bit, we want to align to even bytes.
+// Row stride (bytes per scanline) depends on resolution and bpp.
+// For 512-wide modes, strides are powers of 2 (64..1024).
+// For 640-wide modes, strides are multiples of 80 (80..1280).
+// We accumulate row_start each scanline to avoid a large multiply.
+
+reg [10:0] row_bytes;
+always @(*) begin
+    case (monitor_id)
+        4'h2: begin // 512x384
+            case (video_mode)
+                3'd0: row_bytes = 11'd64;    // 1bpp: 512/8
+                3'd1: row_bytes = 11'd128;   // 2bpp
+                3'd2: row_bytes = 11'd256;   // 4bpp
+                3'd3: row_bytes = 11'd512;   // 8bpp
+                3'd4: row_bytes = 11'd1024;  // 16bpp
+                default: row_bytes = 11'd256;
+            endcase
+        end
+        default: begin // 640x480 (and portrait)
+            case (video_mode)
+                3'd0: row_bytes = 11'd80;    // 1bpp: 640/8
+                3'd1: row_bytes = 11'd160;   // 2bpp
+                3'd2: row_bytes = 11'd320;   // 4bpp
+                3'd3: row_bytes = 11'd640;   // 8bpp
+                3'd4: row_bytes = 11'd1280;  // 16bpp
+                default: row_bytes = 11'd320;
+            endcase
+        end
+    endcase
+end
+
+// Accumulate row start address (byte offset of current scanline)
+reg [21:0] row_start;
+always @(posedge clk_sys) begin
+    if (reset || (h_count == h_total - 1 && v_count == v_total - 1))
+        row_start <= 22'd0;
+    else if (h_count == h_total - 1 && v_count < v_active)
+        row_start <= row_start + {11'd0, row_bytes};
+end
 
 wire [10:0] row_offset = (h_count * bits_per_pixel) >> 3; // Convert pixels to bytes
 wire [10:0] fetch_addr = {row_offset[10:1], 1'b0};        // Align to 16-bit word boundary
 
-// VRAM_BASE + (v_count * 1024) + offset
-assign video_addr = VRAM_BASE + {v_count, 10'd0} + {11'd0, fetch_addr};
+assign video_addr = VRAM_BASE + row_start + {11'd0, fetch_addr};
 
 reg [15:0] video_data;
 reg [15:0] pixel_shift;

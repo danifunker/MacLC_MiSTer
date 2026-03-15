@@ -197,7 +197,7 @@ module emu
 		"OBC,Scale,Normal,V-Integer,Narrower HV-Integer,Wider HV-Integer;",
 		"-;",
 		"OFG,Video Mode,4bpp,1bpp,2bpp,8bpp,16bpp;",
-		"O1011,Monitor,13\" RGB,12\" RGB,15\" Portrait;",
+		"O1011,Monitor,512x384 12in RGB,640x480 VGA,Portrait;",
 		"-;",
 		"O5,Speed,Normal,16MHz;",
 		"ODE,CPU,68000,68010,68020;",
@@ -609,8 +609,8 @@ module emu
 	*/
 
 	// Monitor ID Selection
-	wire [3:0] v8_monitor_id = status[11:10] == 2'b00 ? 4'h6 : // 13" RGB
-							   status[11:10] == 2'b01 ? 4'h2 : // 12" RGB
+	wire [3:0] v8_monitor_id = status[11:10] == 2'b00 ? 4'h2 : // 512x384 12" RGB
+							   status[11:10] == 2'b01 ? 4'h6 : // 640x480 VGA
 							   4'h1;                           // Portrait
 
 	ariel_ramdac ariel(
