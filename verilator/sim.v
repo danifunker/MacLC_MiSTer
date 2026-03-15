@@ -82,15 +82,15 @@ module emu
 	output        debug_cpuBusControl,
 
 	// Machine configuration inputs
-	input  [1:0]  cfg_cpuType,      // 00=FX68K, 01/10/11=TG68K variants
+	input  [1:0]  cfg_cpuType,      // Unused, kept for sim_main.cpp compatibility
 	input         cfg_memSize       // 0=1MB, 1=4MB
 );
 
 	localparam SCSI_DEVS = 2;
 
-	// Configuration - directly from inputs (LC-only, no machineType)
+	// Configuration
 	wire      status_mem = cfg_memSize;      // 0=1MB, 1=4MB
-	wire [1:0] status_cpu = cfg_cpuType;     // CPU type (use 01 for TG68K)
+	localparam [1:0] status_cpu = 2'b10;     // 68020
 	// Mac LC runs 68020 at C15M (~15.67 MHz), use 16 MHz mode (turbo=1)
 	// turbo=0 gives 8 MHz, turbo=1 gives 16 MHz
 	wire      status_turbo = 1'b1;           // 16 MHz for Mac LC
@@ -244,36 +244,19 @@ module emu
 	assign      _cpuDTACK = ~(!_cpuAS && cpuAddr[23:21] != 3'b111) | (status_turbo & !turbo_dtack_en);
 	wire        cpu_en_p      = status_turbo ? clk16_en_p : clk8_en_p;
 	wire        cpu_en_n      = status_turbo ? clk16_en_n : clk8_en_n;
-	wire        is68000       = status_cpu == 0;
-	assign      _cpuReset_o   = is68000 ? fx68_reset_n : tg68_reset_n;
-	assign      _cpuRW        = is68000 ? fx68_rw : tg68_rw;
-	assign      _cpuAS        = is68000 ? fx68_as_n : tg68_as_n;
-	assign      _cpuUDS       = is68000 ? fx68_uds_n : tg68_uds_n;
-	assign      _cpuLDS       = is68000 ? fx68_lds_n : tg68_lds_n;
-	assign      E_falling     = is68000 ? fx68_E_falling : tg68_E_falling;
-	assign      E_rising      = is68000 ? fx68_E_rising : tg68_E_rising;
-	assign      _cpuVMA       = is68000 ? fx68_vma_n : tg68_vma_n;
-	assign      cpuFC[0]      = is68000 ? fx68_fc0 : tg68_fc0;
-	assign      cpuFC[1]      = is68000 ? fx68_fc1 : tg68_fc1;
-	assign      cpuFC[2]      = is68000 ? fx68_fc2 : tg68_fc2;
-	assign      cpuAddr[23:1] = is68000 ? fx68_a : tg68_a[23:1];
-	assign      cpuDataOut    = is68000 ? fx68_dout : tg68_dout;
-
-	// FX68K removed for Verilator compatibility - stub out signals
-	// (FX68K uses mixed blocking/non-blocking assignments which Verilator doesn't support)
-	wire        fx68_rw = 1'b1;
-	wire        fx68_as_n = 1'b1;
-	wire        fx68_uds_n = 1'b1;
-	wire        fx68_lds_n = 1'b1;
-	wire        fx68_E_falling = 1'b0;
-	wire        fx68_E_rising = 1'b0;
-	wire        fx68_vma_n = 1'b1;
-	wire        fx68_fc0 = 1'b0;
-	wire        fx68_fc1 = 1'b0;
-	wire        fx68_fc2 = 1'b0;
-	wire [15:0] fx68_dout = 16'h0000;
-	wire [23:1] fx68_a = 23'h0;
-	wire        fx68_reset_n = 1'b0;
+	assign      _cpuReset_o   = tg68_reset_n;
+	assign      _cpuRW        = tg68_rw;
+	assign      _cpuAS        = tg68_as_n;
+	assign      _cpuUDS       = tg68_uds_n;
+	assign      _cpuLDS       = tg68_lds_n;
+	assign      E_falling     = tg68_E_falling;
+	assign      E_rising      = tg68_E_rising;
+	assign      _cpuVMA       = tg68_vma_n;
+	assign      cpuFC[0]      = tg68_fc0;
+	assign      cpuFC[1]      = tg68_fc1;
+	assign      cpuFC[2]      = tg68_fc2;
+	assign      cpuAddr[23:1] = tg68_a[23:1];
+	assign      cpuDataOut    = tg68_dout;
 
 	wire        tg68_rw;
 	wire        tg68_as_n;
