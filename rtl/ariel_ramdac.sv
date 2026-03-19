@@ -89,25 +89,21 @@ always @(posedge clk_sys) begin
                 end
                 REG_PALETTE: begin
                     // Write to current color component, cycle through R, G, B
-                    // HACK: Ignore writes of 0x7F since ROM is broken and writes 0x7F to everything
-                    // This preserves our initial grayscale palette
-                    if (data_in != 8'h7F) begin
-                        case (color_comp)
-                            2'd0: begin
-                                palette_latch[23:16] <= data_in;
-                                palette[palette_addr] <= {data_in, palette_latch[15:0]};
-                            end
-                            2'd1: begin
-                                palette_latch[15:8] <= data_in;
-                                palette[palette_addr] <= {palette_latch[23:16], data_in, palette_latch[7:0]};
-                            end
-                            2'd2: begin
-                                palette_latch[7:0] <= data_in;
-                                palette[palette_addr] <= {palette_latch[23:8], data_in};
-                            end
-                            default: ;
-                        endcase
-                    end
+                    case (color_comp)
+                        2'd0: begin
+                            palette_latch[23:16] <= data_in;
+                            palette[palette_addr] <= {data_in, palette_latch[15:0]};
+                        end
+                        2'd1: begin
+                            palette_latch[15:8] <= data_in;
+                            palette[palette_addr] <= {palette_latch[23:16], data_in, palette_latch[7:0]};
+                        end
+                        2'd2: begin
+                            palette_latch[7:0] <= data_in;
+                            palette[palette_addr] <= {palette_latch[23:8], data_in};
+                        end
+                        default: ;
+                    endcase
 
                     // Auto-increment: cycle R->G->B, then advance address
                     if (color_comp == 2'd2) begin
