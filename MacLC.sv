@@ -355,11 +355,27 @@ module emu
 	              (tp_hcount[8:6] == 3'd6) ? 8'hFF :
 	                                         8'h00;
 
-	// Debug indicators in top-left corner
+	// Debug indicators using pixel counters synced to DE
+	reg [9:0] dbg_x, dbg_y;
+	reg dbg_de_prev;
+	always @(posedge clk_sys) begin
+		dbg_de_prev <= v8_de;
+		if (v8_ce_pix) begin
+			if (v8_de) begin
+				dbg_x <= dbg_x + 1'd1;
+			end else begin
+				if (dbg_de_prev && !v8_de) // falling edge of DE = end of line
+					dbg_y <= dbg_y + 1'd1;
+				dbg_x <= 0;
+			end
+			if (v8_vsync)
+				dbg_y <= 0;
+		end
+	end
 	// Block 1 (left):  Red = CPU held in reset, Green = CPU running
 	// Block 2 (right): Yellow = no Ariel writes, Blue = Ariel has been written
-	wire debug_block1 = (tp_hcount < 10'd50) && (tp_vcount < 10'd50);
-	wire debug_block2 = (tp_hcount >= 10'd60) && (tp_hcount < 10'd110) && (tp_vcount < 10'd50);
+	wire debug_block1 = (dbg_x < 10'd50) && (dbg_y < 10'd50);
+	wire debug_block2 = (dbg_x >= 10'd60) && (dbg_x < 10'd110) && (dbg_y < 10'd50);
 
 	// Video Output - Mac LC V8 video system (or test pattern)
 	assign VGA_R  = (test_mode == 2'd1) ? (v8_de ? tp_r : 8'd0) :
