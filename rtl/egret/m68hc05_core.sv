@@ -187,24 +187,24 @@ module m68hc05_core (
                 if ((onesec_irq == 1'b0) && (onesec_irq_d == 1'b1)) begin
                     irqRequest <= 1'b1;
                     irq_source <= 2'd2;
-                    `ifdef SIMULATION
+                    `ifdef VERBOSE_TRACE
                     $display("HC05: ONE-SEC IRQ request! PC=%04x", regPC);
                     `endif
                 end else if ((timer_irq == 1'b0) && (timer_irq_d == 1'b1)) begin
                     irqRequest <= 1'b1;
                     irq_source <= 2'd1;
-                    `ifdef SIMULATION
+                    `ifdef VERBOSE_TRACE
                     $display("HC05: TIMER IRQ request! PC=%04x", regPC);
                     `endif
                 end else if ((irq == 1'b0) && (irq_d == 1'b1)) begin
                     irqRequest <= 1'b1;
                     irq_source <= 2'd0;
-                    `ifdef SIMULATION
+                    `ifdef VERBOSE_TRACE
                     $display("HC05: EXT IRQ request! PC=%04x", regPC);
                     `endif
                 end
             end
-            `ifdef SIMULATION
+            `ifdef VERBOSE_TRACE
             if (flagI == 1'b1) begin
                 if ((onesec_irq == 1'b0) && (onesec_irq_d == 1'b1))
                     $display("HC05: ONE-SEC IRQ edge BLOCKED (flagI=1) PC=%04x", regPC);
@@ -838,7 +838,7 @@ module m68hc05_core (
                             flagN <= datain[2];
                             flagZ <= datain[1];
                             flagC <= datain[0];
-                            `ifdef SIMULATION
+                            `ifdef VERBOSE_TRACE
                             $display("HC05: RTI restoring flags from 0x%02x - flagI will be %b, PC=%04x", datain, datain[3], regPC);
                             `endif
                             regSP <= regSP + 16'h0001;
@@ -1432,19 +1432,19 @@ module m68hc05_core (
                                     case (irq_source)
                                         2'd2: begin
                                             temp <= 16'hFFF6;  // One-second timer vector
-                                            `ifdef SIMULATION
+                                            `ifdef VERBOSE_TRACE
                                             $display("HC05: ONE-SEC IRQ taken at PC=%04x, vector=FFF6", regPC);
                                             `endif
                                         end
                                         2'd1: begin
                                             temp <= 16'hFFF8;  // Timer vector
-                                            `ifdef SIMULATION
+                                            `ifdef VERBOSE_TRACE
                                             $display("HC05: TIMER IRQ taken at PC=%04x, vector=FFF8", regPC);
                                             `endif
                                         end
                                         default: begin
                                             temp <= 16'hFFFA;  // External IRQ vector
-                                            `ifdef SIMULATION
+                                            `ifdef VERBOSE_TRACE
                                             $display("HC05: EXT IRQ taken at PC=%04x, vector=FFFA", regPC);
                                             `endif
                                         end

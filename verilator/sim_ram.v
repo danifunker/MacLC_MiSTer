@@ -34,10 +34,12 @@ always @(posedge clk) begin
 		if (ds[1]) mem[addr[22:0]][15:8] <= din[15:8];
 		if (ds[0]) mem[addr[22:0]][7:0]  <= din[7:0];
 		wr_count <= wr_count + 1;
+		`ifdef VERBOSE_TRACE
 		// Log first 10 writes and every 50000th after that
 		if (wr_count < 10 || wr_count % 50000 == 0)
 			$display("sim_ram WR[%0d] @%0t: addr=%h din=%h ds=%b",
 				wr_count, $time, addr[22:0], din, ds);
+		`endif
 	end
 
 	if (reset) begin

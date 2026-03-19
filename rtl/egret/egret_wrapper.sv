@@ -977,11 +977,13 @@ always @(posedge clk) begin
         status_timer <= 0;
     end else if (cen) begin
         status_timer <= status_timer + 1;
+        `ifdef VERBOSE_TRACE
         if (status_timer == 0) begin
             // MAME-style status: show key signals
             $display("EGRET[%0d] STATUS: PC=%04x TIP=%b TREQ=%b CB1=%b",
                      cycle_count, last_pc, ~via_tip_stable, ~pb_out[1], pb_out[4]);
         end
+        `endif
     end
 end
 `endif
