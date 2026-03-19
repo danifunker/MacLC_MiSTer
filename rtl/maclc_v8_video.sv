@@ -22,7 +22,8 @@ module maclc_v8_video(
     output reg [7:0] vga_g,
     output reg [7:0] vga_b,
     output reg de,
-    
+    output reg ce_pix,
+
     output [7:0] palette_addr,
     input [23:0] palette_data
 );
@@ -74,11 +75,24 @@ end
 reg [10:0] h_count;
 reg [9:0] v_count;
 
+// Pixel clock enable: divide clk_sys by 2
+// clk_sys=32.5MHz / 2 = 16.25MHz pixel clock (close to Mac LC's 15.6672MHz)
+reg pix_div;
 always @(posedge clk_sys) begin
+    if (reset)
+        pix_div <= 0;
+    else
+        pix_div <= ~pix_div;
+end
+
+wire pix_en = pix_div;
+
+always @(posedge clk_sys) begin
+    ce_pix <= pix_en;
     if (reset) begin
         h_count <= 0;
         v_count <= 0;
-    end else begin
+    end else if (pix_en) begin
         if (h_count == h_total - 1) begin
             h_count <= 0;
             v_count <= (v_count == v_total - 1) ? 10'd0 : v_count + 10'd1;
@@ -88,11 +102,13 @@ always @(posedge clk_sys) begin
 end
 
 always @(posedge clk_sys) begin
-    hsync <= (h_count >= h_sync_start && h_count < h_sync_end);
-    vsync <= (v_count >= v_sync_start && v_count < v_sync_end);
-    hblank <= (h_count >= h_active);
-    vblank <= (v_count >= v_active);
-    de <= (h_count < h_active) && (v_count < v_active);
+    if (pix_en) begin
+        hsync <= (h_count >= h_sync_start && h_count < h_sync_end);
+        vsync <= (v_count >= v_sync_start && v_count < v_sync_end);
+        hblank <= (h_count >= h_active);
+        vblank <= (v_count >= v_active);
+        de <= (h_count < h_active) && (v_count < v_active);
+    end
 end
 
 `ifdef SIMULATION
@@ -151,9 +167,9 @@ end
 // Accumulate row start address (byte offset of current scanline)
 reg [21:0] row_start;
 always @(posedge clk_sys) begin
-    if (reset || (h_count == h_total - 1 && v_count == v_total - 1))
+    if (reset || (pix_en && h_count == h_total - 1 && v_count == v_total - 1))
         row_start <= 22'd0;
-    else if (h_count == h_total - 1 && v_count < v_active)
+    else if (pix_en && h_count == h_total - 1 && v_count < v_active)
         row_start <= row_start + {11'd0, row_bytes};
 end
 
@@ -173,30 +189,29 @@ always @(posedge clk_sys) begin
 end
 
 // --- Shift Register Logic ---
-// video_latch occurs once per 16 clocks (bus cycle period)
+// Shift register operates at pixel clock rate (pix_en)
 // We need to output 16/bits_per_pixel pixels per word
-// So shift interval is bits_per_pixel clocks (1bpp: every clock, 4bpp: every 4 clocks)
 always @(posedge clk_sys) begin
-    if (hblank || vblank) begin
-        pixel_shift <= 16'hFFFF;  // Initialize to "black" pattern for Mac
-        shift_count <= 0;
-    end else if (video_latch) begin
-        // Load new data directly when it arrives
-        pixel_shift <= video_data_in;
-        shift_count <= 1; // Start at 1 so first pixel displays on this clock
-    end else begin
-        shift_count <= shift_count + 1;
+    if (pix_en) begin
+        if (hblank || vblank) begin
+            pixel_shift <= 16'hFFFF;  // Initialize to "black" pattern for Mac
+            shift_count <= 0;
+        end else if (video_latch) begin
+            // Load new data directly when it arrives
+            pixel_shift <= video_data_in;
+            shift_count <= 1; // Start at 1 so first pixel displays on this clock
+        end else begin
+            shift_count <= shift_count + 1;
 
-        // Shift at the start of each new pixel period
-        // For N bits per pixel, shift every (16/pixels_per_word) = N clocks
-        // Check uses current shift_count value, shift happens at counts 4,8,12 for 4bpp etc.
-        case (bits_per_pixel)
-            5'd1:  pixel_shift <= {pixel_shift[14:0], 1'b0}; // every clock
-            5'd2:  if (shift_count[0] == 0) pixel_shift <= {pixel_shift[13:0], 2'b0}; // every 2 clocks
-            5'd4:  if (shift_count[1:0] == 0) pixel_shift <= {pixel_shift[11:0], 4'b0}; // every 4 clocks
-            5'd8:  if (shift_count[2:0] == 0) pixel_shift <= {pixel_shift[7:0],  8'b0}; // every 8 clocks
-            5'd16: ; // No shift needed, direct color from video_data
-        endcase
+            // Shift at the start of each new pixel period
+            case (bits_per_pixel)
+                5'd1:  pixel_shift <= {pixel_shift[14:0], 1'b0}; // every pixel
+                5'd2:  if (shift_count[0] == 0) pixel_shift <= {pixel_shift[13:0], 2'b0};
+                5'd4:  if (shift_count[1:0] == 0) pixel_shift <= {pixel_shift[11:0], 4'b0};
+                5'd8:  if (shift_count[2:0] == 0) pixel_shift <= {pixel_shift[7:0],  8'b0};
+                5'd16: ; // No shift needed, direct color from video_data
+            endcase
+        end
     end
 end
 

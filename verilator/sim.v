@@ -497,6 +497,7 @@ module emu
 		.vga_g(v8_vga_g),
 		.vga_b(v8_vga_b),
 		.de(v8_de),
+		.ce_pix(),  // Not used in sim
 
 		.palette_addr(ariel_pixel_addr),
 		.palette_data(ariel_palette_data)

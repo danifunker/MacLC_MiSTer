@@ -201,7 +201,7 @@ module emu
 		"-;",
 		"O5,Speed,Normal,16MHz;",
 		"ODE,CPU,68020;",
-		"O4,Memory,4MB;",
+		"O4,Memory,2MB,10MB;",
 		"-;",
 		"R0,Reset & Apply CPU+Memory;",
 		"V,v",`BUILD_DATE
@@ -309,7 +309,7 @@ module emu
 	);
 
 	assign CLK_VIDEO = clk_sys;
-	assign CE_PIXEL  = 1;
+	assign CE_PIXEL  = v8_ce_pix;
 
 	// Video Output - Mac LC V8 video system
 	assign VGA_R  = v8_vga_r;
@@ -333,7 +333,7 @@ module emu
 	//   Bit 5 = Motherboard (0=4MB, 1=2MB)
 	//   Bit 2 = Always set on read (handled in pseudovia)
 	// Mac LC (2MB soldered): 2MB=$24, 4MB=$64, 6MB=$A4, 10MB=$E4
-	wire [7:0] configRAMSize = 8'hE4; // 10MB: 8MB SIMM + 2MB board
+	wire [7:0] configRAMSize = status[4] ? 8'hE4 : 8'h24; // 1=10MB (8MB SIMM+2MB board), 0=2MB (board only)
 	wire [7:0] pvia_ram_config_out;   // Active RAM config from pseudovia
 				  
 	// Serial Ports
@@ -345,6 +345,7 @@ module emu
 	// V8 Video system wires
 	wire [21:0] v8_video_addr;
 	wire v8_hsync, v8_vsync, v8_hblank, v8_vblank, v8_de;
+	wire v8_ce_pix;
 	wire [7:0] v8_vga_r, v8_vga_g, v8_vga_b;
 	wire [7:0] ariel_pixel_addr;
 	wire [23:0] ariel_palette_data;
@@ -623,6 +624,7 @@ module emu
 		.vga_g(v8_vga_g),
 		.vga_b(v8_vga_b),
 		.de(v8_de),
+		.ce_pix(v8_ce_pix),
 		
 		// Palette Interface (Connected to Ariel RAMDAC)
 		.palette_addr(ariel_pixel_addr),
