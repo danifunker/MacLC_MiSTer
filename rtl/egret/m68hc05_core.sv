@@ -242,8 +242,10 @@ module m68hc05_core (
                         mainFSM <= 4'h3;
                     end else begin
                         opcode <= datain;
+                        `ifdef VERBOSE_TRACE
                         $display("HC05: TRACE PC=%04x opcode=%02x A=%02x X=%02x SP=%04x SR=%b%b%b%b%b @%0t",
                                  regPC, datain, regA, regX, regSP, flagH, flagI, flagN, flagZ, flagC, $time);
+                        `endif
                         
                         case (datain)
                             8'h82: begin  // RTT - return from trace
@@ -651,7 +653,7 @@ module m68hc05_core (
                 end
                 
                 4'h3: begin  // Instruction cycle 2
-                    `ifdef SIMULATION
+                    `ifdef VERBOSE_TRACE
                     if (opcode == 8'h81)
                         $display("HC05_STATE3: opcode=0x%02x SP=0x%04x PC=0x%04x addr=0x%04x datain=0x%02x", opcode, regSP, regPC, addr, datain);
                     `endif
@@ -844,7 +846,7 @@ module m68hc05_core (
                         end
 
                         8'h81: begin  // RTS
-                            `ifdef SIMULATION
+                            `ifdef VERBOSE_TRACE
                             $display("HC05_RTS[state3]: SP=0x%04x datain=0x%02x addr=0x%04x PC=0x%04x -> regPC[15:8]=0x%02x, next=state4", regSP, datain, addr, regPC, datain);
                             `endif
                             regPC[15:8] <= datain;
@@ -885,7 +887,7 @@ module m68hc05_core (
                 end
                 
                 4'h4: begin  // Instruction cycle 3
-                    `ifdef SIMULATION
+                    `ifdef VERBOSE_TRACE
                     // Unconditional state4 debug to catch missing RTS state4
                     if (regPC >= 16'h12A0 && regPC <= 16'h12C0)
                         $display("HC05_STATE4_ENTRY: opcode=0x%02x SP=0x%04x PC=0x%04x addr=0x%04x datain=0x%02x", opcode, regSP, regPC, addr, datain);
@@ -1097,7 +1099,7 @@ module m68hc05_core (
                         end
                         
                         8'h81: begin  // RTS
-                            `ifdef SIMULATION
+                            `ifdef VERBOSE_TRACE
                             $display("HC05_RTS[state4]: SP=0x%04x datain=0x%02x -> regPC[7:0] (final PC=0x%04x)", regSP, datain, {regPC[15:8], datain});
                             `endif
                             regPC[7:0] <= datain;

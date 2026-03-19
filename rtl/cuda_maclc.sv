@@ -205,12 +205,12 @@ module cuda_maclc (
             via_sr_write_prev <= via_sr_write;
             via_sr_read_prev <= via_sr_read;
 
+            `ifdef VERBOSE_TRACE
             if (state != prev_state) begin
-                /* verilator lint_off STMTDLY */
                 $display("CUDA: state %d -> %d, TIP=%b, TREQ=%b, recv_cnt=%d, send_cnt=%d",
                          prev_state, state, via_tip, treq_reg, recv_count, send_count);
-                /* verilator lint_on STMTDLY */
             end
+            `endif
         end
     end
 
@@ -224,9 +224,9 @@ module cuda_maclc (
                 // When ROM asserts TIP, go to receive mode to get probe byte
                 if (!via_tip && via_tip_prev) begin
                     next_state = ST_RECV_WAIT;  // ROM starting transaction, receive probe
-                    /* verilator lint_off STMTDLY */
+                    `ifdef VERBOSE_TRACE
                     $display("CUDA: ST_ATTENTION->ST_RECV_WAIT: ROM asserting TIP, ready to receive");
-                    /* verilator lint_on STMTDLY */
+                    `endif
                 end
                 else if (wait_counter >= 16'd100000)
                     next_state = ST_IDLE;  // Timeout - go to idle anyway
@@ -237,9 +237,9 @@ module cuda_maclc (
                 // Check both falling edge and level - ROM may have already asserted TIP
                 if ((!via_tip && via_tip_prev) || (!via_tip && sr_write_seen)) begin
                     next_state = ST_RECV_WAIT;
-                    /* verilator lint_off STMTDLY */
+                    `ifdef VERBOSE_TRACE
                     $display("CUDA: IDLE->RECV_WAIT: TIP=%b, prev=%b, sr_write_seen=%b", via_tip, via_tip_prev, sr_write_seen);
-                    /* verilator lint_on STMTDLY */
+                    `endif
                 end
             end
 
@@ -258,25 +258,25 @@ module cuda_maclc (
                 // When TIP asserted AND we have pending SR write, start receiving
                 if (!via_tip && sr_write_seen) begin
                     next_state = ST_RECV_BYTE;
-                    /* verilator lint_off STMTDLY */
+                    `ifdef VERBOSE_TRACE
                     $display("CUDA: RECV_WAIT->RECV_BYTE: TIP asserted with pending SR write");
-                    /* verilator lint_on STMTDLY */
+                    `endif
                 end
                 // Also handle case where TIP and SR write happen together
                 else if (!via_tip && via_sr_write && !via_sr_write_prev) begin
                     next_state = ST_RECV_BYTE;
-                    /* verilator lint_off STMTDLY */
+                    `ifdef VERBOSE_TRACE
                     $display("CUDA: RECV_WAIT->RECV_BYTE: TIP and sr_write edge together");
-                    /* verilator lint_on STMTDLY */
+                    `endif
                 end
                 // Timeout: have data, no pending SR write, and waited long enough
                 // wait_counter increments when: recv_count > 0 && !sr_write_seen && bit_counter >= 8
                 // This works regardless of TIP state
                 else if (recv_count > 0 && wait_counter >= 16'd5000) begin
                     next_state = ST_PROCESS;
-                    /* verilator lint_off STMTDLY */
+                    `ifdef VERBOSE_TRACE
                     $display("CUDA: RECV_WAIT->PROCESS: packet complete, recv_count=%d, TIP=%b", recv_count, via_tip);
-                    /* verilator lint_on STMTDLY */
+                    `endif
                 end
             end
 
@@ -310,9 +310,9 @@ module cuda_maclc (
                     // TIP asserted by ROM - wait for VIA to enter external clock INPUT mode
                     if (via_sr_ext_clk && !via_sr_dir && wait_counter > 16'd100) begin
                         next_state = ST_SEND_BYTE;
-                        /* verilator lint_off STMTDLY */
+                        `ifdef VERBOSE_TRACE
                         $display("CUDA: SEND_WAIT->SEND_BYTE: sr_ext_clk=%b, sr_dir=%b, wait=%d", via_sr_ext_clk, via_sr_dir, wait_counter);
-                        /* verilator lint_on STMTDLY */
+                        `endif
                     end
                 end else if (send_count >= send_length) begin
                     next_state = ST_FINISH;
@@ -329,9 +329,9 @@ module cuda_maclc (
                 // At bit_counter=8 && cb1=0, we've provided exactly 8 rising edges. Stop here.
                 if (bit_counter >= 4'd8 && !cb1_out) begin
                     next_state = ST_SEND_DONE;
-                    /* verilator lint_off STMTDLY */
+                    `ifdef VERBOSE_TRACE
                     $display("CUDA: ST_SEND_BYTE done - bit_counter=%d, cb1_out=%b", bit_counter, cb1_out);
-                    /* verilator lint_on STMTDLY */
+                    `endif
                 end
             end
 
@@ -354,9 +354,9 @@ module cuda_maclc (
                 else if (wait_counter >= 16'd50000) begin
                     // Timeout - ROM not responding, finish transaction
                     next_state = ST_FINISH;
-                    /* verilator lint_off STMTDLY */
+                    `ifdef VERBOSE_TRACE
                     $display("CUDA: SEND_DONE timeout, finishing. send_cnt=%d/%d TIP=%b", send_count, send_length, via_tip);
-                    /* verilator lint_on STMTDLY */
+                    `endif
                 end
                 // Otherwise wait for TIP re-assertion or transaction end
             end
@@ -428,7 +428,7 @@ module cuda_maclc (
                     cb2_oe_reg <= 1'b0;  // Don't drive CB2 yet
                     cb1_out <= 1'b0;  // Start low
                     wait_counter <= wait_counter + 1'd1;
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
                     if (wait_counter == 16'd0)
                         $display("CUDA: ST_ATTENTION starting, waiting for ROM probe, TIP=%b", via_tip);
 `endif
@@ -475,7 +475,7 @@ module cuda_maclc (
                         bit_counter <= 4'h0;
                         shift_clk_div <= 8'h0;
                     end
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
                     if (wait_counter[11:0] == 12'd0)
                         $display("CUDA: IDLE wait=%d TIP=%b sr_write_seen=%b sr_ext=%b bit_cnt=%d",
                                  wait_counter, via_tip, sr_write_seen, via_sr_ext_clk, bit_counter);
@@ -491,7 +491,7 @@ module cuda_maclc (
                     // We must clock whenever there's data to shift, regardless of TIP state.
                     treq_reg <= 1'b0;
                     cb2_oe_reg <= 1'b0;
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
                     // Debug: trace when sr_write edge is detected
                     if (via_sr_write && !via_sr_write_prev) begin
                         $display("CUDA: RECV_WAIT sr_write EDGE! TIP=%b, sr_ext_clk=%b, bit_cnt=%d, cb1=%b",
@@ -504,14 +504,14 @@ module cuda_maclc (
                         bit_counter <= 4'h0;
                         shift_clk_div <= 8'h0;
                         cb1_out <= 1'b0;  // Start low for first rising edge
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
                         $display("CUDA: RECV_WAIT resetting bit_counter for new byte");
 `endif
                     end
                     // Clock when VIA is in external clock mode AND we have pending data
                     // Don't require TIP to be asserted - ROM may release it during transfer
                     else if (via_sr_ext_clk && sr_write_seen) begin
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
                         if (bit_counter >= 4'd8)
                             $display("CUDA: CLOCKING - bit_cnt=%d, cb1=%b, div=%d", bit_counter, cb1_out, shift_clk_div);
 `endif
@@ -547,7 +547,7 @@ module cuda_maclc (
                                     if (bit_counter < 4'd8) begin
                                         // Sample CB2 for data bits 0-7
                                         shift_reg <= {shift_reg[6:0], via_cb2_in};
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
                                         $display("CUDA: RECV_WAIT sample bit %d = %b (CB2), SR now 0x%02x",
                                                  bit_counter, via_cb2_in, {shift_reg[6:0], via_cb2_in});
 `endif
@@ -555,9 +555,9 @@ module cuda_maclc (
                                             // Byte complete - store it
                                             recv_buf[recv_count[3:0]] <= {shift_reg[6:0], via_cb2_in};
                                             recv_count <= recv_count + 1'd1;
-                                            /* verilator lint_off STMTDLY */
+                                            `ifdef VERBOSE_TRACE
                                             $display("CUDA: RECV_WAIT byte[%d] = 0x%02x", recv_count, {shift_reg[6:0], via_cb2_in});
-                                            /* verilator lint_on STMTDLY */
+                                            `endif
                                             // DON'T clear sr_write_seen yet - need 1 more edge for VIA
                                             // Toggle BYTEACK to signal byte received
                                             byteack_reg <= ~byteack_reg;
@@ -582,7 +582,7 @@ module cuda_maclc (
                     else begin
                         // No pending data and no leftover shift - hold CB1 low
                         cb1_out <= 1'b0;
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
                         if (wait_counter[10:0] == 11'd0)
                             $display("CUDA: RECV_WAIT no-clock: ext=%b dir=%b recv=%d bit=%d sr_ws=%b",
                                      via_sr_ext_clk, via_sr_dir, recv_count, bit_counter, sr_write_seen);
@@ -594,7 +594,7 @@ module cuda_maclc (
                     // This allows detecting "no more bytes coming" even with TIP asserted
                     if (via_sr_write && !via_sr_write_prev) begin
                         wait_counter <= 16'h0;
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
                         if (wait_counter > 0)
                             $display("CUDA: wait_counter reset from %d (sr_write edge)", wait_counter);
 `endif
@@ -602,13 +602,13 @@ module cuda_maclc (
                     else if (recv_count > 0 && !sr_write_seen && bit_counter >= 4'd9 && !cb1_out) begin
                         // Count when: have data, no pending write, all edges done (9 + falling)
                         wait_counter <= wait_counter + 1'd1;
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
                         if (wait_counter == 16'd0 || wait_counter == 16'd1000 || wait_counter == 16'd5000)
                             $display("CUDA: wait_counter=%d, recv_cnt=%d, sr_write_seen=%b, bit_cnt=%d, cb1=%b",
                                      wait_counter, recv_count, sr_write_seen, bit_counter, cb1_out);
 `endif
                     end
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
                     // Debug: trace why wait_counter isn't incrementing
                     else if (recv_count > 0 && wait_counter < 16'd10) begin
                         $display("CUDA: wait_counter BLOCKED - sr_write_seen=%b, bit_cnt=%d, cb1=%b, ext_clk=%b",
@@ -641,9 +641,9 @@ module cuda_maclc (
                                 // Byte complete - store it
                                 recv_buf[recv_count[3:0]] <= {shift_reg[6:0], via_cb2_in};
                                 recv_count <= recv_count + 1'd1;
-                                /* verilator lint_off STMTDLY */
+                                `ifdef VERBOSE_TRACE
                                 $display("CUDA: RECV byte[%d] = 0x%02x", recv_count, {shift_reg[6:0], via_cb2_in});
-                                /* verilator lint_on STMTDLY */
+                                `endif
                             end
                         end
                     end
@@ -652,10 +652,10 @@ module cuda_maclc (
                 ST_PROCESS: begin
                     // Process received packet
                     // Format: [packet_type][command][data...]
-                    /* verilator lint_off STMTDLY */
+                    `ifdef VERBOSE_TRACE
                     $display("CUDA: PROCESS packet - type=0x%02x cmd=0x%02x data[0]=0x%02x cnt=%d",
                              recv_buf[0], recv_buf[1], recv_buf[2], recv_count);
-                    /* verilator lint_on STMTDLY */
+                    `endif
 
                     case (recv_buf[0])  // Packet type
                         PKT_CUDA: begin
@@ -668,9 +668,9 @@ module cuda_maclc (
                                     send_buf[0] <= PKT_ERROR;
                                     send_buf[1] <= 8'h00;  // OK status
                                     send_length <= 4'd2;
-                                    /* verilator lint_off STMTDLY */
+                                    `ifdef VERBOSE_TRACE
                                     $display("CUDA: AUTOPOLL %s", recv_buf[2][0] ? "enabled" : "disabled");
-                                    /* verilator lint_on STMTDLY */
+                                    `endif
                                 end
 
                                 CUDA_GET_TIME: begin
@@ -682,7 +682,7 @@ module cuda_maclc (
                                     send_buf[4] <= rtc_seconds[15:8];
                                     send_buf[5] <= rtc_seconds[7:0];
                                     send_length <= 4'd6;
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
                                     $display("CUDA: GET_TIME returning 0x%08x", rtc_seconds);
 `endif
                                 end
@@ -717,7 +717,7 @@ module cuda_maclc (
                                     send_buf[0] <= PKT_ERROR;
                                     send_buf[1] <= 8'h00;  // OK status
                                     send_length <= 4'd2;
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
                                     $display("CUDA: SEND_DFAC (I2C audio) - acknowledged");
 `endif
                                 end
@@ -729,7 +729,7 @@ module cuda_maclc (
                                     send_buf[2] <= 8'h00;  // No devices (bitmap)
                                     send_buf[3] <= 8'h00;
                                     send_length <= 4'd4;
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
                                     $display("CUDA: GET_DEV_LIST - returning empty device list");
 `endif
                                 end
@@ -739,7 +739,7 @@ module cuda_maclc (
                                     send_buf[0] <= PKT_ERROR;
                                     send_buf[1] <= 8'h00;
                                     send_length <= 4'd2;
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
                                     $display("CUDA: SET_DEV_LIST - acknowledged");
 `endif
                                 end
@@ -750,7 +750,7 @@ module cuda_maclc (
                                     send_buf[0] <= PKT_ERROR;
                                     send_buf[1] <= 8'h00;
                                     send_length <= 4'd2;
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
                                     $display("CUDA: SET_ONE_SECOND_MODE = %d", recv_buf[2]);
 `endif
                                 end
@@ -760,7 +760,7 @@ module cuda_maclc (
                                     send_buf[0] <= PKT_ERROR;
                                     send_buf[1] <= 8'h00;
                                     send_length <= 4'd2;
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
                                     $display("CUDA: SET_AUTO_RATE = %d", recv_buf[2]);
 `endif
                                 end
@@ -771,7 +771,7 @@ module cuda_maclc (
                                     send_buf[1] <= CUDA_GET_AUTO_RATE;
                                     send_buf[2] <= 8'h0B;  // Default rate
                                     send_length <= 4'd3;
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
                                     $display("CUDA: GET_AUTO_RATE - returning 0x0B");
 `endif
                                 end
@@ -781,7 +781,7 @@ module cuda_maclc (
                                     send_buf[0] <= PKT_ERROR;
                                     send_buf[1] <= 8'h00;
                                     send_length <= 4'd2;
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
                                     $display("CUDA: SET_IPL = %d", recv_buf[2]);
 `endif
                                 end
@@ -791,7 +791,7 @@ module cuda_maclc (
                                     send_buf[0] <= PKT_ERROR;
                                     send_buf[1] <= 8'h00;
                                     send_length <= 4'd2;
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
                                     $display("CUDA: GET_SET_IIC - acknowledged");
 `endif
                                 end
@@ -801,9 +801,9 @@ module cuda_maclc (
                                     send_buf[0] <= PKT_ERROR;
                                     send_buf[1] <= 8'h00;  // Return OK to not block boot
                                     send_length <= 4'd2;
-                                    /* verilator lint_off STMTDLY */
+                                    `ifdef VERBOSE_TRACE
                                     $display("CUDA: Unknown CUDA cmd 0x%02x - returning OK", recv_buf[1]);
-                                    /* verilator lint_on STMTDLY */
+                                    `endif
                                 end
                             endcase
                         end
@@ -814,9 +814,9 @@ module cuda_maclc (
                             send_buf[0] <= PKT_ADB;
                             send_buf[1] <= 8'h00;  // No device response
                             send_length <= 4'd2;
-                            /* verilator lint_off STMTDLY */
+                            `ifdef VERBOSE_TRACE
                             $display("CUDA: ADB command 0x%02x", recv_buf[1]);
-                            /* verilator lint_on STMTDLY */
+                            `endif
                         end
 
                         default: begin
@@ -845,7 +845,7 @@ module cuda_maclc (
                     else if (!via_tip)  // Only count when TIP is asserted
                         wait_counter <= wait_counter + 1'd1;
 
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
                     if (wait_counter[9:0] == 10'd0 && wait_counter > 0)
                         $display("CUDA: SEND_WAIT wait=%d TIP=%b sr_ext=%b sr_dir=%b sr_read=%b",
                                  wait_counter, via_tip, via_sr_ext_clk, via_sr_dir, via_sr_read);
@@ -878,7 +878,7 @@ module cuda_maclc (
                             if (cb1_out) begin  // Falling edge - inc counter, prepare next bit
                                 if (bit_counter < 4'd8) begin
                                     bit_counter <= bit_counter + 1'd1;
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
                                     $display("CUDA: ST_SEND_BYTE falling edge - bit_counter %d, shift_reg=0x%02x, cb2=%b",
                                              bit_counter, shift_reg, cb2_out_reg);
 `endif
@@ -918,21 +918,21 @@ module cuda_maclc (
                         if (send_count + 1 < send_length) begin
                             shift_reg <= send_buf[send_count[3:0] + 1];
                             cb2_out_reg <= send_buf[send_count[3:0] + 1][7];
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
                             $display("CUDA: SEND_DONE byte %d sent, preparing byte %d", send_count, send_count + 1);
 `endif
                         end else begin
                             // All bytes sent - de-assert TREQ immediately
                             // ROM checks TREQ between bytes to know if more data is coming
                             treq_reg <= 1'b0;
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
                             $display("CUDA: SEND_DONE - all %d bytes sent, de-asserting TREQ", send_count + 1);
 `endif
                         end
                     end else begin
                         // Wait for TIP re-assertion (ROM releases TIP to check TREQ)
                         wait_counter <= wait_counter + 1'd1;
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
                         if (wait_counter[10:0] == 11'd0)
                             $display("CUDA: SEND_DONE wait=%d TIP=%b TREQ=%b send_cnt=%d/%d sr_read=%b",
                                      wait_counter, via_tip, treq_reg, send_count, send_length, via_sr_read);

@@ -339,7 +339,7 @@ jt6805 u_cpu (
 // ============================================================================
 // Debug
 // ============================================================================
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
 reg [7:0] pb_out_prev, pb_latch_prev, pb_ddr_prev;
 reg [7:0] pa_out_prev;
 reg       via_tip_prev;

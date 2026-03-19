@@ -99,7 +99,9 @@ end
 reg [3:0] monitor_id_prev;
 always @(posedge clk_sys) begin
     if (monitor_id != monitor_id_prev) begin
+        `ifdef VERBOSE_TRACE
         $display("V8: monitor_id changed to %h @%0t", monitor_id, $time);
+        `endif
         monitor_id_prev <= monitor_id;
     end
 end

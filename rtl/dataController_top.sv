@@ -350,7 +350,9 @@ module dataController_top(
 				end
 				else begin
 					vblankCount <= 6'h0;
+					`ifdef VERBOSE_TRACE
 					$display("DC: ONE SECOND TICK @%0t", $time);
+					`endif
 				end
 			end
 		end
@@ -361,10 +363,14 @@ module dataController_top(
 	reg  SEOverlay;
 	always @(posedge clk32) begin
 		if (!_cpuReset) begin
+			`ifdef VERBOSE_TRACE
 			if (SEOverlay == 0) $display("DC: SEOverlay RESET to 1 @%0t", $time);
+			`endif
 			SEOverlay <= 1;
 		end else if (selectSEOverlay) begin
+			`ifdef VERBOSE_TRACE
 			if (SEOverlay == 1) $display("DC: SEOverlay CLEARED to 0 @%0t", $time);
+			`endif
 			SEOverlay <= 0;
 		end
 	end
@@ -456,7 +462,7 @@ module dataController_top(
 				if (!via_access_prev) begin
 					if (_cpuRW) begin
 						via_sr_read <= 1'b1;
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
 						$display("VIA: SR READ - CPU reading shift register");
 `endif
 					end else begin
@@ -474,11 +480,10 @@ module dataController_top(
 	wire via_cb1_in = cuda_cb1;
 
 	// Debug: track CB2 signal for VIA shift register
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
 	reg cuda_cb1_prev;
 	always @(posedge clk32) begin
 		cuda_cb1_prev <= cuda_cb1;
-		// Print when CB1 rises (when VIA will shift)
 		if (cuda_cb1 && !cuda_cb1_prev) begin
 			$display("DC: CB1 RISE - cuda_cb2_oe=%b, cuda_cb2=%b, final_cb2_i=%b",
 			         cuda_cb2_oe, cuda_cb2, (cuda_cb2_oe ? cuda_cb2 : 1'b1));
@@ -488,18 +493,10 @@ module dataController_top(
 
 	// Debug: Monitor Port B and CUDA signals
 	/* verilator lint_off STMTDLY */
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
 	reg [7:0] via_pb_oe_prev = 8'h00;
 	reg cuda_treq_prev = 1'b0;
-	reg [7:0] treq_log_counter = 8'd0;
 	always @(posedge clk32) begin
-		// Log cuda_treq periodically during startup (disabled for faster sim)
-		// if (treq_log_counter < 8'd50 && clk8_en_p) begin
-		// 	treq_log_counter <= treq_log_counter + 1'd1;
-		// 	$display("CUDA DEBUG: treq=%b, treq_prev=%b, pb3_open_drain=%b, via_pb_i=0x%02x",
-		// 		cuda_treq, cuda_treq_prev, pb3_open_drain, via_pb_i);
-		// end
-		// Log when DDRB (via_pb_oe) changes
 		if (via_pb_oe !== via_pb_oe_prev) begin
 			$display("VIA: DDRB changed: 0x%02x -> 0x%02x (PB3=%b=%s, PB4=%b=%s, PB5=%b=%s)",
 				via_pb_oe_prev, via_pb_oe,
@@ -508,13 +505,11 @@ module dataController_top(
 				via_pb_oe[5], via_pb_oe[5] ? "OUT" : "IN");
 			via_pb_oe_prev <= via_pb_oe;
 		end
-		// Log when CUDA TREQ changes
 		if (cuda_treq !== cuda_treq_prev) begin
 			$display("VIA: cuda_treq changed: %b -> %b, via_pb_external=0x%02x, via_pb_i=0x%02x",
 				cuda_treq_prev, cuda_treq, via_pb_external, via_pb_i);
 			cuda_treq_prev <= cuda_treq;
 		end
-		// PortB READ logging disabled - too verbose during polling
 	end
 `endif
 	/* verilator lint_on STMTDLY */

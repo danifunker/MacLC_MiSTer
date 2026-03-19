@@ -226,10 +226,12 @@ end
 		.FC             ( fc            )
 	);
 
+	`ifdef VERBOSE_TRACE
 	always @(posedge clk) begin
 		if (tg68_clkena && tg68_busstate == 2'b00)
 			$display("TG68: FETCH PC=%h opcode=%h @%0t", tg68_addr, tg68_din_r, $time);
 	end
+	`endif
 // Expose busstate for debugging
 assign busstate = tg68_busstate;
 

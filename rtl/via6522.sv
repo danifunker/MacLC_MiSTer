@@ -291,7 +291,7 @@ module via6522 (
             irq_flags[2] <= 1'b1;
         end
 
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
         // Debug: trace when serial_event gets captured into irq_flags
         if (irq_events[2] == 1'b1) begin
             $display("VIA: IRQ event serial! irq_events=0x%02x, irq_flags before=0x%02x, will be 0x%02x, rising=%b, falling=%b",
@@ -305,9 +305,7 @@ module via6522 (
             case (addr)
                 4'h0: begin // ORB
                     pio_i_prb <= data_in;
-`ifdef SIMULATION
-                    // Mac LC V8 protocol: PB5=TIP(SYS_SESSION), PB4=BYTEACK(VIA_FULL), PB3=TREQ(XCVR_SESSION)
-                    // Log ALL ORB writes for debugging
+`ifdef VERBOSE_TRACE
                     $display("VIA ORB_W[%0t]: %02x TIP=%b BYTEACK=%b TREQ_in=%b",
                              $time, data_in, ~data_in[5], ~data_in[4], ~port_b_i[3]);
 `endif
@@ -327,7 +325,7 @@ module via6522 (
                     
                 4'h2: begin // DDRB
                     pio_i_ddrb <= data_in;
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
                     $display("VIA DDRB_W[%0t]: %02x (PB5_dir=%b PB4_dir=%b PB3_dir=%b)",
                              $time, data_in, data_in[5], data_in[4], data_in[3]);
 `endif
@@ -365,7 +363,7 @@ module via6522 (
                     
                 4'hA: begin // Serial port (SR write)
                     irq_flags[2] <= 1'b0;
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
                     $display("VIA: SR WRITE = 0x%02x (shift_active=%b, shift_mode=%d)",
                              data_in, shift_active, shift_mode_control);
 `endif
@@ -373,7 +371,7 @@ module via6522 (
                     
                 4'hB: begin // ACR (Auxiliary Control Register)
                     acr <= data_in;
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
                     $display("VIA: ACR WRITE = 0x%02x (shift_mode=%d, shift_dir=%b, ext_clk=%b)",
                              data_in, data_in[4:2], data_in[4], (data_in[3:2] == 2'b11));
 `endif
@@ -390,12 +388,12 @@ module via6522 (
                 4'hE: begin // IER
                     if (data_in[7] == 1'b1) begin // set
                         irq_mask <= irq_mask | data_in[6:0];
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
                         $display("VIA: IER SET = 0x%02x, mask now 0x%02x", data_in, irq_mask | data_in[6:0]);
 `endif
                     end else begin // clear
                         irq_mask <= irq_mask & ~data_in[6:0];
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
                         $display("VIA: IER CLEAR = 0x%02x, mask now 0x%02x", data_in, irq_mask & ~data_in[6:0]);
 `endif
                     end
@@ -421,9 +419,9 @@ module via6522 (
                 if (tmr_a_output_en == 1'b1) begin
                     data_out[7] <= timer_a_out;
                 end
-`ifdef SIMULATION
-                // Log ORB reads when TREQ changes or during SR activity - shows what 68K sees
-                if (shift_active || !irb[3]) begin  // Log if SR active or TREQ asserted (low)
+`ifdef VERBOSE_TRACE
+                // Log ORB reads when TREQ changes or during SR activity
+                if (shift_active || !irb[3]) begin
                     $display("VIA ORB_R[%0t]: %02x TREQ=%b TIP=%b BYTEACK=%b [SR=%b cnt=%d]",
                              $time, irb, ~irb[3], ~irb[5], ~irb[4], shift_active, bit_cnt);
                 end
@@ -467,8 +465,8 @@ module via6522 (
             end
             4'hD: begin // IFR
                 data_out <= {irq_out, irq_flags};
-`ifdef SIMULATION
-                // Log IFR reads during shift register activity - shows when ROM sees SR complete
+`ifdef VERBOSE_TRACE
+                // Log IFR reads during shift register activity
                 if (shift_active || irq_flags[2]) begin
                     $display("VIA: IFR READ = 0x%02x (SR_bit=%b, IRQ=%b) [SR active=%b, bit_cnt=%d]",
                              {irq_out, irq_flags}, irq_flags[2], irq_out, shift_active, bit_cnt);
@@ -707,7 +705,7 @@ module via6522 (
     end
 
     // Debug: track CB1 input edges
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
     reg cb1_i_prev;
     always @(posedge clock) begin
         if (reset) cb1_i_prev <= 1'b1;
@@ -785,10 +783,10 @@ module via6522 (
         end else if (falling == 1'b1) begin
             if (wen == 1'b1 && addr == 4'hA) begin
                 shift_reg <= data_in;
-                /* verilator lint_off STMTDLY */
+                `ifdef VERBOSE_TRACE
                 $display("VIA: SR write = 0x%02x, ACR=0x%02x (mode=%d, dir=%b)",
                          data_in, acr, shift_mode_control, shift_dir);
-                /* verilator lint_on STMTDLY */
+                `endif
             end else if (shift_dir == 1'b1 && shift_tick_f == 1'b1) begin // output
                 shift_reg <= {shift_reg[6:0], shift_reg[7]};
             end else if (shift_mode_control != 3'b000 && shift_dir == 1'b0) begin // input (only when mode != 0)
@@ -798,10 +796,10 @@ module via6522 (
                 // Per 6522 datasheet: "shift register counter is disabled" in mode 3
                 if ((ext_clock_mode && ext_edge_pending == 1'b1) ||
                     (shift_clk_sel != 2'b11 && shift_tick_r == 1'b1)) begin
-                    /* verilator lint_off STMTDLY */
+                    `ifdef VERBOSE_TRACE
                     $display("VIA: SR shift IN - CB2=%b (cb2_i=%b), SR 0x%02x -> 0x%02x, mode=%d, ext_clk=%b",
                              ser_cb2_c, cb2_i, shift_reg, {shift_reg[6:0], cb2_i}, shift_mode_control, (ext_clock_mode));
-                    /* verilator lint_on STMTDLY */
+                    `endif
                     shift_reg <= {shift_reg[6:0], cb2_i};
                 end
             end
@@ -822,8 +820,7 @@ module via6522 (
         end
 
         if (falling == 1'b1) begin
-`ifdef SIMULATION
-            // Debug: show state when checking trigger
+`ifdef VERBOSE_TRACE
             if (addr == 4'hA && (ren == 1'b1 || wen == 1'b1)) begin
                 $display("VIA: SR access check - trigger_serial=%b, shift_active=%b, mode=%d, wen=%b, ren=%b",
                          trigger_serial, shift_active, shift_mode_control, wen, ren);
@@ -843,16 +840,16 @@ module via6522 (
                     if (ext_clock_mode && (shift_pulse == 1'b1 || missed_ext_edge == 1'b1)) begin
                         bit_cnt <= 3'd6;
                         missed_ext_edge <= 1'b0;  // Clear the flag
-                        /* verilator lint_off STMTDLY */
+                        `ifdef VERBOSE_TRACE
                         $display("VIA: SR triggered + missed_edge - mode=%d, dir=%b, start_cnt=6",
                                  shift_mode_control, shift_dir);
-                        /* verilator lint_on STMTDLY */
+                        `endif
                     end else begin
                         bit_cnt <= 3'd7;
-                        /* verilator lint_off STMTDLY */
+                        `ifdef VERBOSE_TRACE
                         $display("VIA: SR triggered - mode=%d, dir=%b, ext_clk=%b",
                                  shift_mode_control, shift_dir, (ext_clock_mode));
-                        /* verilator lint_on STMTDLY */
+                        `endif
                     end
                     shift_active <= 1'b1;
                 // Auto-trigger on CB1 DISABLED - was causing protocol issues where
@@ -874,25 +871,24 @@ module via6522 (
                     if (bit_cnt == 3'd0) begin
                         shift_active <= 1'b0;
                         missed_ext_edge <= 1'b0;  // Clear so post-completion edges don't affect next transfer
-                        /* verilator lint_off STMTDLY */
+                        `ifdef VERBOSE_TRACE
                         $display("VIA: SR shift complete - final SR=0x%02x", shift_reg);
-                        /* verilator lint_on STMTDLY */
+                        `endif
                     end else begin
                         bit_cnt <= bit_cnt - 3'd1;
-                        /* verilator lint_off STMTDLY */
+                        `ifdef VERBOSE_TRACE
                         $display("VIA: SR bit_cnt decremented to %d", bit_cnt - 3'd1);
-                        /* verilator lint_on STMTDLY */
+                        `endif
                     end
                 end
             end
         end
 
-        // Debug: show when serial_event fires (IRQ)
+        `ifdef VERBOSE_TRACE
         if (rising == 1'b1 && serial_event == 1'b1) begin
-            /* verilator lint_off STMTDLY */
             $display("VIA: SR IRQ fired! SR=0x%02x, IFR before=0x%02x", shift_reg, irq_flags);
-            /* verilator lint_on STMTDLY */
         end
+        `endif
 
         if (reset == 1'b1) begin
             shift_active <= 1'b0;

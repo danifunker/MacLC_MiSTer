@@ -205,7 +205,7 @@ always @(posedge clk) begin
             if (onesec_counter >= ONESEC_PERIOD) begin
                 onesec_counter <= 22'd0;
                 onesec_irq_flag <= 1'b1;
-                `ifdef SIMULATION
+                `ifdef VERBOSE_TRACE
                 $display("EGRET_ONESEC[%0d]: Timer fired! Setting PC1 and IRQ", cycle_count);
                 `endif
             end else begin
@@ -427,7 +427,7 @@ assign cuda_cb2_oe = pb_ddr[5];
 // dataController expects cuda_treq=1 when TREQ is asserted
 assign cuda_treq = port_test_done & pb_ddr[1] & ~pb_out[1];
 
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
 // Debug cuda_treq formula - trace each component
 reg cuda_treq_prev;
 always @(posedge clk) begin
@@ -554,7 +554,7 @@ always @(posedge clk) begin
         if (timer_prescale >= timer_prescale_max) begin
             timer_prescale <= 0;
             timer_ctrl[7] <= 1'b1;
-            `ifdef SIMULATION
+            `ifdef VERBOSE_TRACE
             if (timer_ctrl[5] && !timer_ctrl[7])
                 $display("TIMER[%0d]: Tick, flag set (timer_ctrl=%02x)", cycle_count, timer_ctrl);
             `endif
@@ -566,7 +566,7 @@ always @(posedge clk) begin
             5'h00: pa_latch <= cpu_dout;
             5'h01: begin
                 pb_latch <= cpu_dout;
-                `ifdef SIMULATION
+                `ifdef VERBOSE_TRACE
                 $display("EGRET[%0d]: *** PB_LATCH WRITE = 0x%02x (CB1_new=%b) ***", cycle_count, cpu_dout, cpu_dout[4]);
                 `endif
             end
@@ -584,7 +584,7 @@ always @(posedge clk) begin
                     2'b10: timer_prescale_max <= 16'd512;    // 2 MHz / 1024 = ~2 kHz
                     2'b11: timer_prescale_max <= 16'd256;    // 4 MHz / 1024 = ~4 kHz
                 endcase
-                `ifdef SIMULATION
+                `ifdef VERBOSE_TRACE
                 $display("EGRET[%0d]: PLL write = 0x%02x (clock rate %0d)", cycle_count, cpu_dout, cpu_dout[1:0]);
                 `endif
             end
@@ -593,7 +593,7 @@ always @(posedge clk) begin
                 if (!(cpu_dout & 8'h80)) timer_ctrl[7] <= 1'b0;
                 if (!(cpu_dout & 8'h40)) timer_ctrl[6] <= 1'b0;
                 timer_ctrl[5:0] <= cpu_dout[5:0];
-                `ifdef SIMULATION
+                `ifdef VERBOSE_TRACE
                 $display("EGRET[%0d]: Timer ctrl write = 0x%02x", cycle_count, cpu_dout);
                 `endif
             end
@@ -608,7 +608,7 @@ always @(posedge clk) begin
         // This flag persists until firmware clears it (via Port C write)
         if (onesec_irq_flag && !pc_latch[1]) begin
             pc_latch[1] <= 1'b1;
-            `ifdef SIMULATION
+            `ifdef VERBOSE_TRACE
             $display("EGRET_ONESEC[%0d]: Setting PC1 flag (Port C bit 1)", cycle_count);
             `endif
         end
@@ -627,7 +627,7 @@ always @(*) begin
     end
 end
 
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
 // Debug RAM access around stack area - only log first 100 and critical writes
 reg [31:0] stack_write_count;
 always @(posedge clk) begin
@@ -667,7 +667,7 @@ always @(posedge clk) begin
         `endif
     end else if (ram_cs && !cpu_wr && cen) begin  // !cpu_wr means write
         intram[ram_addr] <= cpu_dout;
-        `ifdef SIMULATION
+        `ifdef VERBOSE_TRACE
         if (ram_addr == 9'h04) begin
             $display("EGRET_RAM_WRITE[%0d]: PC=%04x addr=$94 data=%02x",
                      cycle_count, last_pc, cpu_dout);
@@ -684,7 +684,7 @@ always @(posedge clk) begin
     end
 end
 
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
 // Debug stack reads around RTS execution
 always @(posedge clk) begin
     if (cen && ram_cs && cpu_wr) begin  // cpu_wr=1 means read
@@ -732,7 +732,7 @@ always @(*) begin
         case (cpu_addr[4:0])  // 5 bits for 0x00-0x1F
             5'h00: begin
                 cpu_din_r = pa_in;
-                `ifdef SIMULATION
+                `ifdef VERBOSE_TRACE
                 if (cycle_count < 10000)
                     $display("EGRET[%0d]: PORT A READ = 0x%02x (pa_out=%02x pa_in=%02x pa_ddr=%02x)",
                              cycle_count, cpu_din_r, pa_out, pa_in, pa_ddr);
@@ -745,7 +745,7 @@ always @(*) begin
             5'h06: cpu_din_r = pc_ddr;
             5'h07: begin
                 cpu_din_r = pll_ctrl;       // PLL control
-                `ifdef SIMULATION
+                `ifdef VERBOSE_TRACE
                 // Log early PLL reads (during init) and later reads (during handshake)
                 if (cycle_count <= 10000 || (cycle_count >= 276000 && cycle_count <= 280000))
                     $display("EGRET_PLL_READ[%0d]: PC~%04x pll_ctrl=0x%02x bit6=%b",
@@ -853,8 +853,8 @@ always @(posedge clk) begin
                          cycle_count, pc_out[3], pc_ddr[3]);
         end
 
+        `ifdef VERBOSE_TRACE
         // Log Port B and C latch/DDR writes
-        // Use 5-bit address to distinguish Port C (0x02) from one-second timer (0x12)
         if (port_cs && !cpu_wr) begin
             case (cpu_addr[4:0])
                 5'h00: $display("EGRET[%0d] PC=%04x: Port A LATCH write = 0x%02x (was 0x%02x)",
@@ -876,27 +876,20 @@ always @(posedge clk) begin
             endcase
         end
 
-        // Log ALL port accesses (read or write) to addresses 0x01 and 0x05
-        // (Disabled for faster simulation)
-        // if (port_cs && (cpu_addr[3:0] == 4'h1 || cpu_addr[3:0] == 4'h5)) begin
-        //     $display("EGRET[%0d]: Port B access addr=%04x wr=%b din=%02x dout=%02x",
-        //              cycle_count, cpu_addr, cpu_wr, cpu_din, cpu_dout);
-        // end
-
         // Log Port B accesses (for communication tracking)
         if (port_cs && cpu_addr[4:0] == 5'h01) begin
             $display("EGRET[%0d]: PB %s data=0x%02x (PC=0x%04x) TIP=%b BYTEACK=%b",
-                     cycle_count, cpu_wr ? "READ" : "WRITE", cpu_wr ? cpu_din : cpu_dout, 
+                     cycle_count, cpu_wr ? "READ" : "WRITE", cpu_wr ? cpu_din : cpu_dout,
                      last_pc, ~via_tip_stable, ~via_byteack_in_stable);
         end
 
         // Log Port B output changes
-        // TREQ: pb_out[1]=0 means asserted (LOW), pb_out[1]=1 means deasserted (HIGH)
         if (pb_out != pb_out_prev) begin
             $display("EGRET[%0d]: PB OUT 0x%02x->0x%02x (CB1=%b CB2=%b TREQ=%b) TIP_in=%b",
                      cycle_count, pb_out_prev, pb_out,
                      pb_out[4], pb_out[5], pb_out[1], via_tip_stable);
         end
+        `endif
 
         // Log TREQ transitions (pb_out[1]=0 means TREQ active)
         if (pb_out[1] != treq_prev) begin
@@ -912,20 +905,19 @@ always @(posedge clk) begin
                      cycle_count, via_tip_prev, via_tip_stable);
         end
 
+        `ifdef VERBOSE_TRACE
         // Log CB1 clock edges
         if (pb_out[4] != pb_out_prev[4]) begin
             $display("EGRET[%0d]: CB1 %s edge (CB2_out=%b CB2_in=%b)",
                      cycle_count, pb_out[4] ? "RISING" : "FALLING",
                      pb_out[5], via_cb2_in_stable);
         end
+        `endif
 
         // Track program counter
         if (rom_cs && cpu_wr) begin  // cpu_wr=1 means read
             last_pc <= cpu_addr;
-            // Range-based tracing disabled - use KEY PC logging instead
-            // Uncomment specific ranges if needed for detailed debugging:
-            // if (cycle_count >= 279400 && cycle_count <= 280000)
-            //     $display("EGRET_PATH[%0d]: PC=%04x", cycle_count, addr13);
+            `ifdef VERBOSE_TRACE
             // Key firmware addresses (match MAME trace points)
             if (addr13 == 13'h120A ||  // Init check loop entry
                 addr13 == 13'h1210 ||  // BCLR 6, $A3
@@ -951,37 +943,30 @@ always @(posedge clk) begin
                 (addr13 >= 13'h14EF && addr13 <= 13'h152B))  // CB1 clocking
                 $display("EGRET[%0d]: KEY PC=0x%04x TIP=%b TREQ=%b",
                          cycle_count, addr13, ~via_tip_stable, ~pb_out[1]);
+            `endif
         end
 
-        // Debug Port A reads (especially in the wait loop around 0x0F9E)
-        // (Disabled for faster simulation)
-        // if (port_cs && cpu_wr && cpu_addr[3:0] == 4'h0) begin
-        //     $display("EGRET[%0d]: PORT A READ = 0x%02x (pa_out=%02x pa_in=%02x pa_ddr=%02x)",
-        //              cycle_count, cpu_din_r, pa_out, pa_in, pa_ddr);
-        // end
-
-        // MAME-format Port B read logging (matches EGRET pb_r format from egret.cpp)
-        // Format: "EGRET pb_r: %02x TIP=%d BYTEACK=%d (PC=%x)"
+        `ifdef VERBOSE_TRACE
+        // MAME-format Port B read logging
         if (port_cs && cpu_wr && cpu_addr[4:0] == 5'h01) begin
-            // Log when TIP is low (asserted) or periodically during polling
             if (!via_tip_stable || (cycle_count[7:0] == 8'h00 && last_pc >= 16'h12A0 && last_pc <= 16'h12B5)) begin
                 $display("EGRET pb_r: %02x TIP=%b BYTEACK=%b (PC=%04x) [ext=%02x]",
                          pb_in, ~via_tip_stable, ~via_byteack_in_stable, last_pc, pb_external);
             end
         end
 
-        // MAME-format Port B write logging (matches EGRET pb_w format from egret.cpp)
-        // Format: "EGRET pb_w: %02x CB1=%d CB2=%d TREQ=%d (PC=%x)"
+        // MAME-format Port B write logging
         if (port_cs && !cpu_wr && cpu_addr[4:0] == 5'h01) begin
             $display("EGRET pb_w: %02x CB1=%b CB2=%b TREQ=%b (PC=%04x)",
                      cpu_dout, cpu_dout[4], cpu_dout[5], ~cpu_dout[1], last_pc);
         end
 
-        // Log first 100 CPU cycles (reduced from 500 to minimize output)
+        // Log first 100 CPU cycles
         if (cycle_count < 100) begin
             $display("EGRET_CPU[%0d]: pc=%04x din=%02x dout=%02x",
                      cycle_count, cpu_addr, cpu_din, cpu_dout);
         end
+        `endif
     end
 end
 
