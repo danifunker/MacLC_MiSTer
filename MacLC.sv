@@ -202,7 +202,6 @@ module emu
 		"ODE,CPU,68020;",
 		"O4,Memory,2MB,10MB;",
 		"O56,Test Pattern,Off,Color Bars,Palette Test;",
-		"O9,Egret Reset,Normal,Bypass;",
 		"-;",
 		"R0,Reset & Apply CPU+Memory;",
 		"V,v",`BUILD_DATE
@@ -356,10 +355,20 @@ module emu
 	              (tp_hcount[8:6] == 3'd6) ? 8'hFF :
 	                                         8'h00;
 
+	// Debug indicator: 16x16 block in top-left corner
+	// Red = CPU held in reset, Green = CPU running
+	wire debug_block = (tp_hcount < 10'd16) && (tp_vcount < 10'd16);
+
 	// Video Output - Mac LC V8 video system (or test pattern)
-	assign VGA_R  = (test_mode == 2'd1) ? (v8_de ? tp_r : 8'd0) : v8_vga_r;
-	assign VGA_G  = (test_mode == 2'd1) ? (v8_de ? tp_g : 8'd0) : v8_vga_g;
-	assign VGA_B  = (test_mode == 2'd1) ? (v8_de ? tp_b : 8'd0) : v8_vga_b;
+	assign VGA_R  = (test_mode == 2'd1) ? (v8_de ? tp_r : 8'd0) :
+	                (debug_block && v8_de) ? (_cpuReset ? 8'h00 : 8'hFF) :
+	                v8_vga_r;
+	assign VGA_G  = (test_mode == 2'd1) ? (v8_de ? tp_g : 8'd0) :
+	                (debug_block && v8_de) ? (_cpuReset ? 8'hFF : 8'h00) :
+	                v8_vga_g;
+	assign VGA_B  = (test_mode == 2'd1) ? (v8_de ? tp_b : 8'd0) :
+	                (debug_block && v8_de) ? 8'h00 :
+	                v8_vga_b;
 	assign VGA_DE = v8_de;
 	assign VGA_VS = v8_vsync;
 	assign VGA_HS = v8_hsync;
