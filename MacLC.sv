@@ -201,6 +201,7 @@ module emu
 		"-;",
 		"ODE,CPU,68020;",
 		"O4,Memory,2MB,10MB;",
+		"O5,Test Pattern,Off,On;",
 		"-;",
 		"R0,Reset & Apply CPU+Memory;",
 		"V,v",`BUILD_DATE
@@ -310,10 +311,51 @@ module emu
 	assign CLK_VIDEO = clk_sys;
 	assign CE_PIXEL  = v8_ce_pix;
 
-	// Video Output - Mac LC V8 video system
-	assign VGA_R  = v8_vga_r;
-	assign VGA_G  = v8_vga_g;
-	assign VGA_B  = v8_vga_b;
+	// Test pattern: colored vertical bars when enabled via OSD
+	wire test_pattern = status[5];
+	wire [7:0] tp_r, tp_g, tp_b;
+	// Use h_count from v8_video to generate 8 colored bars
+	// v8_video exposes hsync/hblank timing; use a counter based on CE_PIXEL
+	reg [9:0] tp_hcount;
+	reg [9:0] tp_vcount;
+	always @(posedge clk_sys) begin
+		if (v8_ce_pix) begin
+			if (v8_hsync) tp_hcount <= 0;
+			else tp_hcount <= tp_hcount + 1'd1;
+			if (v8_vsync) tp_vcount <= 0;
+			else if (v8_hsync && tp_hcount == 0) tp_vcount <= tp_vcount + 1'd1;
+		end
+	end
+	// 8 color bars based on horizontal position (64 pixels each for 512 wide)
+	assign tp_r = (tp_hcount[8:6] == 3'd0) ? 8'hFF :  // White
+	              (tp_hcount[8:6] == 3'd1) ? 8'hFF :  // Yellow
+	              (tp_hcount[8:6] == 3'd2) ? 8'h00 :  // Cyan
+	              (tp_hcount[8:6] == 3'd3) ? 8'h00 :  // Green
+	              (tp_hcount[8:6] == 3'd4) ? 8'hFF :  // Magenta
+	              (tp_hcount[8:6] == 3'd5) ? 8'hFF :  // Red
+	              (tp_hcount[8:6] == 3'd6) ? 8'h00 :  // Blue
+	                                         8'h00;   // Black
+	assign tp_g = (tp_hcount[8:6] == 3'd0) ? 8'hFF :
+	              (tp_hcount[8:6] == 3'd1) ? 8'hFF :
+	              (tp_hcount[8:6] == 3'd2) ? 8'hFF :
+	              (tp_hcount[8:6] == 3'd3) ? 8'hFF :
+	              (tp_hcount[8:6] == 3'd4) ? 8'h00 :
+	              (tp_hcount[8:6] == 3'd5) ? 8'h00 :
+	              (tp_hcount[8:6] == 3'd6) ? 8'h00 :
+	                                         8'h00;
+	assign tp_b = (tp_hcount[8:6] == 3'd0) ? 8'hFF :
+	              (tp_hcount[8:6] == 3'd1) ? 8'h00 :
+	              (tp_hcount[8:6] == 3'd2) ? 8'hFF :
+	              (tp_hcount[8:6] == 3'd3) ? 8'h00 :
+	              (tp_hcount[8:6] == 3'd4) ? 8'hFF :
+	              (tp_hcount[8:6] == 3'd5) ? 8'h00 :
+	              (tp_hcount[8:6] == 3'd6) ? 8'hFF :
+	                                         8'h00;
+
+	// Video Output - Mac LC V8 video system (or test pattern)
+	assign VGA_R  = test_pattern ? (v8_de ? tp_r : 8'd0) : v8_vga_r;
+	assign VGA_G  = test_pattern ? (v8_de ? tp_g : 8'd0) : v8_vga_g;
+	assign VGA_B  = test_pattern ? (v8_de ? tp_b : 8'd0) : v8_vga_b;
 	assign VGA_DE = v8_de;
 	assign VGA_VS = v8_vsync;
 	assign VGA_HS = v8_hsync;
