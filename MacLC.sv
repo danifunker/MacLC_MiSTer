@@ -357,7 +357,7 @@ module emu
 
 	// Debug indicator: 16x16 block in top-left corner
 	// Red = CPU held in reset, Green = CPU running
-	wire debug_block = (tp_hcount < 10'd16) && (tp_vcount < 10'd16);
+	wire debug_block = (tp_hcount < 10'd100) && (tp_vcount < 10'd100);
 
 	// Video Output - Mac LC V8 video system (or test pattern)
 	assign VGA_R  = (test_mode == 2'd1) ? (v8_de ? tp_r : 8'd0) :
