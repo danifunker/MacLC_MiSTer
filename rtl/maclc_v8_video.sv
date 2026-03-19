@@ -97,12 +97,21 @@ end
 
 `ifdef SIMULATION
 reg [3:0] monitor_id_prev;
+reg [31:0] latch_count;
 always @(posedge clk_sys) begin
     if (monitor_id != monitor_id_prev) begin
         `ifdef VERBOSE_TRACE
         $display("V8: monitor_id changed to %h @%0t", monitor_id, $time);
         `endif
         monitor_id_prev <= monitor_id;
+    end
+    if (reset)
+        latch_count <= 0;
+    else if (video_latch && !hblank && !vblank) begin
+        if (latch_count < 10 || (latch_count % 100000 == 0))
+            $display("V8 FETCH[%0d] @%0t: addr=%h data=%h mode=%d pixel_idx=%h palette=%h",
+                latch_count, $time, video_addr, video_data_in, video_mode, pixel_index, palette_data);
+        latch_count <= latch_count + 1;
     end
 end
 `endif

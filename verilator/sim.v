@@ -166,7 +166,7 @@ module emu
 	assign AUDIO_R = {audio[10:0], 5'b00000};
 
 	// Mac LC memory configuration
-	wire [7:0] configRAMSize = 8'hE4; // 10MB: 8MB SIMM + 2MB board
+	wire [7:0] configRAMSize = 8'h24; // 2MB: no SIMM, 2MB board only
 	wire [7:0] pvia_ram_config_out;   // Active RAM config from pseudovia
 
 	// Serial Ports (loopback for sim)
@@ -708,6 +708,14 @@ module emu
 	assign debug_selectIWM = selectIWM;
 	assign debug_selectASC = selectASC;
 	assign debug_selectVRAM = selectVRAM;
+`ifdef SIMULATION
+	always @(posedge clk_sys) begin
+		if (selectPseudoVIA && selectVRAM)
+			$display("BUG: selectPseudoVIA AND selectVRAM both active! addr=%h @%0t", cpuAddr, $time);
+		if (selectPseudoVIA && !_cpuRW && cpuBusControl)
+			$display("PVIA ACTIVE WRITE: cpuAddr=%h data=%h @%0t", cpuAddr, cpuDataOut, $time);
+	end
+`endif
 	assign debug_cpuAddr = cpuAddr;
 	assign debug_cpuDataIn = cpuDataOut;  // CPU writes this to peripherals
 	assign debug_cpuDataOut = dataControllerDataOut;  // Peripherals send this to CPU

@@ -70,8 +70,12 @@ wire irq_pending = |active_ifr;
 // Debug counter
 integer pvia_reg10_reads = 0;
 
-// Register decode: {addr[4], addr[1:0]} for native mode
+// Register decode: use full byte offset for native mode (matching MAME)
+// Valid native registers: 0x00-0x03 (Group 0), 0x10-0x13 (Group 1), 0x20-0x2F (MSC)
+// Only addr[4] and addr[1:0] select the register, but other bits must be zero
+wire [7:0] native_offset = addr[7:0];
 wire [2:0] reg_sel = {addr[4], addr[1:0]};
+wire native_reg_valid = (native_offset[7:5] == 3'b000) && (native_offset[3:2] == 2'b00);
 
 // VIA-compat mode uses addr[1:0] to alias Group 0
 wire is_native = (addr[12:8] == 5'b00000);
@@ -85,7 +89,7 @@ always @(posedge clk_sys) begin
         slot_ier <= 8'h00;
         ier <= 8'h00;
         irq_out <= 1'b0;
-        video_config <= 8'h02;  // Default to 4bpp mode
+        video_config <= 8'h03;  // Default to 8bpp mode
     end else begin
         // Update slot IRQ summary in IFR (bit 1 = any slot)
         if (any_slot_irq)
@@ -103,7 +107,7 @@ always @(posedge clk_sys) begin
         end
 
         if (req) begin
-            if (is_native) begin
+            if (is_native && native_reg_valid) begin
                 // Native mode: decode {addr[4], addr[1:0]}
                 if (we) begin
                     case (reg_sel)
@@ -140,9 +144,9 @@ always @(posedge clk_sys) begin
 
                         3'b100: begin  // $10: Video Config
                             video_config <= data_in;
-                            `ifdef VERBOSE_TRACE
-                            $display("PVIA: WRITE Video Config = %02x (bpp mode = %d) @%0t",
-                                     data_in, data_in[2:0], $time);
+                            `ifdef SIMULATION
+                            $display("PVIA: WRITE Video Config = %02x (bpp mode = %d) addr=%h @%0t",
+                                     data_in, data_in[2:0], addr, $time);
                             `endif
                         end
 
@@ -205,7 +209,7 @@ always @(posedge clk_sys) begin
                         3'b100: begin  // $10: Video Config
                             data_out <= (video_config & 8'hC7) | ((monitor_id[2:0]) << 3);
                             pvia_reg10_reads <= pvia_reg10_reads + 1;
-                            `ifdef VERBOSE_TRACE
+                            `ifdef SIMULATION
                             $display("PVIA: READ Video Config -> %02x @%0t",
                                      (video_config & 8'hC7) | ((monitor_id[2:0]) << 3), $time);
                             `endif
