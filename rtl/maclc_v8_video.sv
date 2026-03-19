@@ -101,13 +101,15 @@ always @(posedge clk_sys) begin
     end
 end
 
+reg de_raw;  // Internal DE before pipeline delay
+
 always @(posedge clk_sys) begin
     if (pix_en) begin
         hsync <= (h_count >= h_sync_start && h_count < h_sync_end);
         vsync <= (v_count >= v_sync_start && v_count < v_sync_end);
         hblank <= (h_count >= h_active);
         vblank <= (v_count >= v_active);
-        de <= (h_count < h_active) && (v_count < v_active);
+        de_raw <= (h_count < h_active) && (v_count < v_active);
     end
 end
 
@@ -182,10 +184,20 @@ reg [15:0] video_data;
 reg [15:0] pixel_shift;
 reg [3:0]  shift_count;
 
-// Latch data from VRAM - keep for 16bpp direct access
+// Latch data from VRAM - capture on any clock (video_latch is 1 clk_sys wide)
+// Must not be gated by pix_en or we miss 50% of latches
+reg video_latch_pending;
+reg [15:0] video_latch_data;
+
 always @(posedge clk_sys) begin
-    if (video_latch && !hblank && !vblank)
+    if (video_latch && !hblank && !vblank) begin
         video_data <= video_data_in;
+        video_latch_data <= video_data_in;
+        video_latch_pending <= 1'b1;
+    end
+    // Clear pending flag when consumed by shift register on pix_en
+    if (pix_en && video_latch_pending && !hblank && !vblank)
+        video_latch_pending <= 1'b0;
 end
 
 // --- Shift Register Logic ---
@@ -196,9 +208,9 @@ always @(posedge clk_sys) begin
         if (hblank || vblank) begin
             pixel_shift <= 16'hFFFF;  // Initialize to "black" pattern for Mac
             shift_count <= 0;
-        end else if (video_latch) begin
-            // Load new data directly when it arrives
-            pixel_shift <= video_data_in;
+        end else if (video_latch_pending) begin
+            // Load new data when latch is pending
+            pixel_shift <= video_latch_data;
             shift_count <= 1; // Start at 1 so first pixel displays on this clock
         end else begin
             shift_count <= shift_count + 1;
@@ -243,12 +255,13 @@ reg [2:0]  video_mode_d1;
 reg [15:0] video_data_d1;
 
 always @(posedge clk_sys) begin
-    de_d1         <= de;
+    de_d1         <= de_raw;
     video_mode_d1 <= video_mode;
     video_data_d1 <= video_data;
 end
 
 always @(posedge clk_sys) begin
+    de <= de_d1;  // Align DE output with RGB (1-cycle palette latency)
     if (de_d1) begin
         if (video_mode_d1 == 3'd4) begin
             // 16bpp Direct Color (X-5-5-5)
