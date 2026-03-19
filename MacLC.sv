@@ -202,6 +202,7 @@ module emu
 		"ODE,CPU,68020;",
 		"O4,Memory,2MB,10MB;",
 		"O56,Test Pattern,Off,Color Bars,Palette Test;",
+		"O9,Egret Reset,Normal,Bypass;",
 		"-;",
 		"R0,Reset & Apply CPU+Memory;",
 		"V,v",`BUILD_DATE

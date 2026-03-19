@@ -9,6 +9,7 @@ module dataController_top(
 	// system control:
 	input _systemReset,
 	input pseudovia_irq,  // PseudoVIA interrupt (VBlank, slots)
+	input egret_reset_bypass,  // 1 = bypass Egret reset hold (debug)
 
 	// 68000 CPU control:
 	output _cpuReset,
@@ -174,7 +175,8 @@ module dataController_top(
 
 `ifdef USE_EGRET_CPU
 	// With real Egret: 68000 reset is controlled by Egret (but respect minimum time)
-	assign _cpuReset = (minResetPassed && !egret_reset_680x0) ? 1'b1 : 1'b0;
+	// egret_reset_bypass allows releasing CPU without waiting for Egret (debug)
+	assign _cpuReset = (minResetPassed && (egret_reset_bypass || !egret_reset_680x0)) ? 1'b1 : 1'b0;
 `else
 	// Without Egret: just use the timer
 	assign _cpuReset = minResetPassed ? 1'b1 : 1'b0;
