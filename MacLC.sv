@@ -201,7 +201,7 @@ module emu
 		"-;",
 		"ODE,CPU,68020;",
 		"O4,Memory,2MB,10MB;",
-		"O5,Test Pattern,Off,On;",
+		"O56,Test Pattern,Off,Color Bars,Palette Test;",
 		"-;",
 		"R0,Reset & Apply CPU+Memory;",
 		"V,v",`BUILD_DATE
@@ -314,8 +314,8 @@ module emu
 	assign CLK_VIDEO = clk_sys;
 	assign CE_PIXEL  = v8_ce_pix;
 
-	// Test pattern: colored vertical bars when enabled via OSD
-	wire test_pattern = status[5];
+	// Test pattern modes: 0=Off, 1=Color Bars, 2=Palette Test
+	wire [1:0] test_mode = status[6:5];
 	wire [7:0] tp_r, tp_g, tp_b;
 	// Use h_count from v8_video to generate 8 colored bars
 	// v8_video exposes hsync/hblank timing; use a counter based on CE_PIXEL
@@ -356,9 +356,9 @@ module emu
 	                                         8'h00;
 
 	// Video Output - Mac LC V8 video system (or test pattern)
-	assign VGA_R  = test_pattern ? (v8_de ? tp_r : 8'd0) : v8_vga_r;
-	assign VGA_G  = test_pattern ? (v8_de ? tp_g : 8'd0) : v8_vga_g;
-	assign VGA_B  = test_pattern ? (v8_de ? tp_b : 8'd0) : v8_vga_b;
+	assign VGA_R  = (test_mode == 2'd1) ? (v8_de ? tp_r : 8'd0) : v8_vga_r;
+	assign VGA_G  = (test_mode == 2'd1) ? (v8_de ? tp_g : 8'd0) : v8_vga_g;
+	assign VGA_B  = (test_mode == 2'd1) ? (v8_de ? tp_b : 8'd0) : v8_vga_b;
 	assign VGA_DE = v8_de;
 	assign VGA_VS = v8_vsync;
 	assign VGA_HS = v8_hsync;
@@ -618,7 +618,8 @@ module emu
 		.req(selectAriel && cpuBusControl),
 
 		// The RAMDAC now takes the index from v8_video and returns RGB data
-		.pixel_index(ariel_pixel_addr),
+		// Palette test mode: override with h_count gradient to test palette independently of SDRAM
+		.pixel_index(test_mode == 2'd2 ? tp_hcount[8:1] : ariel_pixel_addr),
 		.rgb_out(ariel_palette_data)
 	);
 
