@@ -98,7 +98,7 @@ reg  [7:0] intram[0:367];    // Internal RAM: intram[x] = CPU addr 0x90+x (RAM a
 reg  [7:0] ram_dout;
 
 // ROM
-reg  [7:0] rom[0:ROM_SIZE-1];
+reg  [7:0] rom[0:8191];  // 2^13 to match 13-bit rom_addr width (only 4352 bytes used)
 reg  [7:0] rom_dout;
 
 // PRAM storage (256 bytes loaded from disk)

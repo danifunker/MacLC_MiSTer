@@ -199,7 +199,6 @@ module emu
 		"OFG,Video Mode,4bpp,1bpp,2bpp,8bpp,16bpp;",
 		"O1011,Monitor,512x384 12in RGB,640x480 VGA,Portrait;",
 		"-;",
-		"O5,Speed,Normal,16MHz;",
 		"ODE,CPU,68020;",
 		"O4,Memory,2MB,10MB;",
 		"-;",
@@ -223,7 +222,7 @@ module emu
 	reg       status_mem = 1'b1;
 	localparam [1:0] status_cpu = 2'b10; // 68020
 	reg       n_reset = 0;
-	wire      status_turbo = 1'b1;
+	// Mac LC always runs at C15M (~15.67 MHz) - use 16 MHz clock enables
 	always @(posedge clk_sys) begin
 		reg [15:0] rst_cnt;
 
@@ -404,23 +403,23 @@ module emu
 	wire dskReadAckExt;
 	wire [21:0] dskReadAddrExt;
 
-	// dtack generation in turbo mode
-	reg  turbo_dtack_en, cpuBusControl_d;
+	// dtack generation for 16 MHz mode
+	reg  dtack_en, cpuBusControl_d;
 	always @(posedge clk_sys) begin
 		if (!_cpuReset) begin
-			turbo_dtack_en <= 0;
+			dtack_en <= 0;
 		end
 		else begin
 			cpuBusControl_d <= cpuBusControl;
-			if (_cpuAS) turbo_dtack_en <= 0;
-			if (!_cpuAS & ((!cpuBusControl_d & cpuBusControl) | (!selectROM & !selectRAM))) turbo_dtack_en <= 1;
+			if (_cpuAS) dtack_en <= 0;
+			if (!_cpuAS & ((!cpuBusControl_d & cpuBusControl) | (!selectROM & !selectRAM))) dtack_en <= 1;
 		end
 	end
 
 	assign      _cpuVPA = (cpuFC == 3'b111) ? 1'b0 : ~(!_cpuAS && cpuAddr[23:21] == 3'b111);
-	assign      _cpuDTACK = ~(!_cpuAS && cpuAddr[23:21] != 3'b111) | (status_turbo & !turbo_dtack_en);
-	wire        cpu_en_p      = status_turbo ? clk16_en_p : clk8_en_p;
-	wire        cpu_en_n      = status_turbo ? clk16_en_n : clk8_en_n;
+	assign      _cpuDTACK = ~(!_cpuAS && cpuAddr[23:21] != 3'b111) | !dtack_en;
+	wire        cpu_en_p      = clk16_en_p;
+	wire        cpu_en_n      = clk16_en_n;
 	assign      _cpuReset_o   = tg68_reset_n;
 	assign      _cpuRW        = tg68_rw;
 	assign      _cpuAS        = tg68_as_n;
@@ -465,7 +464,7 @@ module emu
 		.reset_n    ( tg68_reset_n ),
 
 		.E          (  ),
-		.E_div      ( status_turbo ),
+		.E_div      ( 1'b1 ),
 		.E_PosClkEn ( tg68_E_falling ),
 		.E_NegClkEn ( tg68_E_rising  ),
 		.vma_n      ( tg68_vma_n ),
@@ -494,7 +493,6 @@ module emu
 		._cpuLDS(_cpuLDS),
 		._cpuRW(_cpuRW),
 		._cpuAS(_cpuAS),
-		.turbo(status_turbo),
 		.ram_config(pvia_ram_config_out),
 		.memoryAddr(memoryAddr),
 		.memoryLatch(memoryLatch),

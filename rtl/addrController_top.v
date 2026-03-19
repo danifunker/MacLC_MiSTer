@@ -8,7 +8,6 @@ module addrController_top(
 	output clk16_en_n,
 
 	// system config:
-	input turbo,
 	input [7:0] ram_config,  // V8 RAM config byte from pseudovia
 
 	// 68000 CPU memory interface:
