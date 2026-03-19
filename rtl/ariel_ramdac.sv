@@ -16,7 +16,10 @@ module ariel_ramdac(
 
     // Palette lookup interface
     input [7:0] pixel_index,
-    output reg [23:0] rgb_out
+    output reg [23:0] rgb_out,
+
+    // Debug
+    output reg ariel_written  // Goes high when any CPU write occurs
 );
 
 // Ariel register map (matching MAME ariel.cpp - byte offsets)
@@ -67,6 +70,7 @@ always @(posedge clk_sys) begin
         palette_addr <= 8'd0;
         color_comp <= 2'd0;
         control_reg <= 8'd0;
+        ariel_written <= 1'b0;
         key_color <= 8'd0;
         palette_latch <= 24'h0;
         init_active <= 1'b1;
@@ -79,6 +83,7 @@ always @(posedge clk_sys) begin
         init_addr <= init_addr + 9'd1;
     end else if (req) begin
         if (we) begin
+            ariel_written <= 1'b1;
             case (byte_reg)
                 REG_ADDR: begin
                     // Writing address resets the R/G/B component counter

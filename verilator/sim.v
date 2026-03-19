@@ -440,7 +440,8 @@ module emu
 		.req(selectAriel && cpuBusControl),
 
 		.pixel_index(ariel_pixel_addr),
-		.rgb_out(ariel_palette_data)
+		.rgb_out(ariel_palette_data),
+		.ariel_written()  // Not used in sim
 	);
 
 	// Debug: disabled for now

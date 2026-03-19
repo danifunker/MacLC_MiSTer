@@ -355,19 +355,24 @@ module emu
 	              (tp_hcount[8:6] == 3'd6) ? 8'hFF :
 	                                         8'h00;
 
-	// Debug indicator: 16x16 block in top-left corner
-	// Red = CPU held in reset, Green = CPU running
-	wire debug_block = (tp_hcount < 10'd100) && (tp_vcount < 10'd100);
+	// Debug indicators in top-left corner
+	// Block 1 (left):  Red = CPU held in reset, Green = CPU running
+	// Block 2 (right): Yellow = no Ariel writes, Blue = Ariel has been written
+	wire debug_block1 = (tp_hcount < 10'd50) && (tp_vcount < 10'd50);
+	wire debug_block2 = (tp_hcount >= 10'd60) && (tp_hcount < 10'd110) && (tp_vcount < 10'd50);
 
 	// Video Output - Mac LC V8 video system (or test pattern)
 	assign VGA_R  = (test_mode == 2'd1) ? (v8_de ? tp_r : 8'd0) :
-	                (debug_block && v8_de) ? (_cpuReset ? 8'h00 : 8'hFF) :
+	                (debug_block1 && v8_de) ? (_cpuReset ? 8'h00 : 8'hFF) :
+	                (debug_block2 && v8_de) ? (ariel_written ? 8'h00 : 8'hFF) :
 	                v8_vga_r;
 	assign VGA_G  = (test_mode == 2'd1) ? (v8_de ? tp_g : 8'd0) :
-	                (debug_block && v8_de) ? (_cpuReset ? 8'hFF : 8'h00) :
+	                (debug_block1 && v8_de) ? (_cpuReset ? 8'hFF : 8'h00) :
+	                (debug_block2 && v8_de) ? (ariel_written ? 8'h00 : 8'hFF) :
 	                v8_vga_g;
 	assign VGA_B  = (test_mode == 2'd1) ? (v8_de ? tp_b : 8'd0) :
-	                (debug_block && v8_de) ? 8'h00 :
+	                (debug_block1 && v8_de) ? 8'h00 :
+	                (debug_block2 && v8_de) ? (ariel_written ? 8'hFF : 8'h00) :
 	                v8_vga_b;
 	assign VGA_DE = v8_de;
 	assign VGA_VS = v8_vsync;
@@ -630,8 +635,10 @@ module emu
 		// The RAMDAC now takes the index from v8_video and returns RGB data
 		// Palette test mode: override with h_count gradient to test palette independently of SDRAM
 		.pixel_index(test_mode == 2'd2 ? tp_hcount[8:1] : ariel_pixel_addr),
-		.rgb_out(ariel_palette_data)
+		.rgb_out(ariel_palette_data),
+		.ariel_written(ariel_written)
 	);
+	wire ariel_written;
 
 	wire [7:0] pvia_video_config;
 	wire [7:0] asc_data_out;
