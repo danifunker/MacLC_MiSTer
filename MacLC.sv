@@ -229,7 +229,10 @@ module emu
 
 		if (clk8_en_p) begin
 			// various sources can reset the mac
-			if(~pll_locked || status[0] || buttons[1] || RESET || ~_cpuReset_o) begin
+			// NOTE: Do NOT include ~_cpuReset_o here — the CPU executes the RESET
+			// instruction during boot to reset peripherals, which would cause an
+			// infinite reset loop if fed back to the system reset.
+			if(~pll_locked || status[0] || buttons[1] || RESET) begin
 				rst_cnt <= '1;
 				n_reset <= 0;
 			end
