@@ -372,23 +372,50 @@ module emu
 				dbg_y <= 0;
 		end
 	end
-	// Block 1 (left):  Red = CPU held in reset, Green = CPU running
-	// Block 2 (right): Yellow = no Ariel writes, Blue = Ariel has been written
+	// Block 1 (left):   Red = CPU held in reset, Green = CPU running
+	// Block 2 (middle): Yellow = no Ariel writes, Blue = Ariel has been written
+	// Block 3 (right):  Magenta = CPU address frozen, Cyan = CPU address changing
 	wire debug_block1 = (dbg_x < 10'd50) && (dbg_y < 10'd50);
 	wire debug_block2 = (dbg_x >= 10'd60) && (dbg_x < 10'd110) && (dbg_y < 10'd50);
+	wire debug_block3 = (dbg_x >= 10'd120) && (dbg_x < 10'd170) && (dbg_y < 10'd50);
+
+	// CPU activity detector: latch whether address changed in last ~1M clocks
+	reg cpu_active;
+	reg [23:0] cpu_addr_prev;
+	reg [19:0] cpu_idle_counter;
+	always @(posedge clk_sys) begin
+		if (!_cpuReset) begin
+			cpu_active <= 0;
+			cpu_idle_counter <= 0;
+		end else begin
+			if (cpuAddr != cpu_addr_prev) begin
+				cpu_active <= 1;
+				cpu_idle_counter <= 0;
+				cpu_addr_prev <= cpuAddr;
+			end else begin
+				if (cpu_idle_counter == 20'hFFFFF)
+					cpu_active <= 0;
+				else
+					cpu_idle_counter <= cpu_idle_counter + 1;
+			end
+		end
+	end
 
 	// Video Output - Mac LC V8 video system (or test pattern)
 	assign VGA_R  = (test_mode == 2'd1) ? (v8_de ? tp_r : 8'd0) :
 	                (debug_block1 && v8_de) ? (_cpuReset ? 8'h00 : 8'hFF) :
 	                (debug_block2 && v8_de) ? (ariel_written ? 8'h00 : 8'hFF) :
+	                (debug_block3 && v8_de) ? (cpu_active ? 8'h00 : 8'hFF) :
 	                v8_vga_r;
 	assign VGA_G  = (test_mode == 2'd1) ? (v8_de ? tp_g : 8'd0) :
 	                (debug_block1 && v8_de) ? (_cpuReset ? 8'hFF : 8'h00) :
 	                (debug_block2 && v8_de) ? (ariel_written ? 8'h00 : 8'hFF) :
+	                (debug_block3 && v8_de) ? (cpu_active ? 8'hFF : 8'h00) :
 	                v8_vga_g;
 	assign VGA_B  = (test_mode == 2'd1) ? (v8_de ? tp_b : 8'd0) :
 	                (debug_block1 && v8_de) ? 8'h00 :
 	                (debug_block2 && v8_de) ? (ariel_written ? 8'hFF : 8'h00) :
+	                (debug_block3 && v8_de) ? (cpu_active ? 8'hFF : 8'hFF) :
 	                v8_vga_b;
 	assign VGA_DE = v8_de;
 	assign VGA_VS = v8_vsync;
