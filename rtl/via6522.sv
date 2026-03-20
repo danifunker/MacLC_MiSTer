@@ -59,7 +59,13 @@ module via6522 (
     // Shift register status (for CUDA interface)
     output wire        sr_out_active,  // Shift register is actively shifting
     output wire        sr_out_dir,     // Shift direction: 0=in, 1=out
-    output wire        sr_ext_clk      // Using external clock (CB1)
+    output wire        sr_ext_clk,     // Using external clock (CB1)
+
+    // Debug outputs for FPGA SR diagnostics
+    output wire [2:0]  sr_dbg_bit_cnt,     // Current bit counter (7→0)
+    output wire        sr_dbg_edge_pending, // Rising edge pending (shift-in)
+    output wire        sr_dbg_fall_pending, // Falling edge pending (shift-out)
+    output wire [7:0]  sr_dbg_shift_reg     // Current shift register value
 );
     localparam [15:0] latch_reset_pattern = 16'h5550;
 
@@ -719,8 +725,12 @@ module via6522 (
     end
 `endif
 
-    // In external clock mode, latch rising edges until consumed by falling phase
+    // In external clock mode, latch rising/falling edges until consumed by falling phase
     reg ext_edge_pending = 1'b0;
+    reg ext_fall_edge_pending = 1'b0;
+    // Latch CB2 value at the exact moment of CB1 rising edge (for shift-in mode)
+    // This prevents sampling stale/changed CB2 data when the falling phase arrives later
+    reg cb2_latched = 1'b0;
 
     always @(posedge clock) begin
         ser_cb2_c <= cb2_i;
@@ -733,6 +743,17 @@ module via6522 (
             // Latch rising edge until falling phase consumes it
             if (~shift_clock_d & shift_clock) begin
                 ext_edge_pending <= 1'b1;
+                // Capture CB2 at the exact moment of CB1 rising edge
+                // Egret firmware sets CB2 data BEFORE the rising edge of CB1,
+                // so this captures the correct bit value even if CB2 changes later
+                cb2_latched <= cb2_i;
+            end
+            // Latch falling edge for shift-out mode (mode 7)
+            // Egret receive routine: CB1 LOW triggers VIA to shift out next bit on CB2
+            // Without latching, the falling edge may be missed if it doesn't
+            // coincide with the VIA's E-clock falling phase
+            if (shift_clock_d & ~shift_clock) begin
+                ext_fall_edge_pending <= 1'b1;
             end
         end else if (rising == 1'b1) begin
             if (shift_active == 1'b0) begin
@@ -749,9 +770,12 @@ module via6522 (
 
         if (falling == 1'b1) begin
             shift_timer_tick <= timer_b_tick;
-            // Clear the pending edge after falling phase processes it
+            // Clear pending edges after falling phase processes them
             if (ext_clock_mode && ext_edge_pending) begin
                 ext_edge_pending <= 1'b0;
+            end
+            if (ext_clock_mode && ext_fall_edge_pending) begin
+                ext_fall_edge_pending <= 1'b0;
             end
         end
 
@@ -759,6 +783,8 @@ module via6522 (
             shift_clock <= 1'b1;
             shift_clock_d <= 1'b1;
             ext_edge_pending <= 1'b0;
+            ext_fall_edge_pending <= 1'b0;
+            cb2_latched <= 1'b0;
         end
     end
 
@@ -787,8 +813,15 @@ module via6522 (
                 $display("VIA: SR write = 0x%02x, ACR=0x%02x (mode=%d, dir=%b)",
                          data_in, acr, shift_mode_control, shift_dir);
                 `endif
-            end else if (shift_dir == 1'b1 && shift_tick_f == 1'b1) begin // output
-                shift_reg <= {shift_reg[6:0], shift_reg[7]};
+            end else if (shift_dir == 1'b1) begin // output
+                // In external clock mode (mode 7), use ext_fall_edge_pending to catch
+                // CB1 falling edges that may not coincide with the VIA's E-clock phase.
+                // Egret receive routine pulses CB1 LOW to trigger shift-out, then reads CB2.
+                // For internal clock modes, use shift_tick_f (combinational).
+                if ((ext_clock_mode && ext_fall_edge_pending == 1'b1) ||
+                    (!ext_clock_mode && shift_tick_f == 1'b1)) begin
+                    shift_reg <= {shift_reg[6:0], shift_reg[7]};
+                end
             end else if (shift_mode_control != 3'b000 && shift_dir == 1'b0) begin // input (only when mode != 0)
                 // In external clock mode (mode 3), use ext_edge_pending to catch CB1 edges
                 // that happen between falling phases. For internal clock modes, use shift_tick_r.
@@ -797,10 +830,12 @@ module via6522 (
                 if ((ext_clock_mode && ext_edge_pending == 1'b1) ||
                     (shift_clk_sel != 2'b11 && shift_tick_r == 1'b1)) begin
                     `ifdef VERBOSE_TRACE
-                    $display("VIA: SR shift IN - CB2=%b (cb2_i=%b), SR 0x%02x -> 0x%02x, mode=%d, ext_clk=%b",
-                             ser_cb2_c, cb2_i, shift_reg, {shift_reg[6:0], cb2_i}, shift_mode_control, (ext_clock_mode));
+                    $display("VIA: SR shift IN - CB2=%b (cb2_latched=%b), SR 0x%02x -> 0x%02x, mode=%d, ext_clk=%b",
+                             ser_cb2_c, cb2_latched, shift_reg, {shift_reg[6:0], (ext_clock_mode ? cb2_latched : cb2_i)}, shift_mode_control, (ext_clock_mode));
                     `endif
-                    shift_reg <= {shift_reg[6:0], cb2_i};
+                    // In external clock mode, use CB2 value latched at CB1 rising edge
+                    // to avoid sampling stale data. For internal modes, use live cb2_i.
+                    shift_reg <= {shift_reg[6:0], (ext_clock_mode ? cb2_latched : cb2_i)};
                 end
             end
         end
@@ -902,5 +937,11 @@ module via6522 (
     assign sr_out_active = shift_active;
     assign sr_out_dir    = shift_dir;
     assign sr_ext_clk    = (ext_clock_mode);  // External clock mode (CB1)
+
+    // Debug outputs for FPGA SR diagnostics (SignalTap / on-screen indicators)
+    assign sr_dbg_bit_cnt     = bit_cnt;
+    assign sr_dbg_edge_pending = ext_edge_pending;
+    assign sr_dbg_fall_pending = ext_fall_edge_pending;
+    assign sr_dbg_shift_reg   = shift_reg;
 
 endmodule

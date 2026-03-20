@@ -201,7 +201,7 @@ module emu
 		"-;",
 		"ODE,CPU,68020;",
 		"O4,Memory,2MB,10MB;",
-		"O56,Test Pattern,Off,Color Bars,Palette Test;",
+		"O6,Palette Test,Off,On;",
 		"-;",
 		"R0,Reset & Apply CPU+Memory;",
 		"V,v",`BUILD_DATE
@@ -314,48 +314,10 @@ module emu
 	assign CLK_VIDEO = clk_sys;
 	assign CE_PIXEL  = v8_ce_pix;
 
-	// Test pattern modes: 0=Off, 1=Color Bars, 2=Palette Test
-	wire [1:0] test_mode = status[6:5];
-	wire [7:0] tp_r, tp_g, tp_b;
-	// Use h_count from v8_video to generate 8 colored bars
-	// v8_video exposes hsync/hblank timing; use a counter based on CE_PIXEL
-	reg [9:0] tp_hcount;
-	reg [9:0] tp_vcount;
-	always @(posedge clk_sys) begin
-		if (v8_ce_pix) begin
-			if (v8_hsync) tp_hcount <= 0;
-			else tp_hcount <= tp_hcount + 1'd1;
-			if (v8_vsync) tp_vcount <= 0;
-			else if (v8_hsync && tp_hcount == 0) tp_vcount <= tp_vcount + 1'd1;
-		end
-	end
-	// 8 color bars based on horizontal position (64 pixels each for 512 wide)
-	assign tp_r = (tp_hcount[8:6] == 3'd0) ? 8'hFF :  // White
-	              (tp_hcount[8:6] == 3'd1) ? 8'hFF :  // Yellow
-	              (tp_hcount[8:6] == 3'd2) ? 8'h00 :  // Cyan
-	              (tp_hcount[8:6] == 3'd3) ? 8'h00 :  // Green
-	              (tp_hcount[8:6] == 3'd4) ? 8'hFF :  // Magenta
-	              (tp_hcount[8:6] == 3'd5) ? 8'hFF :  // Red
-	              (tp_hcount[8:6] == 3'd6) ? 8'h00 :  // Blue
-	                                         8'h00;   // Black
-	assign tp_g = (tp_hcount[8:6] == 3'd0) ? 8'hFF :
-	              (tp_hcount[8:6] == 3'd1) ? 8'hFF :
-	              (tp_hcount[8:6] == 3'd2) ? 8'hFF :
-	              (tp_hcount[8:6] == 3'd3) ? 8'hFF :
-	              (tp_hcount[8:6] == 3'd4) ? 8'h00 :
-	              (tp_hcount[8:6] == 3'd5) ? 8'h00 :
-	              (tp_hcount[8:6] == 3'd6) ? 8'h00 :
-	                                         8'h00;
-	assign tp_b = (tp_hcount[8:6] == 3'd0) ? 8'hFF :
-	              (tp_hcount[8:6] == 3'd1) ? 8'h00 :
-	              (tp_hcount[8:6] == 3'd2) ? 8'hFF :
-	              (tp_hcount[8:6] == 3'd3) ? 8'h00 :
-	              (tp_hcount[8:6] == 3'd4) ? 8'hFF :
-	              (tp_hcount[8:6] == 3'd5) ? 8'h00 :
-	              (tp_hcount[8:6] == 3'd6) ? 8'hFF :
-	                                         8'h00;
+	// Test pattern mode: 0=Off, 2=Palette Test (uses Ariel RAMDAC lookup with h_count as index)
+	wire palette_test = status[6];
 
-	// Debug indicators using pixel counters synced to DE
+	// Debug indicator: pixel counter synced to DE
 	reg [9:0] dbg_x, dbg_y;
 	reg dbg_de_prev;
 	always @(posedge clk_sys) begin
@@ -364,7 +326,7 @@ module emu
 			if (v8_de) begin
 				dbg_x <= dbg_x + 1'd1;
 			end else begin
-				if (dbg_de_prev && !v8_de) // falling edge of DE = end of line
+				if (dbg_de_prev && !v8_de)
 					dbg_y <= dbg_y + 1'd1;
 				dbg_x <= 0;
 			end
@@ -372,51 +334,122 @@ module emu
 				dbg_y <= 0;
 		end
 	end
-	// Block 1 (left):   Red = CPU held in reset, Green = CPU running
-	// Block 2 (middle): Yellow = no Ariel writes, Blue = Ariel has been written
-	// Block 3 (right):  Magenta = CPU address frozen, Cyan = CPU address changing
-	wire debug_block1 = (dbg_x < 10'd50) && (dbg_y < 10'd50);
-	wire debug_block2 = (dbg_x >= 10'd60) && (dbg_x < 10'd110) && (dbg_y < 10'd50);
-	wire debug_block3 = (dbg_x >= 10'd120) && (dbg_x < 10'd170) && (dbg_y < 10'd50);
+	// VIA SR debug signals from dataController
+	wire [2:0]  via_sr_dbg_bit_cnt;
+	wire        via_sr_dbg_edge_pending;
+	wire        via_sr_dbg_fall_pending;
+	wire [7:0]  via_sr_dbg_shift_reg;
+	wire        via_sr_dbg_active;
+	wire        via_sr_dbg_dir;
+	wire        via_sr_dbg_cb1;
+	wire        via_sr_dbg_cb2;
 
-	// CPU activity detector: latch whether address changed in last ~1M clocks
-	reg cpu_active;
-	reg [23:0] cpu_addr_prev;
-	reg [19:0] cpu_idle_counter;
+	// Latch SR transfer count (increments each time shift_active goes 1->0)
+	reg [7:0] sr_xfer_count = 0;
+	reg sr_active_prev = 0;
 	always @(posedge clk_sys) begin
-		if (!_cpuReset) begin
-			cpu_active <= 0;
-			cpu_idle_counter <= 0;
-		end else begin
-			if (cpuAddr != cpu_addr_prev) begin
-				cpu_active <= 1;
-				cpu_idle_counter <= 0;
-				cpu_addr_prev <= cpuAddr;
-			end else begin
-				if (cpu_idle_counter == 20'hFFFFF)
-					cpu_active <= 0;
-				else
-					cpu_idle_counter <= cpu_idle_counter + 1;
-			end
+		sr_active_prev <= via_sr_dbg_active;
+		if (sr_active_prev && !via_sr_dbg_active)
+			sr_xfer_count <= sr_xfer_count + 1'd1;
+	end
+
+	// === On-screen debug overlay ===
+	// Layout (top-left corner, each block 8x8 pixels):
+	//
+	// Row 0 (y=0..7):   Ariel indicator (50x8) - Yellow=no writes, Blue=written
+	// Row 1 (y=10..17): SR shift_reg bits [7:0] - Green=1, Dark=0
+	// Row 2 (y=20..27): bit_cnt [2:0] as 3 blocks - White=1, Dark=0
+	//                   + active (Cyan) + dir (Magenta) + CB1 (Yellow) + CB2 (Red)
+	//                   + edge_pending (Green) + fall_pending (Orange)
+	// Row 3 (y=30..37): sr_xfer_count [7:0] - Blue=1, Dark=0
+
+	wire debug_ariel  = (dbg_x < 10'd50) && (dbg_y < 10'd8);
+	wire debug_sr_reg = (dbg_y >= 10'd10) && (dbg_y < 10'd18) && (dbg_x < 10'd64);
+	wire debug_status = (dbg_y >= 10'd20) && (dbg_y < 10'd28) && (dbg_x < 10'd72);
+	wire debug_xfer   = (dbg_y >= 10'd30) && (dbg_y < 10'd38) && (dbg_x < 10'd64);
+	wire debug_any    = debug_ariel || debug_sr_reg || debug_status || debug_xfer;
+
+	// Which bit of shift_reg to show (bit 7 on left, bit 0 on right)
+	wire [2:0] sr_bit_idx = 3'd7 - dbg_x[5:3];
+	wire sr_bit_val = via_sr_dbg_shift_reg[sr_bit_idx];
+
+	// Status row: bit_cnt(3) + active + dir + CB1 + CB2 + edge_pend + fall_pend = 9 blocks
+	wire [3:0] status_block = dbg_x[6:3]; // which 8px block
+	wire status_val = (status_block == 0) ? via_sr_dbg_bit_cnt[2] :
+	                  (status_block == 1) ? via_sr_dbg_bit_cnt[1] :
+	                  (status_block == 2) ? via_sr_dbg_bit_cnt[0] :
+	                  (status_block == 3) ? via_sr_dbg_active :
+	                  (status_block == 4) ? via_sr_dbg_dir :
+	                  (status_block == 5) ? via_sr_dbg_cb1 :
+	                  (status_block == 6) ? via_sr_dbg_cb2 :
+	                  (status_block == 7) ? via_sr_dbg_edge_pending :
+	                                        via_sr_dbg_fall_pending;
+
+	// Xfer count bits
+	wire [2:0] xfer_bit_idx = 3'd7 - dbg_x[5:3];
+	wire xfer_bit_val = sr_xfer_count[xfer_bit_idx];
+
+	// Debug pixel color
+	reg [7:0] dbg_r, dbg_g, dbg_b;
+	always @(*) begin
+		dbg_r = 8'h10; dbg_g = 8'h10; dbg_b = 8'h10; // dark background
+		if (debug_ariel) begin
+			// Yellow = no Ariel writes, Blue = Ariel written
+			dbg_r = ariel_written ? 8'h00 : 8'hFF;
+			dbg_g = ariel_written ? 8'h00 : 8'hFF;
+			dbg_b = ariel_written ? 8'hFF : 8'h00;
+		end else if (debug_sr_reg) begin
+			// Shift register bits: Green = 1
+			dbg_r = 8'h00; dbg_g = sr_bit_val ? 8'hFF : 8'h30; dbg_b = 8'h00;
+		end else if (debug_status) begin
+			// Color-coded status indicators
+			case (status_block)
+				0,1,2: begin // bit_cnt: White
+					dbg_r = status_val ? 8'hFF : 8'h30;
+					dbg_g = status_val ? 8'hFF : 8'h30;
+					dbg_b = status_val ? 8'hFF : 8'h30;
+				end
+				3: begin // active: Cyan
+					dbg_r = 8'h00;
+					dbg_g = status_val ? 8'hFF : 8'h30;
+					dbg_b = status_val ? 8'hFF : 8'h30;
+				end
+				4: begin // dir: Magenta
+					dbg_r = status_val ? 8'hFF : 8'h30;
+					dbg_g = 8'h00;
+					dbg_b = status_val ? 8'hFF : 8'h30;
+				end
+				5: begin // CB1: Yellow
+					dbg_r = status_val ? 8'hFF : 8'h30;
+					dbg_g = status_val ? 8'hFF : 8'h30;
+					dbg_b = 8'h00;
+				end
+				6: begin // CB2: Red
+					dbg_r = status_val ? 8'hFF : 8'h30;
+					dbg_g = 8'h00;
+					dbg_b = 8'h00;
+				end
+				7: begin // edge_pending: Green
+					dbg_r = 8'h00;
+					dbg_g = status_val ? 8'hFF : 8'h30;
+					dbg_b = 8'h00;
+				end
+				default: begin // fall_pending: Orange
+					dbg_r = status_val ? 8'hFF : 8'h30;
+					dbg_g = status_val ? 8'h80 : 8'h18;
+					dbg_b = 8'h00;
+				end
+			endcase
+		end else if (debug_xfer) begin
+			// Transfer count: Blue = 1
+			dbg_r = 8'h00; dbg_g = 8'h00; dbg_b = xfer_bit_val ? 8'hFF : 8'h30;
 		end
 	end
 
-	// Video Output - Mac LC V8 video system (or test pattern)
-	assign VGA_R  = (test_mode == 2'd1) ? (v8_de ? tp_r : 8'd0) :
-	                (debug_block1 && v8_de) ? (_cpuReset ? 8'h00 : 8'hFF) :
-	                (debug_block2 && v8_de) ? (ariel_written ? 8'h00 : 8'hFF) :
-	                (debug_block3 && v8_de) ? (cpu_active ? 8'h00 : 8'hFF) :
-	                v8_vga_r;
-	assign VGA_G  = (test_mode == 2'd1) ? (v8_de ? tp_g : 8'd0) :
-	                (debug_block1 && v8_de) ? (_cpuReset ? 8'hFF : 8'h00) :
-	                (debug_block2 && v8_de) ? (ariel_written ? 8'h00 : 8'hFF) :
-	                (debug_block3 && v8_de) ? (cpu_active ? 8'hFF : 8'h00) :
-	                v8_vga_g;
-	assign VGA_B  = (test_mode == 2'd1) ? (v8_de ? tp_b : 8'd0) :
-	                (debug_block1 && v8_de) ? 8'h00 :
-	                (debug_block2 && v8_de) ? (ariel_written ? 8'hFF : 8'h00) :
-	                (debug_block3 && v8_de) ? (cpu_active ? 8'hFF : 8'hFF) :
-	                v8_vga_b;
+	// Video Output
+	assign VGA_R  = (debug_any && v8_de) ? dbg_r : v8_vga_r;
+	assign VGA_G  = (debug_any && v8_de) ? dbg_g : v8_vga_g;
+	assign VGA_B  = (debug_any && v8_de) ? dbg_b : v8_vga_b;
 	assign VGA_DE = v8_de;
 	assign VGA_VS = v8_vsync;
 	assign VGA_HS = v8_hsync;
@@ -677,7 +710,7 @@ module emu
 
 		// The RAMDAC now takes the index from v8_video and returns RGB data
 		// Palette test mode: override with h_count gradient to test palette independently of SDRAM
-		.pixel_index(test_mode == 2'd2 ? tp_hcount[8:1] : ariel_pixel_addr),
+		.pixel_index(palette_test ? dbg_x[8:1] : ariel_pixel_addr),
 		.rgb_out(ariel_palette_data),
 		.ariel_written(ariel_written)
 	);
@@ -849,7 +882,17 @@ module emu
 		.sd_buff_addr(sd_buff_addr),
 		.sd_buff_dout(sd_buff_dout),
 		.sd_buff_din(sd_buff_din),
-		.sd_buff_wr(sd_buff_wr)
+		.sd_buff_wr(sd_buff_wr),
+
+		// VIA SR debug
+		.via_sr_dbg_bit_cnt(via_sr_dbg_bit_cnt),
+		.via_sr_dbg_edge_pending(via_sr_dbg_edge_pending),
+		.via_sr_dbg_fall_pending(via_sr_dbg_fall_pending),
+		.via_sr_dbg_shift_reg(via_sr_dbg_shift_reg),
+		.via_sr_dbg_active(via_sr_dbg_active),
+		.via_sr_dbg_dir(via_sr_dbg_dir),
+		.via_sr_dbg_cb1(via_sr_dbg_cb1),
+		.via_sr_dbg_cb2(via_sr_dbg_cb2)
 	);
 
 	reg disk_act;

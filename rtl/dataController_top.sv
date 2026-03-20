@@ -101,7 +101,17 @@ module dataController_top(
 	input             [7:0] sd_buff_addr,
 	input            [15:0] sd_buff_dout,
 	output           [15:0] sd_buff_din[SCSI_DEVS],
-	input                   sd_buff_wr
+	input                   sd_buff_wr,
+
+	// VIA SR debug outputs for on-screen indicator
+	output [2:0]  via_sr_dbg_bit_cnt,
+	output        via_sr_dbg_edge_pending,
+	output        via_sr_dbg_fall_pending,
+	output [7:0]  via_sr_dbg_shift_reg,
+	output        via_sr_dbg_active,
+	output        via_sr_dbg_dir,
+	output        via_sr_dbg_cb1,
+	output        via_sr_dbg_cb2
 );
 	
 	parameter SCSI_DEVS = 2;
@@ -568,8 +578,19 @@ module dataController_top(
 		// Shift register status for CUDA
 		.sr_out_active (via_sr_active),
 		.sr_out_dir    (via_sr_dir),
-		.sr_ext_clk    (via_sr_ext_clk)
+		.sr_ext_clk    (via_sr_ext_clk),
+
+		// Debug outputs for FPGA SR diagnostics
+		.sr_dbg_bit_cnt     (via_sr_dbg_bit_cnt),
+		.sr_dbg_edge_pending(via_sr_dbg_edge_pending),
+		.sr_dbg_fall_pending(via_sr_dbg_fall_pending),
+		.sr_dbg_shift_reg   (via_sr_dbg_shift_reg)
 	);
+
+	assign via_sr_dbg_active = via_sr_active;
+	assign via_sr_dbg_dir    = via_sr_dir;
+	assign via_sr_dbg_cb1    = cuda_cb1;
+	assign via_sr_dbg_cb2    = cuda_cb2_oe ? cuda_cb2 : cb2_o;
 
 	// Egret/CUDA controller for Mac LC - handles PRAM, RTC, and ADB
 	// Mac LC uses Egret (not CUDA) with V8 chip:
