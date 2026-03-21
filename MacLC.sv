@@ -344,6 +344,16 @@ module emu
 	wire        via_sr_dbg_cb1;
 	wire        via_sr_dbg_cb2;
 
+	// Egret debug signals from dataController
+	wire        egret_dbg_running;
+	wire        egret_dbg_port_test_done;
+	wire        egret_dbg_handshake_done;
+	wire        egret_dbg_treq;
+	wire        egret_dbg_tip;
+	wire        egret_dbg_byteack;
+	wire        egret_dbg_reset_680x0;
+	wire        egret_dbg_cpu_reset_out;
+
 	// Latch SR transfer count (increments each time shift_active goes 1->0)
 	reg [7:0] sr_xfer_count = 0;
 	reg sr_active_prev = 0;
@@ -358,16 +368,19 @@ module emu
 	//
 	// Row 0 (y=0..7):   Ariel indicator (50x8) - Yellow=no writes, Blue=written
 	// Row 1 (y=10..17): SR shift_reg bits [7:0] - Green=1, Dark=0
-	// Row 2 (y=20..27): bit_cnt [2:0] as 3 blocks - White=1, Dark=0
-	//                   + active (Cyan) + dir (Magenta) + CB1 (Yellow) + CB2 (Red)
-	//                   + edge_pending (Green) + fall_pending (Orange)
+	// Row 2 (y=20..27): bit_cnt [2:0] + active + dir + CB1 + CB2 + edge_pend + fall_pend
 	// Row 3 (y=30..37): sr_xfer_count [7:0] - Blue=1, Dark=0
+	// Row 4 (y=42..49): Egret status: running + port_test + handshake + TREQ + TIP + BYTEACK + reset_680x0 + cpuReset
+	// Row 5 (y=54..61): Egret cycle counter [7:0] - Magenta=1, Dark=0 (proves HC05 is executing)
 
 	wire debug_ariel  = (dbg_x < 10'd50) && (dbg_y < 10'd8);
 	wire debug_sr_reg = (dbg_y >= 10'd10) && (dbg_y < 10'd18) && (dbg_x < 10'd64);
 	wire debug_status = (dbg_y >= 10'd20) && (dbg_y < 10'd28) && (dbg_x < 10'd72);
 	wire debug_xfer   = (dbg_y >= 10'd30) && (dbg_y < 10'd38) && (dbg_x < 10'd64);
-	wire debug_any    = debug_ariel || debug_sr_reg || debug_status || debug_xfer;
+	wire debug_egret  = (dbg_y >= 10'd42) && (dbg_y < 10'd50) && (dbg_x < 10'd64);
+	wire debug_ecyc   = (dbg_y >= 10'd54) && (dbg_y < 10'd62) && (dbg_x < 10'd64);
+	wire debug_any    = debug_ariel || debug_sr_reg || debug_status || debug_xfer
+	                  || debug_egret || debug_ecyc;
 
 	// Which bit of shift_reg to show (bit 7 on left, bit 0 on right)
 	wire [2:0] sr_bit_idx = 3'd7 - dbg_x[5:3];
@@ -388,6 +401,36 @@ module emu
 	// Xfer count bits
 	wire [2:0] xfer_bit_idx = 3'd7 - dbg_x[5:3];
 	wire xfer_bit_val = sr_xfer_count[xfer_bit_idx];
+
+	// Egret status row: 8 blocks, each 8px wide
+	// Block 0: running (Green=yes)
+	// Block 1: port_test_done (Green=done)
+	// Block 2: handshake_done (Green=done)
+	// Block 3: TREQ (Red=asserted)
+	// Block 4: TIP (Yellow=active/low)
+	// Block 5: BYTEACK (Cyan=active)
+	// Block 6: reset_680x0 (Red=holding reset, Green=released)
+	// Block 7: _cpuReset (Green=running, Red=held)
+	wire [2:0] egret_block = dbg_x[5:3];
+	wire egret_val = (egret_block == 0) ? egret_dbg_running :
+	                 (egret_block == 1) ? egret_dbg_port_test_done :
+	                 (egret_block == 2) ? egret_dbg_handshake_done :
+	                 (egret_block == 3) ? egret_dbg_treq :
+	                 (egret_block == 4) ? ~egret_dbg_tip :       // TIP is active LOW, show bright when active
+	                 (egret_block == 5) ? egret_dbg_byteack :
+	                 (egret_block == 6) ? egret_dbg_reset_680x0 :
+	                                      egret_dbg_cpu_reset_out;
+
+	// Egret cycle counter - increments each frame to prove HC05 is running
+	// We sample a free-running counter driven by egret_dbg_running
+	reg [23:0] egret_alive_cnt = 0;
+	always @(posedge clk_sys) begin
+		if (egret_dbg_running)
+			egret_alive_cnt <= egret_alive_cnt + 1'd1;
+	end
+	wire [7:0] egret_alive_byte = egret_alive_cnt[23:16]; // slow-changing bits visible on screen
+	wire [2:0] ecyc_bit_idx = 3'd7 - dbg_x[5:3];
+	wire ecyc_bit_val = egret_alive_byte[ecyc_bit_idx];
 
 	// Debug pixel color
 	reg [7:0] dbg_r, dbg_g, dbg_b;
@@ -443,6 +486,55 @@ module emu
 		end else if (debug_xfer) begin
 			// Transfer count: Blue = 1
 			dbg_r = 8'h00; dbg_g = 8'h00; dbg_b = xfer_bit_val ? 8'hFF : 8'h30;
+		end else if (debug_egret) begin
+			// Egret status indicators - color per block
+			case (egret_block)
+				0: begin // running: Green
+					dbg_r = 8'h00;
+					dbg_g = egret_val ? 8'hFF : 8'h30;
+					dbg_b = 8'h00;
+				end
+				1: begin // port_test_done: Green
+					dbg_r = 8'h00;
+					dbg_g = egret_val ? 8'hFF : 8'h30;
+					dbg_b = 8'h00;
+				end
+				2: begin // handshake_done: Green
+					dbg_r = 8'h00;
+					dbg_g = egret_val ? 8'hFF : 8'h30;
+					dbg_b = 8'h00;
+				end
+				3: begin // TREQ: Red=asserted
+					dbg_r = egret_val ? 8'hFF : 8'h30;
+					dbg_g = 8'h00;
+					dbg_b = 8'h00;
+				end
+				4: begin // TIP active: Yellow
+					dbg_r = egret_val ? 8'hFF : 8'h30;
+					dbg_g = egret_val ? 8'hFF : 8'h30;
+					dbg_b = 8'h00;
+				end
+				5: begin // BYTEACK: Cyan
+					dbg_r = 8'h00;
+					dbg_g = egret_val ? 8'hFF : 8'h30;
+					dbg_b = egret_val ? 8'hFF : 8'h30;
+				end
+				6: begin // reset_680x0: Red=holding, Green=released
+					dbg_r = egret_val ? 8'hFF : 8'h00;
+					dbg_g = egret_val ? 8'h00 : 8'hFF;
+					dbg_b = 8'h00;
+				end
+				default: begin // _cpuReset: Green=running, Red=held
+					dbg_r = egret_val ? 8'h00 : 8'hFF;
+					dbg_g = egret_val ? 8'hFF : 8'h00;
+					dbg_b = 8'h00;
+				end
+			endcase
+		end else if (debug_ecyc) begin
+			// Egret alive counter: Magenta = 1 (should change over time if HC05 is running)
+			dbg_r = ecyc_bit_val ? 8'hFF : 8'h30;
+			dbg_g = 8'h00;
+			dbg_b = ecyc_bit_val ? 8'hFF : 8'h30;
 		end
 	end
 
@@ -892,7 +984,16 @@ module emu
 		.via_sr_dbg_active(via_sr_dbg_active),
 		.via_sr_dbg_dir(via_sr_dbg_dir),
 		.via_sr_dbg_cb1(via_sr_dbg_cb1),
-		.via_sr_dbg_cb2(via_sr_dbg_cb2)
+		.via_sr_dbg_cb2(via_sr_dbg_cb2),
+
+		.egret_dbg_running(egret_dbg_running),
+		.egret_dbg_port_test_done(egret_dbg_port_test_done),
+		.egret_dbg_handshake_done(egret_dbg_handshake_done),
+		.egret_dbg_treq(egret_dbg_treq),
+		.egret_dbg_tip(egret_dbg_tip),
+		.egret_dbg_byteack(egret_dbg_byteack),
+		.egret_dbg_reset_680x0(egret_dbg_reset_680x0),
+		.egret_dbg_cpu_reset_out(egret_dbg_cpu_reset_out)
 	);
 
 	reg disk_act;

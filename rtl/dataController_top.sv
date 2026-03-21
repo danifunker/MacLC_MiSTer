@@ -111,7 +111,17 @@ module dataController_top(
 	output        via_sr_dbg_active,
 	output        via_sr_dbg_dir,
 	output        via_sr_dbg_cb1,
-	output        via_sr_dbg_cb2
+	output        via_sr_dbg_cb2,
+
+	// Egret debug outputs for on-screen indicator
+	output        egret_dbg_running,       // HC05 not in reset
+	output        egret_dbg_port_test_done,
+	output        egret_dbg_handshake_done,
+	output        egret_dbg_treq,          // TREQ asserted
+	output        egret_dbg_tip,           // TIP from VIA (synced in Egret)
+	output        egret_dbg_byteack,       // BYTEACK from VIA (synced in Egret)
+	output        egret_dbg_reset_680x0,   // Egret holding 68K in reset
+	output        egret_dbg_cpu_reset_out  // Final _cpuReset signal
 );
 	
 	parameter SCSI_DEVS = 2;
@@ -592,6 +602,20 @@ module dataController_top(
 	assign via_sr_dbg_cb1    = cuda_cb1;
 	assign via_sr_dbg_cb2    = cuda_cb2_oe ? cuda_cb2 : cb2_o;
 
+`ifdef USE_EGRET_CPU
+	assign egret_dbg_reset_680x0  = egret_reset_680x0;
+	assign egret_dbg_cpu_reset_out = _cpuReset;
+`else
+	assign egret_dbg_running       = 1'b0;
+	assign egret_dbg_port_test_done = 1'b0;
+	assign egret_dbg_handshake_done = 1'b0;
+	assign egret_dbg_treq          = 1'b0;
+	assign egret_dbg_tip           = 1'b0;
+	assign egret_dbg_byteack       = 1'b0;
+	assign egret_dbg_reset_680x0   = 1'b0;
+	assign egret_dbg_cpu_reset_out = _cpuReset;
+`endif
+
 	// Egret/CUDA controller for Mac LC - handles PRAM, RTC, and ADB
 	// Mac LC uses Egret (not CUDA) with V8 chip:
 	// - PB3: TREQ from Egret (input to VIA)
@@ -656,7 +680,18 @@ module dataController_top(
 
 		// System control - Egret controls 68000 reset via Port C bit 3
 		.reset_680x0    (egret_reset_680x0),
-		.nmi_680x0      ()
+		.nmi_680x0      (),
+
+		// Debug outputs
+		.dbg_cen            (),
+		.dbg_port_test_done (egret_dbg_port_test_done),
+		.dbg_handshake_done (egret_dbg_handshake_done),
+		.dbg_treq           (egret_dbg_treq),
+		.dbg_tip_in         (egret_dbg_tip),
+		.dbg_byteack_in     (egret_dbg_byteack),
+		.dbg_pb_out         (),
+		.dbg_pc_out         (),
+		.dbg_cpu_running    (egret_dbg_running)
 	);
 `else
 	cuda_maclc cuda(

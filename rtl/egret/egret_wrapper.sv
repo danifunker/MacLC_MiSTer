@@ -45,7 +45,18 @@ module egret_wrapper (
 
     // System control
     output reg         reset_680x0,
-    output reg         nmi_680x0
+    output reg         nmi_680x0,
+
+    // Debug outputs for on-screen indicators
+    output wire        dbg_cen,              // HC05 clock enable (pulse)
+    output wire        dbg_port_test_done,   // Port test phase complete
+    output wire        dbg_handshake_done,   // Handshake init complete
+    output wire        dbg_treq,             // TREQ output (1=asserting)
+    output wire        dbg_tip_in,           // TIP input from VIA (synced)
+    output wire        dbg_byteack_in,       // BYTEACK input from VIA (synced)
+    output wire [7:0]  dbg_pb_out,           // Egret Port B output register
+    output wire [7:0]  dbg_pc_out,           // Egret Port C output register
+    output wire        dbg_cpu_running       // HC05 is executing (not in reset)
 );
 
 // ============================================================================
@@ -447,6 +458,17 @@ assign cuda_byteack = 1'b0;       // Not used in Egret
 
 assign cuda_portb    = pb_out;
 assign cuda_portb_oe = pb_ddr;
+
+// Debug outputs
+assign dbg_cen            = cen;
+assign dbg_port_test_done = port_test_done;
+assign dbg_handshake_done = handshake_done;
+assign dbg_treq           = cuda_treq;
+assign dbg_tip_in         = via_tip_stable;
+assign dbg_byteack_in     = via_byteack_in_stable;
+assign dbg_pb_out         = pb_out;
+assign dbg_pc_out         = pc_out;
+assign dbg_cpu_running    = ~reset;
 
 // ============================================================================
 // Port C - 68000 control
