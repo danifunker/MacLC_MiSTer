@@ -722,21 +722,21 @@ module emu
 
 	// ========== SignalTap debug probes ==========
 	// Active-preserved copies so Quartus keeps them visible to SignalTap.
-	(* keep *) wire        stp_cpuReset      = _cpuReset;
-	(* keep *) wire        stp_cpuAS         = _cpuAS;
-	(* keep *) wire        stp_cpuRW         = _cpuRW;
-	(* keep *) wire [23:1] stp_cpuAddr       = cpuAddr[23:1];
-	(* keep *) wire        stp_overlay       = memoryOverlayOn;
-	(* keep *) wire        stp_selectROM     = selectROM;
-	(* keep *) wire        stp_selectRAM     = selectRAM;
-	(* keep *) wire [22:0] stp_memAddr       = memoryAddr;
-	(* keep *) wire        stp_memLatch      = memoryLatch;
-	(* keep *) wire        stp_cpuBusCtl     = cpuBusControl;
-	(* keep *) wire        stp_romOE         = _romOE;
-	(* keep *) wire        stp_ramOE         = _ramOE;
-	(* keep *) wire        stp_dtack         = _cpuDTACK;
-	(* keep *) wire        stp_dtack_en      = dtack_en;
-	(* keep *) wire [15:0] stp_dataOut       = dataControllerDataOut;
+	wire        stp_cpuReset      = _cpuReset              /* synthesis keep */;
+	wire        stp_cpuAS         = _cpuAS                 /* synthesis keep */;
+	wire        stp_cpuRW         = _cpuRW                 /* synthesis keep */;
+	wire [23:1] stp_cpuAddr       = cpuAddr[23:1]          /* synthesis keep */;
+	wire        stp_overlay       = memoryOverlayOn        /* synthesis keep */;
+	wire        stp_selectROM     = selectROM              /* synthesis keep */;
+	wire        stp_selectRAM     = selectRAM              /* synthesis keep */;
+	wire [22:0] stp_memAddr       = memoryAddr             /* synthesis keep */;
+	wire        stp_memLatch      = memoryLatch            /* synthesis keep */;
+	wire        stp_cpuBusCtl     = cpuBusControl          /* synthesis keep */;
+	wire        stp_romOE         = _romOE                 /* synthesis keep */;
+	wire        stp_ramOE         = _ramOE                 /* synthesis keep */;
+	wire        stp_dtack         = _cpuDTACK              /* synthesis keep */;
+	wire        stp_dtack_en      = dtack_en               /* synthesis keep */;
+	wire [15:0] stp_dataOut       = dataControllerDataOut  /* synthesis keep */;
 
 	// audio
 	wire snd_alt;
@@ -1224,10 +1224,10 @@ module emu
 	wire [15:0] sdram_out;
 
 	// SignalTap SDRAM probes
-	(* keep *) wire [15:0] stp_sdramOut      = sdram_out;
-	(* keep *) wire        stp_sdramOE       = sdram_oe;
-	(* keep *) wire        stp_sdramWE       = sdram_we;
-	(* keep *) wire        stp_downloading   = dio_download;
+	wire [15:0] stp_sdramOut      = sdram_out              /* synthesis keep */;
+	wire        stp_sdramOE       = sdram_oe               /* synthesis keep */;
+	wire        stp_sdramWE       = sdram_we               /* synthesis keep */;
+	wire        stp_downloading   = dio_download           /* synthesis keep */;
 
 	assign SDRAM_CKE = 1;
 
