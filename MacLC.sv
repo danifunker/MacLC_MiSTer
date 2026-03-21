@@ -232,7 +232,7 @@ module emu
 			// NOTE: Do NOT include ~_cpuReset_o here — the CPU executes the RESET
 			// instruction during boot to reset peripherals, which would cause an
 			// infinite reset loop if fed back to the system reset.
-			if(~pll_locked || status[0] || buttons[1] || RESET) begin
+			if(~pll_locked || status[0] || buttons[1] || RESET || dio_download) begin
 				rst_cnt <= '1;
 				n_reset <= 0;
 			end
