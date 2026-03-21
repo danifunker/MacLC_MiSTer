@@ -374,6 +374,9 @@ module emu
 	// Row 5 (y=54..61): Egret cycle counter [7:0] - Magenta=1, Dark=0 (proves HC05 is executing)
 	// Row 6 (y=66..73): 68K alive counter [7:0] - Orange=1, Dark=0 (proves 68K is fetching)
 	// Row 7 (y=78..85): 68K addr[23:16] - White=1, Dark=0 (shows memory region being accessed)
+	// Row 8 (y=90..97): First CPU read: overlay(Green/Red) + SDRAM addr[22:16] (Cyan=1)
+	// Row 9 (y=102..109): First CPU read data[15:8] - Yellow=1
+	// Row 10 (y=114..121): First CPU read data[7:0] - Yellow=1
 
 	wire debug_ariel  = (dbg_x < 10'd50) && (dbg_y < 10'd8);
 	wire debug_sr_reg = (dbg_y >= 10'd10) && (dbg_y < 10'd18) && (dbg_x < 10'd64);
@@ -384,7 +387,8 @@ module emu
 	wire debug_68k    = (dbg_y >= 10'd66) && (dbg_y < 10'd74) && (dbg_x < 10'd64);
 	wire debug_68addr = (dbg_y >= 10'd78) && (dbg_y < 10'd86) && (dbg_x < 10'd64);
 	wire debug_any    = debug_ariel || debug_sr_reg || debug_status || debug_xfer
-	                  || debug_egret || debug_ecyc || debug_68k || debug_68addr;
+	                  || debug_egret || debug_ecyc || debug_68k || debug_68addr
+	                  || debug_faddr || debug_fdhi || debug_fdlo;
 
 	// Which bit of shift_reg to show (bit 7 on left, bit 0 on right)
 	wire [2:0] sr_bit_idx = 3'd7 - dbg_x[5:3];
@@ -456,6 +460,44 @@ module emu
 	end
 	wire [2:0] addr_bit_idx = 3'd7 - dbg_x[5:3];
 	wire addr_bit_val = cpu_addr_upper[addr_bit_idx];
+
+	// First CPU read capture — grab SDRAM address + data on the first memoryLatch after reset
+	reg        first_read_captured = 0;
+	reg [22:0] first_read_addr = 0;
+	reg [15:0] first_read_data = 0;
+	reg        first_read_overlay = 0;
+	always @(posedge clk_sys) begin
+		if (!_cpuReset) begin
+			first_read_captured <= 0;
+		end else if (!first_read_captured && cpuBusControl && memoryLatch) begin
+			first_read_captured <= 1;
+			first_read_addr <= memoryAddr;
+			first_read_data <= sdram_out;
+			first_read_overlay <= memoryOverlayOn;
+		end
+	end
+
+	// Row 8: First read SDRAM address — overlay + addr[22:16]
+	wire debug_faddr  = (dbg_y >= 10'd90) && (dbg_y < 10'd98) && (dbg_x < 10'd64);
+	wire [2:0] faddr_block = dbg_x[5:3];
+	wire faddr_val = (faddr_block == 0) ? first_read_overlay :
+	                 (faddr_block == 1) ? first_read_addr[22] :
+	                 (faddr_block == 2) ? first_read_addr[21] :
+	                 (faddr_block == 3) ? first_read_addr[20] :
+	                 (faddr_block == 4) ? first_read_addr[19] :
+	                 (faddr_block == 5) ? first_read_addr[18] :
+	                 (faddr_block == 6) ? first_read_addr[17] :
+	                                      first_read_addr[16];
+
+	// Row 9: First read data [15:8]
+	wire debug_fdhi   = (dbg_y >= 10'd102) && (dbg_y < 10'd110) && (dbg_x < 10'd64);
+	wire [2:0] fdhi_bit_idx = 3'd7 - dbg_x[5:3];
+	wire fdhi_val = first_read_data[8 + fdhi_bit_idx];
+
+	// Row 10: First read data [7:0]
+	wire debug_fdlo   = (dbg_y >= 10'd114) && (dbg_y < 10'd122) && (dbg_x < 10'd64);
+	wire [2:0] fdlo_bit_idx = 3'd7 - dbg_x[5:3];
+	wire fdlo_val = first_read_data[fdlo_bit_idx];
 
 	// Debug pixel color
 	reg [7:0] dbg_r, dbg_g, dbg_b;
@@ -571,6 +613,27 @@ module emu
 			dbg_r = addr_bit_val ? 8'hFF : 8'h30;
 			dbg_g = addr_bit_val ? 8'hFF : 8'h30;
 			dbg_b = addr_bit_val ? 8'hFF : 8'h30;
+		end else if (debug_faddr) begin
+			// First read address: Cyan, first block is overlay (Green=on, Red=off)
+			if (faddr_block == 0) begin
+				dbg_r = faddr_val ? 8'h00 : 8'hFF;
+				dbg_g = faddr_val ? 8'hFF : 8'h00;
+				dbg_b = 8'h00;
+			end else begin
+				dbg_r = 8'h00;
+				dbg_g = faddr_val ? 8'hFF : 8'h30;
+				dbg_b = faddr_val ? 8'hFF : 8'h30;
+			end
+		end else if (debug_fdhi) begin
+			// First read data [15:8]: Yellow = 1
+			dbg_r = fdhi_val ? 8'hFF : 8'h30;
+			dbg_g = fdhi_val ? 8'hFF : 8'h30;
+			dbg_b = 8'h00;
+		end else if (debug_fdlo) begin
+			// First read data [7:0]: Yellow = 1
+			dbg_r = fdlo_val ? 8'hFF : 8'h30;
+			dbg_g = fdlo_val ? 8'hFF : 8'h30;
+			dbg_b = 8'h00;
 		end
 	end
 
