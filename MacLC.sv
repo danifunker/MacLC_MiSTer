@@ -372,6 +372,8 @@ module emu
 	// Row 3 (y=30..37): sr_xfer_count [7:0] - Blue=1, Dark=0
 	// Row 4 (y=42..49): Egret status: running + port_test + handshake + TREQ + TIP + BYTEACK + reset_680x0 + cpuReset
 	// Row 5 (y=54..61): Egret cycle counter [7:0] - Magenta=1, Dark=0 (proves HC05 is executing)
+	// Row 6 (y=66..73): 68K alive counter [7:0] - Orange=1, Dark=0 (proves 68K is fetching)
+	// Row 7 (y=78..85): 68K addr[23:16] - White=1, Dark=0 (shows memory region being accessed)
 
 	wire debug_ariel  = (dbg_x < 10'd50) && (dbg_y < 10'd8);
 	wire debug_sr_reg = (dbg_y >= 10'd10) && (dbg_y < 10'd18) && (dbg_x < 10'd64);
@@ -379,8 +381,10 @@ module emu
 	wire debug_xfer   = (dbg_y >= 10'd30) && (dbg_y < 10'd38) && (dbg_x < 10'd64);
 	wire debug_egret  = (dbg_y >= 10'd42) && (dbg_y < 10'd50) && (dbg_x < 10'd64);
 	wire debug_ecyc   = (dbg_y >= 10'd54) && (dbg_y < 10'd62) && (dbg_x < 10'd64);
+	wire debug_68k    = (dbg_y >= 10'd66) && (dbg_y < 10'd74) && (dbg_x < 10'd64);
+	wire debug_68addr = (dbg_y >= 10'd78) && (dbg_y < 10'd86) && (dbg_x < 10'd64);
 	wire debug_any    = debug_ariel || debug_sr_reg || debug_status || debug_xfer
-	                  || debug_egret || debug_ecyc;
+	                  || debug_egret || debug_ecyc || debug_68k || debug_68addr;
 
 	// Which bit of shift_reg to show (bit 7 on left, bit 0 on right)
 	wire [2:0] sr_bit_idx = 3'd7 - dbg_x[5:3];
@@ -431,6 +435,27 @@ module emu
 	wire [7:0] egret_alive_byte = egret_alive_cnt[23:16]; // slow-changing bits visible on screen
 	wire [2:0] ecyc_bit_idx = 3'd7 - dbg_x[5:3];
 	wire ecyc_bit_val = egret_alive_byte[ecyc_bit_idx];
+
+	// 68K activity counter - increments on each bus cycle (_cpuAS falling edge)
+	reg [23:0] cpu_alive_cnt = 0;
+	reg cpu_as_prev = 1;
+	always @(posedge clk_sys) begin
+		cpu_as_prev <= _cpuAS;
+		if (cpu_as_prev && !_cpuAS)  // AS falling edge = new bus cycle
+			cpu_alive_cnt <= cpu_alive_cnt + 1'd1;
+	end
+	wire [7:0] cpu_alive_byte = cpu_alive_cnt[23:16]; // slow-changing bits
+	wire [2:0] cpu68_bit_idx = 3'd7 - dbg_x[5:3];
+	wire cpu68_bit_val = cpu_alive_byte[cpu68_bit_idx];
+
+	// 68K address upper byte - latched on AS falling edge
+	reg [7:0] cpu_addr_upper = 0;
+	always @(posedge clk_sys) begin
+		if (cpu_as_prev && !_cpuAS)
+			cpu_addr_upper <= cpuAddr[23:16];
+	end
+	wire [2:0] addr_bit_idx = 3'd7 - dbg_x[5:3];
+	wire addr_bit_val = cpu_addr_upper[addr_bit_idx];
 
 	// Debug pixel color
 	reg [7:0] dbg_r, dbg_g, dbg_b;
@@ -535,6 +560,17 @@ module emu
 			dbg_r = ecyc_bit_val ? 8'hFF : 8'h30;
 			dbg_g = 8'h00;
 			dbg_b = ecyc_bit_val ? 8'hFF : 8'h30;
+		end else if (debug_68k) begin
+			// 68K alive counter: Orange = 1 (should change if CPU is fetching)
+			dbg_r = cpu68_bit_val ? 8'hFF : 8'h30;
+			dbg_g = cpu68_bit_val ? 8'h80 : 8'h18;
+			dbg_b = 8'h00;
+		end else if (debug_68addr) begin
+			// 68K address[23:16]: White = 1 (shows memory region)
+			// Common values: 0x40=ROM, 0x00=RAM, 0x50=VIA, 0xF0=VRAM
+			dbg_r = addr_bit_val ? 8'hFF : 8'h30;
+			dbg_g = addr_bit_val ? 8'hFF : 8'h30;
+			dbg_b = addr_bit_val ? 8'hFF : 8'h30;
 		end
 	end
 
