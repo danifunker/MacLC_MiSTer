@@ -374,9 +374,9 @@ module emu
 	// Row 5 (y=54..61): Egret cycle counter [7:0] - Magenta=1, Dark=0 (proves HC05 is executing)
 	// Row 6 (y=66..73): 68K alive counter [7:0] - Orange=1, Dark=0 (proves 68K is fetching)
 	// Row 7 (y=78..85): 68K addr[23:16] - White=1, Dark=0 (shows memory region being accessed)
-	// Row 8 (y=90..97): First CPU read: overlay(Grn/Red) + selROM(Grn/Red) + addr[22:17] (Cyan)
+	// Row 8 (y=90..97): First CPU read (after DTACK): overlay(Grn/Red) + selROM(Grn/Red) + memAddr[22:17] (Cyan)
 	// Row 9 (y=102..109): First CPU read data[15:8] - Yellow=1
-	// Row 10 (y=114..121): First CPU read data[7:0] - Yellow=1
+	// Row 10 (y=114..121): First CPU read cpuAddr[23:16] - Magenta=1 (should be $00 for reset vector)
 	// Row 11 (y=126..133): LIVE: overlay|selROM|selRAM|AS|romOE|ramOE|cpuBus|captured (White=1)
 
 	wire debug_ariel  = (dbg_x < 10'd50) && (dbg_y < 10'd8);
@@ -462,22 +462,26 @@ module emu
 	wire [2:0] addr_bit_idx = 3'd7 - dbg_x[5:3];
 	wire addr_bit_val = cpu_addr_upper[addr_bit_idx];
 
-	// First CPU read capture — grab SDRAM address + data on the first REAL bus cycle after reset
-	// Wait for _cpuAS to go LOW (CPU actually requesting a bus cycle) during a cpuBusControl+memoryLatch
+	// First CPU read capture — grab SDRAM address + data after DTACK
+	// Previous version triggered too early (at first memoryLatch after AS),
+	// before the SDRAM had completed its read cycle. Now waits for dtack_en
+	// which means the CPU bus slot has completed an SDRAM read.
 	reg        first_read_captured = 0;
 	reg [22:0] first_read_addr = 0;
 	reg [15:0] first_read_data = 0;
 	reg        first_read_overlay = 0;
 	reg        first_read_selectROM = 0;
+	reg [23:0] first_read_cpuAddr = 0;
 	always @(posedge clk_sys) begin
 		if (!_cpuReset) begin
 			first_read_captured <= 0;
-		end else if (!first_read_captured && cpuBusControl && memoryLatch && !_cpuAS) begin
+		end else if (!first_read_captured && dtack_en && cpuBusControl && memoryLatch && !_cpuAS) begin
 			first_read_captured <= 1;
 			first_read_addr <= memoryAddr;
 			first_read_data <= sdram_out;
 			first_read_overlay <= memoryOverlayOn;
 			first_read_selectROM <= selectROM;
+			first_read_cpuAddr <= cpuAddr;
 		end
 	end
 
@@ -498,10 +502,10 @@ module emu
 	wire [2:0] fdhi_bit_idx = 3'd7 - dbg_x[5:3];
 	wire fdhi_val = first_read_data[8 + fdhi_bit_idx];
 
-	// Row 10: First read data [7:0]
+	// Row 10: First read CPU address [23:16] - Magenta=1 (shows what CPU address triggered the capture)
 	wire debug_fdlo   = (dbg_y >= 10'd114) && (dbg_y < 10'd122) && (dbg_x < 10'd64);
 	wire [2:0] fdlo_bit_idx = 3'd7 - dbg_x[5:3];
-	wire fdlo_val = first_read_data[fdlo_bit_idx];
+	wire fdlo_val = first_read_cpuAddr[16 + fdlo_bit_idx];
 
 	// Row 11: LIVE overlay + selectROM + selectRAM + _cpuAS (real-time, not captured)
 	wire debug_live   = (dbg_y >= 10'd126) && (dbg_y < 10'd134) && (dbg_x < 10'd64);
@@ -646,10 +650,10 @@ module emu
 			dbg_g = fdhi_val ? 8'hFF : 8'h30;
 			dbg_b = 8'h00;
 		end else if (debug_fdlo) begin
-			// First read data [7:0]: Yellow = 1
+			// First read cpuAddr[23:16]: Magenta = 1 (should be $00 for reset vector read)
 			dbg_r = fdlo_val ? 8'hFF : 8'h30;
-			dbg_g = fdlo_val ? 8'hFF : 8'h30;
-			dbg_b = 8'h00;
+			dbg_g = 8'h00;
+			dbg_b = fdlo_val ? 8'hFF : 8'h30;
 		end else if (debug_live) begin
 			// Live status: Green=active/on, Red=off for first two, White for rest
 			if (live_block < 2) begin
