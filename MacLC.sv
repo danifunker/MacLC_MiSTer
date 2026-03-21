@@ -720,6 +720,24 @@ module emu
 	wire memoryOverlayOn, selectSCSI, selectSCC, selectIWM, selectVIA, selectRAM, selectROM, selectSEOverlay, selectASC, selectUnmapped;
 	wire [15:0] dataControllerDataOut;
 
+	// ========== SignalTap debug probes ==========
+	// Active-preserved copies so Quartus keeps them visible to SignalTap.
+	(* keep *) wire        stp_cpuReset      = _cpuReset;
+	(* keep *) wire        stp_cpuAS         = _cpuAS;
+	(* keep *) wire        stp_cpuRW         = _cpuRW;
+	(* keep *) wire [23:1] stp_cpuAddr       = cpuAddr[23:1];
+	(* keep *) wire        stp_overlay       = memoryOverlayOn;
+	(* keep *) wire        stp_selectROM     = selectROM;
+	(* keep *) wire        stp_selectRAM     = selectRAM;
+	(* keep *) wire [22:0] stp_memAddr       = memoryAddr;
+	(* keep *) wire        stp_memLatch      = memoryLatch;
+	(* keep *) wire        stp_cpuBusCtl     = cpuBusControl;
+	(* keep *) wire        stp_romOE         = _romOE;
+	(* keep *) wire        stp_ramOE         = _ramOE;
+	(* keep *) wire        stp_dtack         = _cpuDTACK;
+	(* keep *) wire        stp_dtack_en      = dtack_en;
+	(* keep *) wire [15:0] stp_dataOut       = dataControllerDataOut;
+
 	// audio
 	wire snd_alt;
 	wire loadSound;
@@ -1204,6 +1222,12 @@ module emu
 	wire [15:0] extra_rom_data_demux = memoryAddr[0]?
 							 {sdram_out[7:0],sdram_out[7:0]}:{sdram_out[15:8],sdram_out[15:8]};
 	wire [15:0] sdram_out;
+
+	// SignalTap SDRAM probes
+	(* keep *) wire [15:0] stp_sdramOut      = sdram_out;
+	(* keep *) wire        stp_sdramOE       = sdram_oe;
+	(* keep *) wire        stp_sdramWE       = sdram_we;
+	(* keep *) wire        stp_downloading   = dio_download;
 
 	assign SDRAM_CKE = 1;
 
