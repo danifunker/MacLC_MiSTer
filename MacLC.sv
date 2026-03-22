@@ -374,6 +374,8 @@ module emu
 	// Row F (y=80..87):  Fetch context: overlay|selROM|selRAM|FC2|FC1|FC0|everROM|everA0
 	// Row G (y=96..103): LIVE: overlay|selROM|selRAM|AS|romOE|ramOE|cpuBus|dtack
 	// Row H (y=120..134): PC hex display — 6 green hex digits (PC[23:0], 3x scale)
+	// Row I (y=140..154): Opcode hex — 4 cyan hex digits (last fetched opcode, 3x scale)
+	// Row J (y=160..174): SDRAM addr hex — 6 yellow hex digits (SDRAM word addr of last fetch)
 
 	wire debug_egret  = (dbg_y < 10'd8) && (dbg_x < 10'd64);
 	wire debug_68addr = (dbg_y >= 10'd16) && (dbg_y < 10'd24) && (dbg_x < 10'd64);
@@ -383,9 +385,11 @@ module emu
 	wire debug_fctx   = (dbg_y >= 10'd80) && (dbg_y < 10'd88) && (dbg_x < 10'd64);
 	wire debug_live   = (dbg_y >= 10'd96) && (dbg_y < 10'd104) && (dbg_x < 10'd64);
 	wire debug_pchex  = (dbg_y >= 10'd120) && (dbg_y < 10'd135) && (dbg_x < 10'd92);
+	wire debug_ophex  = (dbg_y >= 10'd140) && (dbg_y < 10'd155) && (dbg_x < 10'd60);
+	wire debug_sahex  = (dbg_y >= 10'd160) && (dbg_y < 10'd175) && (dbg_x < 10'd92);
 	wire debug_any    = debug_egret || debug_68addr
 	                  || debug_alive || debug_pcaddr || debug_pclo || debug_fctx || debug_live
-	                  || debug_pchex;
+	                  || debug_pchex || debug_ophex || debug_sahex;
 
 	// Egret status row: 8 blocks, each 8px wide
 	// Block 0: running (Green=yes)
@@ -437,8 +441,20 @@ module emu
 			cpu_pc_lowest <= cpuAddr[7:0];
 		end
 	end
-	// Latched PC for hex display — updates ~1x/sec (every 60 VBlanks)
+	// Capture last opcode data and SDRAM address during instruction fetches
+	reg [15:0] fetch_opcode = 0;
+	reg [22:0] fetch_sdram_addr = 0;
+	always @(posedge clk_sys) begin
+		if (memoryLatch && cpuBusControl && cpuFC[1] && _cpuRW)  begin
+			fetch_opcode <= sdram_do;
+			fetch_sdram_addr <= memoryAddr;
+		end
+	end
+
+	// Latched display values — updates ~1x/sec (every 60 VBlanks)
 	reg [7:0] hex_pc_upper = 0, hex_pc_lower = 0, hex_pc_lowest = 0;
+	reg [15:0] hex_opcode = 0;
+	reg [22:0] hex_sdram_addr = 0;
 	reg [5:0] vblank_count = 0;
 	reg vblank_prev = 0;
 	always @(posedge clk_sys) begin
@@ -449,6 +465,8 @@ module emu
 				hex_pc_upper <= cpu_pc_upper;
 				hex_pc_lower <= cpu_pc_lower;
 				hex_pc_lowest <= cpu_pc_lowest;
+				hex_opcode <= fetch_opcode;
+				hex_sdram_addr <= fetch_sdram_addr;
 			end else begin
 				vblank_count <= vblank_count + 1'd1;
 			end
@@ -502,8 +520,8 @@ module emu
 	                (live_block == 6) ? cpuBusControl :
 	                                    dtack_en;
 
-	// Row H: PC hex display — 6 hex digits at 3x scale (12×15 px per char)
-	// Layout: 6 digits with 4px gaps, stride=16px, total width=92px
+	// Hex display shared geometry — 3x scale, 4px wide × 5px tall font
+	// Layout: stride=16px per digit (12px char + 4px gap)
 	wire [3:0] hex_slot_x = dbg_x[3:0];     // x % 16 within digit slot
 	wire [2:0] hex_digit_idx = dbg_x[6:4];   // which digit (0-5)
 	wire hex_in_glyph = (hex_slot_x < 4'd12); // in character vs gap
@@ -513,20 +531,34 @@ module emu
 	                           (hex_slot_x < 4'd6) ? 2'd1 :
 	                           (hex_slot_x < 4'd9) ? 2'd2 : 2'd3;
 
-	// Font row (0-4) from local y, dividing by 3
-	wire [9:0] hex_local_y = dbg_y - 10'd120;
+	// Font row (0-4) — relative to start of whichever hex row is active
+	wire [9:0] hex_base_y = debug_pchex ? 10'd120 :
+	                         debug_ophex ? 10'd140 : 10'd160;
+	wire [9:0] hex_local_y = dbg_y - hex_base_y;
 	wire [2:0] hex_font_row = (hex_local_y < 10'd3) ? 3'd0 :
 	                           (hex_local_y < 10'd6) ? 3'd1 :
 	                           (hex_local_y < 10'd9) ? 3'd2 :
 	                           (hex_local_y < 10'd12) ? 3'd3 : 3'd4;
 
-	// Select nibble from latched PC address (updates ~1x/sec for readability)
-	wire [3:0] hex_nibble = (hex_digit_idx == 3'd0) ? hex_pc_upper[7:4] :
-	                         (hex_digit_idx == 3'd1) ? hex_pc_upper[3:0] :
-	                         (hex_digit_idx == 3'd2) ? hex_pc_lower[7:4] :
-	                         (hex_digit_idx == 3'd3) ? hex_pc_lower[3:0] :
-	                         (hex_digit_idx == 3'd4) ? hex_pc_lowest[7:4] :
-	                                                   hex_pc_lowest[3:0];
+	// Nibble selector: PC (6 digits), opcode (4 digits), SDRAM addr (6 digits)
+	wire [3:0] pc_nibble = (hex_digit_idx == 3'd0) ? hex_pc_upper[7:4] :
+	                        (hex_digit_idx == 3'd1) ? hex_pc_upper[3:0] :
+	                        (hex_digit_idx == 3'd2) ? hex_pc_lower[7:4] :
+	                        (hex_digit_idx == 3'd3) ? hex_pc_lower[3:0] :
+	                        (hex_digit_idx == 3'd4) ? hex_pc_lowest[7:4] :
+	                                                  hex_pc_lowest[3:0];
+	wire [3:0] op_nibble = (hex_digit_idx == 3'd0) ? hex_opcode[15:12] :
+	                        (hex_digit_idx == 3'd1) ? hex_opcode[11:8] :
+	                        (hex_digit_idx == 3'd2) ? hex_opcode[7:4] :
+	                                                  hex_opcode[3:0];
+	wire [3:0] sa_nibble = (hex_digit_idx == 3'd0) ? {1'b0, hex_sdram_addr[22:20]} :
+	                        (hex_digit_idx == 3'd1) ? hex_sdram_addr[19:16] :
+	                        (hex_digit_idx == 3'd2) ? hex_sdram_addr[15:12] :
+	                        (hex_digit_idx == 3'd3) ? hex_sdram_addr[11:8] :
+	                        (hex_digit_idx == 3'd4) ? hex_sdram_addr[7:4] :
+	                                                  hex_sdram_addr[3:0];
+	wire [3:0] hex_nibble = debug_pchex ? pc_nibble :
+	                         debug_ophex ? op_nibble : sa_nibble;
 
 	// 4×5 hex font glyphs — each digit is 5 rows of 4 bits (MSB=left)
 	reg [19:0] hex_glyph;
@@ -644,6 +676,20 @@ module emu
 				dbg_r = 8'h00; dbg_g = 8'hFF; dbg_b = 8'h00;
 			end else begin
 				dbg_r = 8'h00; dbg_g = 8'h10; dbg_b = 8'h00;
+			end
+		end else if (debug_ophex) begin
+			// Row I: Opcode hex — cyan on dark
+			if (hex_in_glyph && hex_pixel_on) begin
+				dbg_r = 8'h00; dbg_g = 8'hFF; dbg_b = 8'hFF;
+			end else begin
+				dbg_r = 8'h00; dbg_g = 8'h10; dbg_b = 8'h10;
+			end
+		end else if (debug_sahex) begin
+			// Row J: SDRAM addr hex — yellow on dark
+			if (hex_in_glyph && hex_pixel_on) begin
+				dbg_r = 8'hFF; dbg_g = 8'hFF; dbg_b = 8'h00;
+			end else begin
+				dbg_r = 8'h10; dbg_g = 8'h10; dbg_b = 8'h00;
 			end
 		end
 	end
