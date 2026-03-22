@@ -364,56 +364,24 @@ module emu
 	end
 
 	// === On-screen debug overlay ===
-	// Layout (top-left corner, each block 8x8 pixels):
+	// Reduced layout — only rows relevant to FPGA boot diagnosis
+	// Each row is 8px tall with 8px gaps (16px per row slot)
 	//
-	// Row 0 (y=0..7):   Ariel indicator (50x8) - Yellow=no writes, Blue=written
-	// Row 1 (y=10..17): SR shift_reg bits [7:0] - Green=1, Dark=0
-	// Row 2 (y=20..27): bit_cnt [2:0] + active + dir + CB1 + CB2 + edge_pend + fall_pend
-	// Row 3 (y=30..37): sr_xfer_count [7:0] - Blue=1, Dark=0
-	// Row 4 (y=42..49): Egret status: running + port_test + handshake + TREQ + TIP + BYTEACK + reset_680x0 + cpuReset
-	// Row 5 (y=54..61): Egret cycle counter [7:0] - Magenta=1, Dark=0 (proves HC05 is executing)
-	// Row 6 (y=66..73): 68K alive counter [7:0] - Orange=1, Dark=0 (proves 68K is fetching)
-	// Row 7 (y=78..85): 68K addr[23:16] - White=1, Dark=0 (shows memory region being accessed)
-	// Row 8 (y=90..97): First CPU read (after DTACK): overlay(Grn/Red) + selROM(Grn/Red) + memAddr[22:17] (Cyan)
-	// Row 9 (y=102..109): First CPU read sdram_out[15:8] - Yellow=1 (raw SDRAM data)
-	// Row 10 (y=114..121): First CPU read cpuAddr[23:16] - Magenta=1 (should be $00 for reset vector)
-	// Row 11 (y=126..133): First CPU read dataControllerOut[15:8] - Cyan=1 (what CPU actually sees)
-	// Row 12 (y=138..145): Overlay-off cpuAddr[23:16] - Red=1 (address when overlay disabled)
-	// Row 13 (y=150..157): Overlay-off cpuAddr[15:8] - Red=1 (lower byte of overlay-off address)
-	// Row 14 (y=162..169): LIVE: overlay|selROM|selRAM|AS|romOE|ramOE|cpuBus|captured (White=1)
+	// Row A (y=0..7):    Egret status: running|port_test|handshake|TREQ|TIP|BYTEACK|reset_680x0|cpuReset
+	// Row B (y=16..23):  68K addr[23:16] - White=1 (live, sampled on AS falling edge)
+	// Row C (y=32..39):  First read: overlay(G/R) + selROM(Cyan) + memAddr[22:17] (Cyan)
+	// Row D (y=48..55):  First read sdram_out[15:8] - Yellow=1 (raw SDRAM data)
+	// Row E (y=64..71):  First read dataControllerOut[15:8] - Cyan=1 (what CPU sees through mux)
+	// Row F (y=80..87):  First read cpuAddr[23:16] - Magenta=1 (should be $00)
+	// Row G (y=96..103):  Overlay-off cpuAddr[23:16] - Red=1 (should be $A0)
+	// Row H (y=112..119): Overlay-off cpuAddr[15:8] - Red=1
+	// Row I (y=128..135): LIVE: overlay|selROM|selRAM|AS|romOE|ramOE|cpuBus|captured
 
-	wire debug_ariel  = (dbg_x < 10'd50) && (dbg_y < 10'd8);
-	wire debug_sr_reg = (dbg_y >= 10'd10) && (dbg_y < 10'd18) && (dbg_x < 10'd64);
-	wire debug_status = (dbg_y >= 10'd20) && (dbg_y < 10'd28) && (dbg_x < 10'd72);
-	wire debug_xfer   = (dbg_y >= 10'd30) && (dbg_y < 10'd38) && (dbg_x < 10'd64);
-	wire debug_egret  = (dbg_y >= 10'd42) && (dbg_y < 10'd50) && (dbg_x < 10'd64);
-	wire debug_ecyc   = (dbg_y >= 10'd54) && (dbg_y < 10'd62) && (dbg_x < 10'd64);
-	wire debug_68k    = (dbg_y >= 10'd66) && (dbg_y < 10'd74) && (dbg_x < 10'd64);
-	wire debug_68addr = (dbg_y >= 10'd78) && (dbg_y < 10'd86) && (dbg_x < 10'd64);
-	wire debug_any    = debug_ariel || debug_sr_reg || debug_status || debug_xfer
-	                  || debug_egret || debug_ecyc || debug_68k || debug_68addr
-	                  || debug_faddr || debug_fdhi || debug_fdlo
-	                  || debug_dcdata || debug_ovoff_hi || debug_ovoff_lo || debug_live;
-
-	// Which bit of shift_reg to show (bit 7 on left, bit 0 on right)
-	wire [2:0] sr_bit_idx = 3'd7 - dbg_x[5:3];
-	wire sr_bit_val = via_sr_dbg_shift_reg[sr_bit_idx];
-
-	// Status row: bit_cnt(3) + active + dir + CB1 + CB2 + edge_pend + fall_pend = 9 blocks
-	wire [3:0] status_block = dbg_x[6:3]; // which 8px block
-	wire status_val = (status_block == 0) ? via_sr_dbg_bit_cnt[2] :
-	                  (status_block == 1) ? via_sr_dbg_bit_cnt[1] :
-	                  (status_block == 2) ? via_sr_dbg_bit_cnt[0] :
-	                  (status_block == 3) ? via_sr_dbg_active :
-	                  (status_block == 4) ? via_sr_dbg_dir :
-	                  (status_block == 5) ? via_sr_dbg_cb1 :
-	                  (status_block == 6) ? via_sr_dbg_cb2 :
-	                  (status_block == 7) ? via_sr_dbg_edge_pending :
-	                                        via_sr_dbg_fall_pending;
-
-	// Xfer count bits
-	wire [2:0] xfer_bit_idx = 3'd7 - dbg_x[5:3];
-	wire xfer_bit_val = sr_xfer_count[xfer_bit_idx];
+	wire debug_egret  = (dbg_y < 10'd8) && (dbg_x < 10'd64);
+	wire debug_68addr = (dbg_y >= 10'd16) && (dbg_y < 10'd24) && (dbg_x < 10'd64);
+	wire debug_any    = debug_egret || debug_68addr
+	                  || debug_faddr || debug_fdhi || debug_dcdata || debug_fdlo
+	                  || debug_ovoff_hi || debug_ovoff_lo || debug_live;
 
 	// Egret status row: 8 blocks, each 8px wide
 	// Block 0: running (Green=yes)
@@ -434,32 +402,11 @@ module emu
 	                 (egret_block == 6) ? egret_dbg_reset_680x0 :
 	                                      egret_dbg_cpu_reset_out;
 
-	// Egret cycle counter - increments each frame to prove HC05 is running
-	// We sample a free-running counter driven by egret_dbg_running
-	reg [23:0] egret_alive_cnt = 0;
-	always @(posedge clk_sys) begin
-		if (egret_dbg_running)
-			egret_alive_cnt <= egret_alive_cnt + 1'd1;
-	end
-	wire [7:0] egret_alive_byte = egret_alive_cnt[23:16]; // slow-changing bits visible on screen
-	wire [2:0] ecyc_bit_idx = 3'd7 - dbg_x[5:3];
-	wire ecyc_bit_val = egret_alive_byte[ecyc_bit_idx];
-
-	// 68K activity counter - increments on each bus cycle (_cpuAS falling edge)
-	reg [23:0] cpu_alive_cnt = 0;
+	// 68K address upper byte - latched on AS falling edge
+	reg [7:0] cpu_addr_upper = 0;
 	reg cpu_as_prev = 1;
 	always @(posedge clk_sys) begin
 		cpu_as_prev <= _cpuAS;
-		if (cpu_as_prev && !_cpuAS)  // AS falling edge = new bus cycle
-			cpu_alive_cnt <= cpu_alive_cnt + 1'd1;
-	end
-	wire [7:0] cpu_alive_byte = cpu_alive_cnt[23:16]; // slow-changing bits
-	wire [2:0] cpu68_bit_idx = 3'd7 - dbg_x[5:3];
-	wire cpu68_bit_val = cpu_alive_byte[cpu68_bit_idx];
-
-	// 68K address upper byte - latched on AS falling edge
-	reg [7:0] cpu_addr_upper = 0;
-	always @(posedge clk_sys) begin
 		if (cpu_as_prev && !_cpuAS)
 			cpu_addr_upper <= cpuAddr[23:16];
 	end
@@ -510,8 +457,8 @@ module emu
 		end
 	end
 
-	// Row 8: First read: overlay + selectROM + SDRAM addr[22:17]
-	wire debug_faddr  = (dbg_y >= 10'd90) && (dbg_y < 10'd98) && (dbg_x < 10'd64);
+	// Row C: First read: overlay + selectROM + SDRAM addr[22:17]
+	wire debug_faddr  = (dbg_y >= 10'd32) && (dbg_y < 10'd40) && (dbg_x < 10'd64);
 	wire [2:0] faddr_block = dbg_x[5:3];
 	wire faddr_val = (faddr_block == 0) ? first_read_overlay :
 	                 (faddr_block == 1) ? first_read_selectROM :
@@ -522,33 +469,33 @@ module emu
 	                 (faddr_block == 6) ? first_read_addr[18] :
 	                                      first_read_addr[17];
 
-	// Row 9: First read data [15:8]
-	wire debug_fdhi   = (dbg_y >= 10'd102) && (dbg_y < 10'd110) && (dbg_x < 10'd64);
+	// Row D: First read sdram_out[15:8]
+	wire debug_fdhi   = (dbg_y >= 10'd48) && (dbg_y < 10'd56) && (dbg_x < 10'd64);
 	wire [2:0] fdhi_bit_idx = 3'd7 - dbg_x[5:3];
 	wire fdhi_val = first_read_data[8 + fdhi_bit_idx];
 
-	// Row 10: First read CPU address [23:16] - Magenta=1 (shows what CPU address triggered the capture)
-	wire debug_fdlo   = (dbg_y >= 10'd114) && (dbg_y < 10'd122) && (dbg_x < 10'd64);
-	wire [2:0] fdlo_bit_idx = 3'd7 - dbg_x[5:3];
-	wire fdlo_val = first_read_cpuAddr[16 + fdlo_bit_idx];
-
-	// Row 11: First read dataControllerDataOut[15:8] - Cyan=1 (what CPU actually sees through mux)
-	wire debug_dcdata = (dbg_y >= 10'd126) && (dbg_y < 10'd134) && (dbg_x < 10'd64);
+	// Row E: First read dataControllerDataOut[15:8] - Cyan=1 (what CPU actually sees through mux)
+	wire debug_dcdata = (dbg_y >= 10'd64) && (dbg_y < 10'd72) && (dbg_x < 10'd64);
 	wire [2:0] dcdata_bit_idx = 3'd7 - dbg_x[5:3];
 	wire dcdata_val = first_read_dcdata[8 + dcdata_bit_idx];
 
-	// Row 12: Overlay-off cpuAddr[23:16] - Red=1 (CPU address when overlay turned off)
-	wire debug_ovoff_hi = (dbg_y >= 10'd138) && (dbg_y < 10'd146) && (dbg_x < 10'd64);
+	// Row F: First read cpuAddr[23:16] - Magenta=1
+	wire debug_fdlo   = (dbg_y >= 10'd80) && (dbg_y < 10'd88) && (dbg_x < 10'd64);
+	wire [2:0] fdlo_bit_idx = 3'd7 - dbg_x[5:3];
+	wire fdlo_val = first_read_cpuAddr[16 + fdlo_bit_idx];
+
+	// Row G: Overlay-off cpuAddr[23:16] - Red=1
+	wire debug_ovoff_hi = (dbg_y >= 10'd96) && (dbg_y < 10'd104) && (dbg_x < 10'd64);
 	wire [2:0] ovoff_hi_idx = 3'd7 - dbg_x[5:3];
 	wire ovoff_hi_val = overlay_off_cpuAddr[16 + ovoff_hi_idx];
 
-	// Row 13: Overlay-off cpuAddr[15:8] - Red=1 (lower byte, for full 24-bit addr with Row 12)
-	wire debug_ovoff_lo = (dbg_y >= 10'd150) && (dbg_y < 10'd158) && (dbg_x < 10'd64);
+	// Row H: Overlay-off cpuAddr[15:8] - Red=1
+	wire debug_ovoff_lo = (dbg_y >= 10'd112) && (dbg_y < 10'd120) && (dbg_x < 10'd64);
 	wire [2:0] ovoff_lo_idx = 3'd7 - dbg_x[5:3];
 	wire ovoff_lo_val = overlay_off_cpuAddr[8 + ovoff_lo_idx];
 
-	// Row 14: LIVE overlay + selectROM + selectRAM + _cpuAS (real-time, not captured)
-	wire debug_live   = (dbg_y >= 10'd162) && (dbg_y < 10'd170) && (dbg_x < 10'd64);
+	// Row I: LIVE indicators
+	wire debug_live   = (dbg_y >= 10'd128) && (dbg_y < 10'd136) && (dbg_x < 10'd64);
 	wire [2:0] live_block = dbg_x[5:3];
 	wire live_val = (live_block == 0) ? memoryOverlayOn :
 	                (live_block == 1) ? selectROM :
@@ -563,113 +510,20 @@ module emu
 	reg [7:0] dbg_r, dbg_g, dbg_b;
 	always @(*) begin
 		dbg_r = 8'h10; dbg_g = 8'h10; dbg_b = 8'h10; // dark background
-		if (debug_ariel) begin
-			// Yellow = no Ariel writes, Blue = Ariel written
-			dbg_r = ariel_written ? 8'h00 : 8'hFF;
-			dbg_g = ariel_written ? 8'h00 : 8'hFF;
-			dbg_b = ariel_written ? 8'hFF : 8'h00;
-		end else if (debug_sr_reg) begin
-			// Shift register bits: Green = 1
-			dbg_r = 8'h00; dbg_g = sr_bit_val ? 8'hFF : 8'h30; dbg_b = 8'h00;
-		end else if (debug_status) begin
-			// Color-coded status indicators
-			case (status_block)
-				0,1,2: begin // bit_cnt: White
-					dbg_r = status_val ? 8'hFF : 8'h30;
-					dbg_g = status_val ? 8'hFF : 8'h30;
-					dbg_b = status_val ? 8'hFF : 8'h30;
-				end
-				3: begin // active: Cyan
-					dbg_r = 8'h00;
-					dbg_g = status_val ? 8'hFF : 8'h30;
-					dbg_b = status_val ? 8'hFF : 8'h30;
-				end
-				4: begin // dir: Magenta
-					dbg_r = status_val ? 8'hFF : 8'h30;
-					dbg_g = 8'h00;
-					dbg_b = status_val ? 8'hFF : 8'h30;
-				end
-				5: begin // CB1: Yellow
-					dbg_r = status_val ? 8'hFF : 8'h30;
-					dbg_g = status_val ? 8'hFF : 8'h30;
-					dbg_b = 8'h00;
-				end
-				6: begin // CB2: Red
-					dbg_r = status_val ? 8'hFF : 8'h30;
-					dbg_g = 8'h00;
-					dbg_b = 8'h00;
-				end
-				7: begin // edge_pending: Green
-					dbg_r = 8'h00;
-					dbg_g = status_val ? 8'hFF : 8'h30;
-					dbg_b = 8'h00;
-				end
-				default: begin // fall_pending: Orange
-					dbg_r = status_val ? 8'hFF : 8'h30;
-					dbg_g = status_val ? 8'h80 : 8'h18;
-					dbg_b = 8'h00;
-				end
-			endcase
-		end else if (debug_xfer) begin
-			// Transfer count: Blue = 1
-			dbg_r = 8'h00; dbg_g = 8'h00; dbg_b = xfer_bit_val ? 8'hFF : 8'h30;
-		end else if (debug_egret) begin
-			// Egret status indicators - color per block
+		if (debug_egret) begin
+			// Row A: Egret status indicators - color per block
 			case (egret_block)
-				0: begin // running: Green
-					dbg_r = 8'h00;
-					dbg_g = egret_val ? 8'hFF : 8'h30;
-					dbg_b = 8'h00;
-				end
-				1: begin // port_test_done: Green
-					dbg_r = 8'h00;
-					dbg_g = egret_val ? 8'hFF : 8'h30;
-					dbg_b = 8'h00;
-				end
-				2: begin // handshake_done: Green
-					dbg_r = 8'h00;
-					dbg_g = egret_val ? 8'hFF : 8'h30;
-					dbg_b = 8'h00;
-				end
-				3: begin // TREQ: Red=asserted
-					dbg_r = egret_val ? 8'hFF : 8'h30;
-					dbg_g = 8'h00;
-					dbg_b = 8'h00;
-				end
-				4: begin // TIP active: Yellow
-					dbg_r = egret_val ? 8'hFF : 8'h30;
-					dbg_g = egret_val ? 8'hFF : 8'h30;
-					dbg_b = 8'h00;
-				end
-				5: begin // BYTEACK: Cyan
-					dbg_r = 8'h00;
-					dbg_g = egret_val ? 8'hFF : 8'h30;
-					dbg_b = egret_val ? 8'hFF : 8'h30;
-				end
-				6: begin // reset_680x0: Red=holding, Green=released
-					dbg_r = egret_val ? 8'hFF : 8'h00;
-					dbg_g = egret_val ? 8'h00 : 8'hFF;
-					dbg_b = 8'h00;
-				end
-				default: begin // _cpuReset: Green=running, Red=held
-					dbg_r = egret_val ? 8'h00 : 8'hFF;
-					dbg_g = egret_val ? 8'hFF : 8'h00;
-					dbg_b = 8'h00;
-				end
+				0: begin dbg_r = 8'h00; dbg_g = egret_val ? 8'hFF : 8'h30; dbg_b = 8'h00; end // running: Green
+				1: begin dbg_r = 8'h00; dbg_g = egret_val ? 8'hFF : 8'h30; dbg_b = 8'h00; end // port_test: Green
+				2: begin dbg_r = 8'h00; dbg_g = egret_val ? 8'hFF : 8'h30; dbg_b = 8'h00; end // handshake: Green
+				3: begin dbg_r = egret_val ? 8'hFF : 8'h30; dbg_g = 8'h00; dbg_b = 8'h00; end // TREQ: Red
+				4: begin dbg_r = egret_val ? 8'hFF : 8'h30; dbg_g = egret_val ? 8'hFF : 8'h30; dbg_b = 8'h00; end // TIP: Yellow
+				5: begin dbg_r = 8'h00; dbg_g = egret_val ? 8'hFF : 8'h30; dbg_b = egret_val ? 8'hFF : 8'h30; end // BYTEACK: Cyan
+				6: begin dbg_r = egret_val ? 8'hFF : 8'h00; dbg_g = egret_val ? 8'h00 : 8'hFF; dbg_b = 8'h00; end // reset_680x0: R=hold,G=release
+				default: begin dbg_r = egret_val ? 8'h00 : 8'hFF; dbg_g = egret_val ? 8'hFF : 8'h00; dbg_b = 8'h00; end // cpuReset: G=run,R=held
 			endcase
-		end else if (debug_ecyc) begin
-			// Egret alive counter: Magenta = 1 (should change over time if HC05 is running)
-			dbg_r = ecyc_bit_val ? 8'hFF : 8'h30;
-			dbg_g = 8'h00;
-			dbg_b = ecyc_bit_val ? 8'hFF : 8'h30;
-		end else if (debug_68k) begin
-			// 68K alive counter: Orange = 1 (should change if CPU is fetching)
-			dbg_r = cpu68_bit_val ? 8'hFF : 8'h30;
-			dbg_g = cpu68_bit_val ? 8'h80 : 8'h18;
-			dbg_b = 8'h00;
 		end else if (debug_68addr) begin
-			// 68K address[23:16]: White = 1 (shows memory region)
-			// Common values: 0x40=ROM, 0x00=RAM, 0x50=VIA, 0xF0=VRAM
+			// Row B: 68K address[23:16]: White = 1
 			dbg_r = addr_bit_val ? 8'hFF : 8'h30;
 			dbg_g = addr_bit_val ? 8'hFF : 8'h30;
 			dbg_b = addr_bit_val ? 8'hFF : 8'h30;
