@@ -370,15 +370,17 @@ module emu
 	// Row B (y=16..23):  68K addr[23:16] - White=1 (live, sampled on AS falling edge)
 	// Row C (y=32..39):  68K alive counter [7:0] - Orange=1 (changes = CPU progressing)
 	// Row D (y=48..55):  68K PC addr[23:16] - Magenta=1 (instruction fetches only, FC[1]=1)
-	// Row E (y=64..71):  LIVE: overlay|selROM|selRAM|AS|romOE|ramOE|cpuBus|dtack
+	// Row E (y=64..71):  68K PC addr[15:8] - Cyan=1 (instruction fetches only)
+	// Row F (y=80..87):  LIVE: overlay|selROM|selRAM|AS|romOE|ramOE|cpuBus|dtack
 
 	wire debug_egret  = (dbg_y < 10'd8) && (dbg_x < 10'd64);
 	wire debug_68addr = (dbg_y >= 10'd16) && (dbg_y < 10'd24) && (dbg_x < 10'd64);
 	wire debug_alive  = (dbg_y >= 10'd32) && (dbg_y < 10'd40) && (dbg_x < 10'd64);
 	wire debug_pcaddr = (dbg_y >= 10'd48) && (dbg_y < 10'd56) && (dbg_x < 10'd64);
-	wire debug_live   = (dbg_y >= 10'd64) && (dbg_y < 10'd72) && (dbg_x < 10'd64);
+	wire debug_pclo   = (dbg_y >= 10'd64) && (dbg_y < 10'd72) && (dbg_x < 10'd64);
+	wire debug_live   = (dbg_y >= 10'd80) && (dbg_y < 10'd88) && (dbg_x < 10'd64);
 	wire debug_any    = debug_egret || debug_68addr
-	                  || debug_alive || debug_pcaddr || debug_live;
+	                  || debug_alive || debug_pcaddr || debug_pclo || debug_live;
 
 	// Egret status row: 8 blocks, each 8px wide
 	// Block 0: running (Green=yes)
@@ -419,16 +421,20 @@ module emu
 	wire [2:0] alive_bit_idx = 3'd7 - dbg_x[5:3];
 	wire alive_bit_val = cpu_alive_cnt[alive_bit_idx];
 
-	// 68K PC address — capture cpuAddr[23:16] only on instruction fetches (FC[1]=1)
+	// 68K PC address — capture cpuAddr on instruction fetches only (FC[1]=1)
 	reg [7:0] cpu_pc_upper = 0;
+	reg [7:0] cpu_pc_lower = 0;
 	always @(posedge clk_sys) begin
-		if (cpu_as_prev && !_cpuAS && cpuFC[1])
+		if (cpu_as_prev && !_cpuAS && cpuFC[1]) begin
 			cpu_pc_upper <= cpuAddr[23:16];
+			cpu_pc_lower <= cpuAddr[15:8];
+		end
 	end
 	wire [2:0] pc_bit_idx = 3'd7 - dbg_x[5:3];
 	wire pc_bit_val = cpu_pc_upper[pc_bit_idx];
+	wire pclo_bit_val = cpu_pc_lower[pc_bit_idx];
 
-	// Row E: LIVE indicators
+	// Row F: LIVE indicators
 	wire [2:0] live_block = dbg_x[5:3];
 	wire live_val = (live_block == 0) ? memoryOverlayOn :
 	                (live_block == 1) ? selectROM :
@@ -470,6 +476,11 @@ module emu
 			dbg_r = pc_bit_val ? 8'hFF : 8'h30;
 			dbg_g = 8'h00;
 			dbg_b = pc_bit_val ? 8'hFF : 8'h30;
+		end else if (debug_pclo) begin
+			// Row E: 68K PC addr[15:8]: Cyan = 1 (instruction fetches only)
+			dbg_r = 8'h00;
+			dbg_g = pclo_bit_val ? 8'hFF : 8'h30;
+			dbg_b = pclo_bit_val ? 8'hFF : 8'h30;
 		end else if (debug_live) begin
 			// Live status: Green=active/on, Red=off for first two, White for rest
 			if (live_block < 2) begin
