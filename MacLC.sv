@@ -197,7 +197,7 @@ module emu
 		"OBC,Scale,Normal,V-Integer,Narrower HV-Integer,Wider HV-Integer;",
 		"-;",
 		"OFG,Video Mode,4bpp,1bpp,2bpp,8bpp,16bpp;",
-		"O1011,Monitor,512x384 12in RGB,640x480 VGA,Portrait;",
+		"OAB,Monitor,512x384 12in RGB,640x480 VGA,Portrait;",
 		"-;",
 		"ODE,CPU,68020;",
 		"O4,Memory,2MB,10MB;",
@@ -373,6 +373,7 @@ module emu
 	// Row E (y=64..71):  68K PC addr[15:8] - Cyan=1 (instruction fetches only)
 	// Row F (y=80..87):  Fetch context: overlay|selROM|selRAM|FC2|FC1|FC0|everROM|everA0
 	// Row G (y=96..103): LIVE: overlay|selROM|selRAM|AS|romOE|ramOE|cpuBus|dtack
+	// Row H (y=120..134): PC hex display — 6 green hex digits (PC[23:0], 3x scale)
 
 	wire debug_egret  = (dbg_y < 10'd8) && (dbg_x < 10'd64);
 	wire debug_68addr = (dbg_y >= 10'd16) && (dbg_y < 10'd24) && (dbg_x < 10'd64);
@@ -381,8 +382,10 @@ module emu
 	wire debug_pclo   = (dbg_y >= 10'd64) && (dbg_y < 10'd72) && (dbg_x < 10'd64);
 	wire debug_fctx   = (dbg_y >= 10'd80) && (dbg_y < 10'd88) && (dbg_x < 10'd64);
 	wire debug_live   = (dbg_y >= 10'd96) && (dbg_y < 10'd104) && (dbg_x < 10'd64);
+	wire debug_pchex  = (dbg_y >= 10'd120) && (dbg_y < 10'd135) && (dbg_x < 10'd92);
 	wire debug_any    = debug_egret || debug_68addr
-	                  || debug_alive || debug_pcaddr || debug_pclo || debug_fctx || debug_live;
+	                  || debug_alive || debug_pcaddr || debug_pclo || debug_fctx || debug_live
+	                  || debug_pchex;
 
 	// Egret status row: 8 blocks, each 8px wide
 	// Block 0: running (Green=yes)
@@ -426,10 +429,12 @@ module emu
 	// 68K PC address — capture cpuAddr on instruction fetches only (FC[1]=1)
 	reg [7:0] cpu_pc_upper = 0;
 	reg [7:0] cpu_pc_lower = 0;
+	reg [7:0] cpu_pc_lowest = 0;
 	always @(posedge clk_sys) begin
 		if (cpu_as_prev && !_cpuAS && cpuFC[1]) begin
 			cpu_pc_upper <= cpuAddr[23:16];
 			cpu_pc_lower <= cpuAddr[15:8];
+			cpu_pc_lowest <= cpuAddr[7:0];
 		end
 	end
 	wire [2:0] pc_bit_idx = 3'd7 - dbg_x[5:3];
@@ -478,6 +483,59 @@ module emu
 	                (live_block == 5) ? !_ramOE :
 	                (live_block == 6) ? cpuBusControl :
 	                                    dtack_en;
+
+	// Row H: PC hex display — 6 hex digits at 3x scale (12×15 px per char)
+	// Layout: 6 digits with 4px gaps, stride=16px, total width=92px
+	wire [3:0] hex_slot_x = dbg_x[3:0];     // x % 16 within digit slot
+	wire [2:0] hex_digit_idx = dbg_x[6:4];   // which digit (0-5)
+	wire hex_in_glyph = (hex_slot_x < 4'd12); // in character vs gap
+
+	// Font column (0-3) from local x, dividing by 3
+	wire [1:0] hex_font_col = (hex_slot_x < 4'd3) ? 2'd0 :
+	                           (hex_slot_x < 4'd6) ? 2'd1 :
+	                           (hex_slot_x < 4'd9) ? 2'd2 : 2'd3;
+
+	// Font row (0-4) from local y, dividing by 3
+	wire [9:0] hex_local_y = dbg_y - 10'd120;
+	wire [2:0] hex_font_row = (hex_local_y < 10'd3) ? 3'd0 :
+	                           (hex_local_y < 10'd6) ? 3'd1 :
+	                           (hex_local_y < 10'd9) ? 3'd2 :
+	                           (hex_local_y < 10'd12) ? 3'd3 : 3'd4;
+
+	// Select nibble from captured PC address
+	wire [3:0] hex_nibble = (hex_digit_idx == 3'd0) ? cpu_pc_upper[7:4] :
+	                         (hex_digit_idx == 3'd1) ? cpu_pc_upper[3:0] :
+	                         (hex_digit_idx == 3'd2) ? cpu_pc_lower[7:4] :
+	                         (hex_digit_idx == 3'd3) ? cpu_pc_lower[3:0] :
+	                         (hex_digit_idx == 3'd4) ? cpu_pc_lowest[7:4] :
+	                                                   cpu_pc_lowest[3:0];
+
+	// 4×5 hex font glyphs — each digit is 5 rows of 4 bits (MSB=left)
+	reg [19:0] hex_glyph;
+	always @(*) begin
+		case (hex_nibble)
+			4'h0: hex_glyph = {4'b0110, 4'b1001, 4'b1001, 4'b1001, 4'b0110};
+			4'h1: hex_glyph = {4'b0100, 4'b1100, 4'b0100, 4'b0100, 4'b1110};
+			4'h2: hex_glyph = {4'b1110, 4'b0001, 4'b0110, 4'b1000, 4'b1111};
+			4'h3: hex_glyph = {4'b1110, 4'b0001, 4'b0110, 4'b0001, 4'b1110};
+			4'h4: hex_glyph = {4'b1001, 4'b1001, 4'b1111, 4'b0001, 4'b0001};
+			4'h5: hex_glyph = {4'b1111, 4'b1000, 4'b1110, 4'b0001, 4'b1110};
+			4'h6: hex_glyph = {4'b0110, 4'b1000, 4'b1110, 4'b1001, 4'b0110};
+			4'h7: hex_glyph = {4'b1111, 4'b0001, 4'b0010, 4'b0100, 4'b0100};
+			4'h8: hex_glyph = {4'b0110, 4'b1001, 4'b0110, 4'b1001, 4'b0110};
+			4'h9: hex_glyph = {4'b0110, 4'b1001, 4'b0111, 4'b0001, 4'b0110};
+			4'hA: hex_glyph = {4'b0110, 4'b1001, 4'b1111, 4'b1001, 4'b1001};
+			4'hB: hex_glyph = {4'b1110, 4'b1001, 4'b1110, 4'b1001, 4'b1110};
+			4'hC: hex_glyph = {4'b0110, 4'b1001, 4'b1000, 4'b1001, 4'b0110};
+			4'hD: hex_glyph = {4'b1110, 4'b1001, 4'b1001, 4'b1001, 4'b1110};
+			4'hE: hex_glyph = {4'b1111, 4'b1000, 4'b1110, 4'b1000, 4'b1111};
+			4'hF: hex_glyph = {4'b1111, 4'b1000, 4'b1110, 4'b1000, 4'b1000};
+		endcase
+	end
+
+	// Index into glyph: bit position = (4-row)*4 + (3-col)
+	wire [4:0] hex_bit_idx = {(3'd4 - hex_font_row), 2'b00} + {3'd0, (2'd3 - hex_font_col)};
+	wire hex_pixel_on = hex_glyph[hex_bit_idx];
 
 	// Debug pixel color
 	reg [7:0] dbg_r, dbg_g, dbg_b;
@@ -561,6 +619,13 @@ module emu
 				dbg_r = live_val ? 8'hFF : 8'h30;
 				dbg_g = live_val ? 8'hFF : 8'h30;
 				dbg_b = live_val ? 8'hFF : 8'h30;
+			end
+		end else if (debug_pchex) begin
+			// Row H: PC hex display — bright green on dark
+			if (hex_in_glyph && hex_pixel_on) begin
+				dbg_r = 8'h00; dbg_g = 8'hFF; dbg_b = 8'h00;
+			end else begin
+				dbg_r = 8'h00; dbg_g = 8'h10; dbg_b = 8'h00;
 			end
 		end
 	end
