@@ -437,6 +437,24 @@ module emu
 			cpu_pc_lowest <= cpuAddr[7:0];
 		end
 	end
+	// Latched PC for hex display — updates ~1x/sec (every 60 VBlanks)
+	reg [7:0] hex_pc_upper = 0, hex_pc_lower = 0, hex_pc_lowest = 0;
+	reg [5:0] vblank_count = 0;
+	reg vblank_prev = 0;
+	always @(posedge clk_sys) begin
+		vblank_prev <= v8_vblank;
+		if (v8_vblank && !vblank_prev) begin
+			if (vblank_count >= 6'd59) begin
+				vblank_count <= 0;
+				hex_pc_upper <= cpu_pc_upper;
+				hex_pc_lower <= cpu_pc_lower;
+				hex_pc_lowest <= cpu_pc_lowest;
+			end else begin
+				vblank_count <= vblank_count + 1'd1;
+			end
+		end
+	end
+
 	wire [2:0] pc_bit_idx = 3'd7 - dbg_x[5:3];
 	wire pc_bit_val = cpu_pc_upper[pc_bit_idx];
 	wire pclo_bit_val = cpu_pc_lower[pc_bit_idx];
@@ -502,13 +520,13 @@ module emu
 	                           (hex_local_y < 10'd9) ? 3'd2 :
 	                           (hex_local_y < 10'd12) ? 3'd3 : 3'd4;
 
-	// Select nibble from captured PC address
-	wire [3:0] hex_nibble = (hex_digit_idx == 3'd0) ? cpu_pc_upper[7:4] :
-	                         (hex_digit_idx == 3'd1) ? cpu_pc_upper[3:0] :
-	                         (hex_digit_idx == 3'd2) ? cpu_pc_lower[7:4] :
-	                         (hex_digit_idx == 3'd3) ? cpu_pc_lower[3:0] :
-	                         (hex_digit_idx == 3'd4) ? cpu_pc_lowest[7:4] :
-	                                                   cpu_pc_lowest[3:0];
+	// Select nibble from latched PC address (updates ~1x/sec for readability)
+	wire [3:0] hex_nibble = (hex_digit_idx == 3'd0) ? hex_pc_upper[7:4] :
+	                         (hex_digit_idx == 3'd1) ? hex_pc_upper[3:0] :
+	                         (hex_digit_idx == 3'd2) ? hex_pc_lower[7:4] :
+	                         (hex_digit_idx == 3'd3) ? hex_pc_lower[3:0] :
+	                         (hex_digit_idx == 3'd4) ? hex_pc_lowest[7:4] :
+	                                                   hex_pc_lowest[3:0];
 
 	// 4×5 hex font glyphs — each digit is 5 rows of 4 bits (MSB=left)
 	reg [19:0] hex_glyph;
