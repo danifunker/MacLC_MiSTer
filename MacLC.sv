@@ -375,9 +375,12 @@ module emu
 	// Row 6 (y=66..73): 68K alive counter [7:0] - Orange=1, Dark=0 (proves 68K is fetching)
 	// Row 7 (y=78..85): 68K addr[23:16] - White=1, Dark=0 (shows memory region being accessed)
 	// Row 8 (y=90..97): First CPU read (after DTACK): overlay(Grn/Red) + selROM(Grn/Red) + memAddr[22:17] (Cyan)
-	// Row 9 (y=102..109): First CPU read data[15:8] - Yellow=1
+	// Row 9 (y=102..109): First CPU read sdram_out[15:8] - Yellow=1 (raw SDRAM data)
 	// Row 10 (y=114..121): First CPU read cpuAddr[23:16] - Magenta=1 (should be $00 for reset vector)
-	// Row 11 (y=126..133): LIVE: overlay|selROM|selRAM|AS|romOE|ramOE|cpuBus|captured (White=1)
+	// Row 11 (y=126..133): First CPU read dataControllerOut[15:8] - Cyan=1 (what CPU actually sees)
+	// Row 12 (y=138..145): Overlay-off cpuAddr[23:16] - Red=1 (address when overlay disabled)
+	// Row 13 (y=150..157): Overlay-off cpuAddr[15:8] - Red=1 (lower byte of overlay-off address)
+	// Row 14 (y=162..169): LIVE: overlay|selROM|selRAM|AS|romOE|ramOE|cpuBus|captured (White=1)
 
 	wire debug_ariel  = (dbg_x < 10'd50) && (dbg_y < 10'd8);
 	wire debug_sr_reg = (dbg_y >= 10'd10) && (dbg_y < 10'd18) && (dbg_x < 10'd64);
@@ -389,7 +392,8 @@ module emu
 	wire debug_68addr = (dbg_y >= 10'd78) && (dbg_y < 10'd86) && (dbg_x < 10'd64);
 	wire debug_any    = debug_ariel || debug_sr_reg || debug_status || debug_xfer
 	                  || debug_egret || debug_ecyc || debug_68k || debug_68addr
-	                  || debug_faddr || debug_fdhi || debug_fdlo || debug_live;
+	                  || debug_faddr || debug_fdhi || debug_fdlo
+	                  || debug_dcdata || debug_ovoff_hi || debug_ovoff_lo || debug_live;
 
 	// Which bit of shift_reg to show (bit 7 on left, bit 0 on right)
 	wire [2:0] sr_bit_idx = 3'd7 - dbg_x[5:3];
@@ -469,6 +473,7 @@ module emu
 	reg        first_read_captured = 0;
 	reg [22:0] first_read_addr = 0;
 	reg [15:0] first_read_data = 0;
+	reg [15:0] first_read_dcdata = 0;  // What CPU actually sees (through dataController mux)
 	reg        first_read_overlay = 0;
 	reg        first_read_selectROM = 0;
 	reg [23:0] first_read_cpuAddr = 0;
@@ -479,9 +484,29 @@ module emu
 			first_read_captured <= 1;
 			first_read_addr <= memoryAddr;
 			first_read_data <= sdram_out;
+			first_read_dcdata <= dataControllerDataOut;
 			first_read_overlay <= memoryOverlayOn;
 			first_read_selectROM <= selectROM;
 			first_read_cpuAddr <= cpuAddr;
+		end
+	end
+
+	// Overlay-off capture — grab cpuAddr when overlay transitions from ON to OFF
+	// This tells us what instruction/access caused the overlay to be disabled,
+	// and where the CPU was at that moment (should be in $A0xxxx ROM area).
+	reg        overlay_off_captured = 0;
+	reg [23:0] overlay_off_cpuAddr = 0;
+	reg        overlay_prev = 0;
+	always @(posedge clk_sys) begin
+		if (!_cpuReset) begin
+			overlay_off_captured <= 0;
+			overlay_prev <= 1;
+		end else begin
+			overlay_prev <= memoryOverlayOn;
+			if (!overlay_off_captured && overlay_prev && !memoryOverlayOn) begin
+				overlay_off_captured <= 1;
+				overlay_off_cpuAddr <= cpuAddr;
+			end
 		end
 	end
 
@@ -507,8 +532,23 @@ module emu
 	wire [2:0] fdlo_bit_idx = 3'd7 - dbg_x[5:3];
 	wire fdlo_val = first_read_cpuAddr[16 + fdlo_bit_idx];
 
-	// Row 11: LIVE overlay + selectROM + selectRAM + _cpuAS (real-time, not captured)
-	wire debug_live   = (dbg_y >= 10'd126) && (dbg_y < 10'd134) && (dbg_x < 10'd64);
+	// Row 11: First read dataControllerDataOut[15:8] - Cyan=1 (what CPU actually sees through mux)
+	wire debug_dcdata = (dbg_y >= 10'd126) && (dbg_y < 10'd134) && (dbg_x < 10'd64);
+	wire [2:0] dcdata_bit_idx = 3'd7 - dbg_x[5:3];
+	wire dcdata_val = first_read_dcdata[8 + dcdata_bit_idx];
+
+	// Row 12: Overlay-off cpuAddr[23:16] - Red=1 (CPU address when overlay turned off)
+	wire debug_ovoff_hi = (dbg_y >= 10'd138) && (dbg_y < 10'd146) && (dbg_x < 10'd64);
+	wire [2:0] ovoff_hi_idx = 3'd7 - dbg_x[5:3];
+	wire ovoff_hi_val = overlay_off_cpuAddr[16 + ovoff_hi_idx];
+
+	// Row 13: Overlay-off cpuAddr[15:8] - Red=1 (lower byte, for full 24-bit addr with Row 12)
+	wire debug_ovoff_lo = (dbg_y >= 10'd150) && (dbg_y < 10'd158) && (dbg_x < 10'd64);
+	wire [2:0] ovoff_lo_idx = 3'd7 - dbg_x[5:3];
+	wire ovoff_lo_val = overlay_off_cpuAddr[8 + ovoff_lo_idx];
+
+	// Row 14: LIVE overlay + selectROM + selectRAM + _cpuAS (real-time, not captured)
+	wire debug_live   = (dbg_y >= 10'd162) && (dbg_y < 10'd170) && (dbg_x < 10'd64);
 	wire [2:0] live_block = dbg_x[5:3];
 	wire live_val = (live_block == 0) ? memoryOverlayOn :
 	                (live_block == 1) ? selectROM :
@@ -654,6 +694,21 @@ module emu
 			dbg_r = fdlo_val ? 8'hFF : 8'h30;
 			dbg_g = 8'h00;
 			dbg_b = fdlo_val ? 8'hFF : 8'h30;
+		end else if (debug_dcdata) begin
+			// First read dataControllerDataOut[15:8]: Cyan = 1 (should match Row 9 if no mux issue)
+			dbg_r = 8'h00;
+			dbg_g = dcdata_val ? 8'hFF : 8'h30;
+			dbg_b = dcdata_val ? 8'hFF : 8'h30;
+		end else if (debug_ovoff_hi) begin
+			// Overlay-off cpuAddr[23:16]: Red = 1 (should be $A0 = 10100000)
+			dbg_r = ovoff_hi_val ? 8'hFF : 8'h30;
+			dbg_g = 8'h00;
+			dbg_b = 8'h00;
+		end else if (debug_ovoff_lo) begin
+			// Overlay-off cpuAddr[15:8]: Red = 1 (lower address byte)
+			dbg_r = ovoff_lo_val ? 8'hFF : 8'h30;
+			dbg_g = 8'h00;
+			dbg_b = 8'h00;
 		end else if (debug_live) begin
 			// Live status: Green=active/on, Red=off for first two, White for rest
 			if (live_block < 2) begin
