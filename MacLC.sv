@@ -1122,9 +1122,10 @@ module emu
 
 	//////////////////////// DOWNLOADING ///////////////////////////
 
-	// include ROM download helper
+	// Download handler: ROM (boot0.rom, 512KB) and floppy disk images
+	// MiSTer loads boot0.rom with ioctl_index=0, F1/F2 mounts use index 1/2
 	wire dio_download;
-	wire [23:0] dio_addr = ioctl_addr[24:1];
+	wire [23:0] dio_addr = ioctl_addr[24:1];  // word address from byte address
 	wire  [7:0] dio_index;
 
 	// good floppy image sizes are 819200 bytes and 409600 bytes

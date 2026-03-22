@@ -349,7 +349,7 @@ int verilate() {
 					// Enable trace after download completes to see initial 68K execution
 					static bool last_download = false;
 					if (last_download && !*bus.ioctl_download && !cpu_trace_enable) {
-						cpu_trace_enable = false;
+						cpu_trace_enable = true;
 						fprintf(stderr, "*** Enabling CPU trace after ROM download ***\n");
 						if (!cpu_trace_file) {
 							cpu_trace_file = fopen(cpu_trace_filename, "w");
@@ -567,7 +567,7 @@ int main(int argc, char** argv, char** env) {
 	}
 
 	// Auto-load Mac LC ROM at startup
-	const char* rom_file = "../releases/boot1.rom";
+	const char* rom_file = "../releases/boot0.rom";
 	bus.QueueDownload(rom_file, 0, 1);  // index 0 for ROM
 	fprintf(stderr, "Machine type: Mac LC, loading ROM: %s\n", rom_file);
 

@@ -1,16 +1,14 @@
-# Macintosh Plus for the [MiSTer Board](https://github.com/MiSTer-devel/Main_MiSTer/wiki)
+# Macintosh LC for the [MiSTer Board](https://github.com/MiSTer-devel/Main_MiSTer/wiki)
 
-This is a port of the [Plus Too core](https://github.com/mist-devel/mist-binaries/tree/master/cores/plus_too) from MiST which is the port of the [Plus Too project](http://www.bigmessowires.com/plus-too/).
-
-I've tried to optimize the code by converting to synchronous style and fixing some glitches and instabilities.
+Based on the [MacPlus MiSTer core](https://github.com/MiSTer-devel/MacPlus_MiSTer) by Sorgelig, which originated from the [Plus Too project](http://www.bigmessowires.com/plus-too/).
 
 ## Usage
 
-* Copy the [*.rbf](https://github.com/MiSTer-devel/MacPlus_MiSTer/tree/master/releases) onto the root of SD card
-* Copy [boot0.rom & boot1.rom](https://github.com/MiSTer-devel/MacPlus_MiSTer/tree/master/releases) (Plus and SE ROM files) to MacPlus folder
-* Copy disk images in dsk format (e.g. Disk605.dsk) to MacPlus folder
+* Copy the *.rbf onto the root of SD card
+* Copy `boot0.rom` (512KB Mac LC ROM) to the MACLC folder
+* Copy disk images in dsk format (e.g. Disk605.dsk) to the MACLC folder
 
-After a few seconds, the floppy disk icon should appear. Open the on-screen display using the F12 key and select the a disk image. The upload of the disk image will take a few seconds. If a bootable system is found on disk, a smiling Mac icon will appear. MacPlus will then begin booting into the desktop.
+After a few seconds, the floppy disk icon should appear. Open the on-screen display using the F12 key and select a disk image.
 
 ## Floppy disk support
 
