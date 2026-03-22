@@ -78,6 +78,7 @@ int cpu_trace_count = 0;
 const int cpu_trace_max = 5000000;  // Stop after this many instructions
 int post_download_delay = 0;  // Delay after ROM load before tracing
 uint32_t cpu_trace_last_pc = 0xFFFFFFFF;  // For edge detection (new instruction)
+int cpu_trace_last_frame = -1;  // Track frame transitions in trace log
 
 // RAM debug
 // ---------
@@ -225,12 +226,19 @@ int verilate() {
 					unsigned short opwords[2] = { opcode, 0 };
 					const char* disasm = disassemble_68k_ext(pc, opwords, 2);
 
+					int cur_frame = video.count_frame;
+
 					// Output to debug console
-					console.AddLog("%08X: %04X  %s", pc, opcode, disasm);
+					console.AddLog("[F%d] %08X: %04X  %s", cur_frame, pc, opcode, disasm);
 
 					// Also write to trace file if open
 					if (cpu_trace_file) {
-						fprintf(cpu_trace_file, "%08X: %04X  %s\n", pc, opcode, disasm);
+						// Print frame separator when frame changes
+						if (cur_frame != cpu_trace_last_frame) {
+							fprintf(cpu_trace_file, "--- frame %d ---\n", cur_frame);
+							cpu_trace_last_frame = cur_frame;
+						}
+						fprintf(cpu_trace_file, "[F%d] %08X: %04X  %s\n", cur_frame, pc, opcode, disasm);
 						cpu_trace_count++;
 						if (cpu_trace_count >= cpu_trace_max) {
 							fprintf(stderr, "CPU trace limit reached (%d instructions)\n", cpu_trace_max);
