@@ -4,7 +4,7 @@
  * Zilog 8530 SCC module for minimigmac.
  *
  * Located on high data bus, but writes are done at odd addresses as
- * LDS is used as WR signals or something like that on a Mac Plus.
+ * On the original Mac Plus, LDS was used as the WR signal.
  * 
  * We don't care here and just ignore which side was used.
  * 

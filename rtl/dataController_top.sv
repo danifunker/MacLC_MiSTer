@@ -72,7 +72,6 @@ module dataController_top(
 
 	// audio
 	output [10:0] audioOut,  // 8 bit audio + 3 bit volume
-	output snd_alt,
 	input loadSound,
 	
 	// misc
@@ -394,7 +393,6 @@ module dataController_top(
 	assign via_pa_i = 8'h55;
 	// Sound volume still comes from PA[2:0] output latch
 	assign snd_vol = ~via_pa_oe[2:0] | via_pa_o[2:0];
-	assign snd_alt = 1'b0;  // LC doesn't use alternate sound buffer
 	assign driveSel = ~via_pa_oe[4] | via_pa_o[4];  // Drive select from VIA PA4
 	assign SEL = ~via_pa_oe[5] | via_pa_o[5];
 	assign vid_alt = ~via_pa_oe[6] | via_pa_o[6];

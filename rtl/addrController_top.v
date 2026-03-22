@@ -50,7 +50,6 @@ module addrController_top(
 	input  v8_hblank,
 	input  v8_vblank,
 
-	input  snd_alt,
 	output loadSound,
 
 	// misc
@@ -86,7 +85,7 @@ module addrController_top(
 
 			if(vblankD2 && !vblankD) begin
 				// Sound buffer in motherboard RAM (SDRAM word $000000-$0FFFFF)
-				audioAddr <= snd_alt ? 23'h07D080 : 23'h07FE80;
+				audioAddr <= 23'h07FE80;
 				snd_div <= 20'd0;
 			end else begin
 				if(snd_div >= SIZE-1) begin

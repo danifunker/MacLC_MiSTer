@@ -40,12 +40,6 @@ always @(posedge clk) begin
 			$display("sim_ram WR[%0d] @%0t: addr=%h din=%h ds=%b",
 				wr_count, $time, addr[22:0], din, ds);
 		`endif
-		`ifdef SIMULATION
-		// Log VRAM writes (SDRAM $580000-$5BFFFF)
-		if (addr[22:0] >= 23'h580000 && addr[22:0] < 23'h5C0000)
-			$display("VRAM WR @%0t: addr=%h din=%h ds=%b",
-				$time, addr[22:0], din, ds);
-		`endif
 	end
 
 	if (reset) begin

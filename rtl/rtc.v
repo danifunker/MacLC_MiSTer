@@ -1,4 +1,4 @@
-/* PRAM - RTC implementation for plus_too */
+/* PRAM - RTC implementation for MacLC */
 
 module rtc (
 	input         clk,

@@ -296,7 +296,7 @@ module floppy
 	   48-63:   675   timing value $???? (acceptable range {16F2-17E2})
 	   64-79:   750   timing value $???? (acceptable range {19D0-1ADE})
 		
-		Experimentally determined toggle rates for Plus Too with 8.125 MHz CPU clock:
+		Experimentally determined toggle rates with 8.125 MHz CPU clock:
 		TACH Half Period Clocks		Resulting Timing Value
 					9996					$117B (4475)
 					9122  				$1328 (4904)

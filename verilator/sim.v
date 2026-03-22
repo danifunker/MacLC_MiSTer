@@ -216,7 +216,6 @@ module emu
 	wire [15:0] dataControllerDataOut;
 
 	// audio
-	wire snd_alt;
 	wire loadSound;
 
 	// floppy disk image interface
@@ -399,7 +398,6 @@ module emu
 		.v8_vblank(v8_vblank),
 		.memoryOverlayOn(memoryOverlayOn),
 
-		.snd_alt(snd_alt),
 		.loadSound(loadSound),
 
 		.dskReadAddrInt(dskReadAddrInt),
@@ -546,7 +544,6 @@ module emu
 		.vid_alt(vid_alt),
 
 		.audioOut(audio),
-		.snd_alt(snd_alt),
 		.loadSound(loadSound),
 
 		.insertDisk({dsk_ext_ins, dsk_int_ins}),
