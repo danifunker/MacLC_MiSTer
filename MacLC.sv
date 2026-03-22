@@ -364,33 +364,21 @@ module emu
 	end
 
 	// === On-screen debug overlay ===
-	// Each row is 8px tall with 8px gaps (16px per row slot)
-	//
-	// Row A (y=0..7):    Egret status: running|port_test|handshake|TREQ|TIP|BYTEACK|reset_680x0|cpuReset
-	// Row B (y=16..23):  68K addr[23:16] - White=1 (live, sampled on AS falling edge)
-	// Row C (y=32..39):  68K alive counter [7:0] - Orange=1 (changes = CPU progressing)
-	// Row D (y=48..55):  68K PC addr[23:16] - Magenta=1 (instruction fetches only, FC[1]=1)
-	// Row E (y=64..71):  68K PC addr[15:8] - Cyan=1 (instruction fetches only)
-	// Row F (y=80..87):  Fetch context: overlay|selROM|selRAM|FC2|FC1|FC0|everROM|everA0
-	// Row G (y=96..103): LIVE: overlay|selROM|selRAM|AS|romOE|ramOE|cpuBus|dtack
-	// Row H (y=120..134): PC hex display — 6 green hex digits (PC[23:0], 3x scale)
-	// Row I (y=140..154): Opcode hex — 4 cyan hex digits (last fetched opcode, 3x scale)
-	// Row J (y=160..174): SDRAM addr hex — 6 yellow hex digits (SDRAM word addr of last fetch)
+	// Row A (y=0..7):     Egret status indicators (8 blocks)
+	// Row B (y=16..30):   PC[23:0] — green hex (snapshot at overlay-off, or live ~1/sec)
+	// Row C (y=36..50):   Last opcode — cyan hex (snapshot at overlay-off)
+	// Row D (y=56..70):   SDRAM addr — yellow hex (snapshot at overlay-off)
+	// Row E (y=76..90):   Overlay trigger addr — magenta hex (one-shot capture)
+	// Row F (y=96..110):  First ROM read — white hex (SDRAM bank + data word)
 
 	wire debug_egret  = (dbg_y < 10'd8) && (dbg_x < 10'd64);
-	wire debug_68addr = (dbg_y >= 10'd16) && (dbg_y < 10'd24) && (dbg_x < 10'd64);
-	wire debug_alive  = (dbg_y >= 10'd32) && (dbg_y < 10'd40) && (dbg_x < 10'd64);
-	wire debug_pcaddr = (dbg_y >= 10'd48) && (dbg_y < 10'd56) && (dbg_x < 10'd64);
-	wire debug_pclo   = (dbg_y >= 10'd64) && (dbg_y < 10'd72) && (dbg_x < 10'd64);
-	wire debug_fctx   = (dbg_y >= 10'd80) && (dbg_y < 10'd88) && (dbg_x < 10'd64);
-	wire debug_live   = (dbg_y >= 10'd96) && (dbg_y < 10'd104) && (dbg_x < 10'd64);
-	wire debug_pchex  = (dbg_y >= 10'd120) && (dbg_y < 10'd135) && (dbg_x < 10'd92);
-	wire debug_ophex  = (dbg_y >= 10'd140) && (dbg_y < 10'd155) && (dbg_x < 10'd60);
-	wire debug_sahex  = (dbg_y >= 10'd160) && (dbg_y < 10'd175) && (dbg_x < 10'd92);
-	wire debug_ovhex  = (dbg_y >= 10'd180) && (dbg_y < 10'd195) && (dbg_x < 10'd92);
-	wire debug_any    = debug_egret || debug_68addr
-	                  || debug_alive || debug_pcaddr || debug_pclo || debug_fctx || debug_live
-	                  || debug_pchex || debug_ophex || debug_sahex || debug_ovhex;
+	wire debug_pchex  = (dbg_y >= 10'd16) && (dbg_y < 10'd31) && (dbg_x < 10'd92);
+	wire debug_ophex  = (dbg_y >= 10'd36) && (dbg_y < 10'd51) && (dbg_x < 10'd60);
+	wire debug_sahex  = (dbg_y >= 10'd56) && (dbg_y < 10'd71) && (dbg_x < 10'd92);
+	wire debug_ovhex  = (dbg_y >= 10'd76) && (dbg_y < 10'd91) && (dbg_x < 10'd92);
+	wire debug_r1hex  = (dbg_y >= 10'd96) && (dbg_y < 10'd111) && (dbg_x < 10'd92);
+	wire debug_any    = debug_egret
+	                  || debug_pchex || debug_ophex || debug_sahex || debug_ovhex || debug_r1hex;
 
 	// Egret status row: 8 blocks, each 8px wide
 	// Block 0: running (Green=yes)
@@ -411,25 +399,10 @@ module emu
 	                 (egret_block == 6) ? egret_dbg_reset_680x0 :
 	                                      egret_dbg_cpu_reset_out;
 
-	// 68K address upper byte - latched on AS falling edge
-	reg [7:0] cpu_addr_upper = 0;
+	// 68K AS edge detection
 	reg cpu_as_prev = 1;
-	always @(posedge clk_sys) begin
+	always @(posedge clk_sys)
 		cpu_as_prev <= _cpuAS;
-		if (cpu_as_prev && !_cpuAS)
-			cpu_addr_upper <= cpuAddr[23:16];
-	end
-	wire [2:0] addr_bit_idx = 3'd7 - dbg_x[5:3];
-	wire addr_bit_val = cpu_addr_upper[addr_bit_idx];
-
-	// 68K alive counter — increments on each AS falling edge (any bus cycle)
-	reg [7:0] cpu_alive_cnt = 0;
-	always @(posedge clk_sys) begin
-		if (cpu_as_prev && !_cpuAS)
-			cpu_alive_cnt <= cpu_alive_cnt + 1'd1;
-	end
-	wire [2:0] alive_bit_idx = 3'd7 - dbg_x[5:3];
-	wire alive_bit_val = cpu_alive_cnt[alive_bit_idx];
 
 	// 68K PC address — capture cpuAddr on instruction fetches only (FC[1]=1)
 	reg [7:0] cpu_pc_upper = 0;
@@ -458,68 +431,70 @@ module emu
 	reg [22:0] hex_sdram_addr = 0;
 	reg [5:0] vblank_count = 0;
 	reg vblank_prev = 0;
+
+	// Capture PC/opcode/SDRAM at the moment overlay turns off (one-shot)
+	reg overlay_prev = 1;
+	reg overlay_snapshot_taken = 0;
+	reg [7:0] snap_pc_upper = 0, snap_pc_lower = 0, snap_pc_lowest = 0;
+	reg [15:0] snap_opcode = 0;
+	reg [22:0] snap_sdram_addr = 0;
+
+	// First ROM read verification: capture first SDRAM data word read via ROM select
+	reg first_rom_read_captured = 0;
+	reg [15:0] first_rom_data = 0;
+	reg [22:0] first_rom_addr = 0;
+
 	always @(posedge clk_sys) begin
+		overlay_prev <= memoryOverlayOn;
+
+		// Capture snapshot when overlay transitions from ON to OFF
+		if (overlay_prev && !memoryOverlayOn && !overlay_snapshot_taken) begin
+			overlay_snapshot_taken <= 1;
+			snap_pc_upper <= cpu_pc_upper;
+			snap_pc_lower <= cpu_pc_lower;
+			snap_pc_lowest <= cpu_pc_lowest;
+			snap_opcode <= fetch_opcode;
+			snap_sdram_addr <= fetch_sdram_addr;
+		end
+
+		// Capture first ROM read data after reset
+		if (!_cpuReset) begin
+			first_rom_read_captured <= 0;
+		end else if (!first_rom_read_captured && memoryLatch && !_romOE) begin
+			first_rom_read_captured <= 1;
+			first_rom_data <= sdram_do;
+			first_rom_addr <= memoryAddr;
+		end
+
+		// VBlank-based hex display update (~1x/sec)
 		vblank_prev <= v8_vblank;
 		if (v8_vblank && !vblank_prev) begin
 			if (vblank_count >= 6'd59) begin
 				vblank_count <= 0;
-				hex_pc_upper <= cpu_pc_upper;
-				hex_pc_lower <= cpu_pc_lower;
-				hex_pc_lowest <= cpu_pc_lowest;
-				hex_opcode <= fetch_opcode;
-				hex_sdram_addr <= fetch_sdram_addr;
+				// Show overlay snapshot if taken, otherwise show live values
+				if (overlay_snapshot_taken) begin
+					hex_pc_upper <= snap_pc_upper;
+					hex_pc_lower <= snap_pc_lower;
+					hex_pc_lowest <= snap_pc_lowest;
+					hex_opcode <= snap_opcode;
+					hex_sdram_addr <= snap_sdram_addr;
+				end else begin
+					hex_pc_upper <= cpu_pc_upper;
+					hex_pc_lower <= cpu_pc_lower;
+					hex_pc_lowest <= cpu_pc_lowest;
+					hex_opcode <= fetch_opcode;
+					hex_sdram_addr <= fetch_sdram_addr;
+				end
 			end else begin
 				vblank_count <= vblank_count + 1'd1;
 			end
 		end
-	end
 
-	wire [2:0] pc_bit_idx = 3'd7 - dbg_x[5:3];
-	wire pc_bit_val = cpu_pc_upper[pc_bit_idx];
-	wire pclo_bit_val = cpu_pc_lower[pc_bit_idx];
-
-	// Fetch context — capture memory state during instruction fetches
-	reg fetch_overlay = 0;
-	reg fetch_selROM = 0;
-	reg fetch_selRAM = 0;
-	reg [2:0] fetch_fc = 0;
-	reg ever_fetch_rom = 0;   // Latches 1 if CPU ever fetches with selectROM active
-	reg ever_fetch_a0 = 0;    // Latches 1 if CPU ever fetches from $A0xxxx (real ROM addr)
-	always @(posedge clk_sys) begin
 		if (!_cpuReset) begin
-			ever_fetch_rom <= 0;
-			ever_fetch_a0 <= 0;
-		end else if (cpu_as_prev && !_cpuAS && cpuFC[1]) begin
-			fetch_overlay <= memoryOverlayOn;
-			fetch_selROM <= selectROM;
-			fetch_selRAM <= selectRAM;
-			fetch_fc <= cpuFC;
-			if (selectROM) ever_fetch_rom <= 1;
-			if (cpuAddr[23:20] == 4'hA) ever_fetch_a0 <= 1;
+			overlay_snapshot_taken <= 0;
+			overlay_prev <= 1;
 		end
 	end
-
-	// Row F: Fetch context indicators
-	wire [2:0] fctx_block = dbg_x[5:3];
-	wire fctx_val = (fctx_block == 0) ? fetch_overlay :
-	                (fctx_block == 1) ? fetch_selROM :
-	                (fctx_block == 2) ? fetch_selRAM :
-	                (fctx_block == 3) ? fetch_fc[2] :
-	                (fctx_block == 4) ? fetch_fc[1] :
-	                (fctx_block == 5) ? fetch_fc[0] :
-	                (fctx_block == 6) ? ever_fetch_rom :
-	                                    ever_fetch_a0;
-
-	// Row G: LIVE indicators
-	wire [2:0] live_block = dbg_x[5:3];
-	wire live_val = (live_block == 0) ? memoryOverlayOn :
-	                (live_block == 1) ? selectROM :
-	                (live_block == 2) ? selectRAM :
-	                (live_block == 3) ? !_cpuAS :
-	                (live_block == 4) ? !_romOE :
-	                (live_block == 5) ? !_ramOE :
-	                (live_block == 6) ? cpuBusControl :
-	                                    dtack_en;
 
 	// Hex display shared geometry — 3x scale, 4px wide × 5px tall font
 	// Layout: stride=16px per digit (12px char + 4px gap)
@@ -533,9 +508,10 @@ module emu
 	                           (hex_slot_x < 4'd9) ? 2'd2 : 2'd3;
 
 	// Font row (0-4) — relative to start of whichever hex row is active
-	wire [9:0] hex_base_y = debug_pchex ? 10'd120 :
-	                         debug_ophex ? 10'd140 :
-	                         debug_sahex ? 10'd160 : 10'd180;
+	wire [9:0] hex_base_y = debug_pchex ? 10'd16 :
+	                         debug_ophex ? 10'd36 :
+	                         debug_sahex ? 10'd56 :
+	                         debug_ovhex ? 10'd76 : 10'd96;
 	wire [9:0] hex_local_y = dbg_y - hex_base_y;
 	wire [2:0] hex_font_row = (hex_local_y < 10'd3) ? 3'd0 :
 	                           (hex_local_y < 10'd6) ? 3'd1 :
@@ -565,9 +541,19 @@ module emu
 	                        (hex_digit_idx == 3'd3) ? overlay_trigger_addr[11:8] :
 	                        (hex_digit_idx == 3'd4) ? overlay_trigger_addr[7:4] :
 	                                                  overlay_trigger_addr[3:0];
+	// First ROM read: show SDRAM addr (6 digits) + data (4 digits) = need 10 chars
+	// But hex_digit_idx is only 3 bits (0-7). Show addr in first 6 digits, data in remaining 2+2
+	// Simplify: show 6 digits = addr[22:0] first, then use digit 6-7 for data high/low
+	wire [3:0] r1_nibble = (hex_digit_idx == 3'd0) ? {1'b0, first_rom_addr[22:20]} :
+	                        (hex_digit_idx == 3'd1) ? first_rom_addr[19:16] :
+	                        (hex_digit_idx == 3'd2) ? first_rom_data[15:12] :
+	                        (hex_digit_idx == 3'd3) ? first_rom_data[11:8] :
+	                        (hex_digit_idx == 3'd4) ? first_rom_data[7:4] :
+	                                                  first_rom_data[3:0];
 	wire [3:0] hex_nibble = debug_pchex ? pc_nibble :
 	                         debug_ophex ? op_nibble :
-	                         debug_sahex ? sa_nibble : ov_nibble;
+	                         debug_sahex ? sa_nibble :
+	                         debug_ovhex ? ov_nibble : r1_nibble;
 
 	// 4×5 hex font glyphs — each digit is 5 rows of 4 bits (MSB=left)
 	reg [19:0] hex_glyph;
@@ -612,73 +598,6 @@ module emu
 				6: begin dbg_r = egret_val ? 8'hFF : 8'h00; dbg_g = egret_val ? 8'h00 : 8'hFF; dbg_b = 8'h00; end // reset_680x0: R=hold,G=release
 				default: begin dbg_r = egret_val ? 8'h00 : 8'hFF; dbg_g = egret_val ? 8'hFF : 8'h00; dbg_b = 8'h00; end // cpuReset: G=run,R=held
 			endcase
-		end else if (debug_68addr) begin
-			// Row B: 68K address[23:16]: White = 1
-			dbg_r = addr_bit_val ? 8'hFF : 8'h30;
-			dbg_g = addr_bit_val ? 8'hFF : 8'h30;
-			dbg_b = addr_bit_val ? 8'hFF : 8'h30;
-		end else if (debug_alive) begin
-			// Row C: 68K alive counter: Orange = 1 (should change if CPU is progressing)
-			dbg_r = alive_bit_val ? 8'hFF : 8'h30;
-			dbg_g = alive_bit_val ? 8'hA0 : 8'h20;
-			dbg_b = 8'h00;
-		end else if (debug_pcaddr) begin
-			// Row D: 68K PC addr[23:16]: Magenta = 1 (instruction fetches only)
-			dbg_r = pc_bit_val ? 8'hFF : 8'h30;
-			dbg_g = 8'h00;
-			dbg_b = pc_bit_val ? 8'hFF : 8'h30;
-		end else if (debug_pclo) begin
-			// Row E: 68K PC addr[15:8]: Cyan = 1 (instruction fetches only)
-			dbg_r = 8'h00;
-			dbg_g = pclo_bit_val ? 8'hFF : 8'h30;
-			dbg_b = pclo_bit_val ? 8'hFF : 8'h30;
-		end else if (debug_fctx) begin
-			// Row F: Fetch context - color-coded per block
-			case (fctx_block)
-				0: begin // overlay: Green=on, Red=off
-					dbg_r = fctx_val ? 8'h00 : 8'hFF;
-					dbg_g = fctx_val ? 8'hFF : 8'h00;
-					dbg_b = 8'h00;
-				end
-				1: begin // selROM: Green=ROM, dim=not
-					dbg_r = 8'h00;
-					dbg_g = fctx_val ? 8'hFF : 8'h30;
-					dbg_b = 8'h00;
-				end
-				2: begin // selRAM: Yellow=RAM, dim=not
-					dbg_r = fctx_val ? 8'hFF : 8'h30;
-					dbg_g = fctx_val ? 8'hFF : 8'h30;
-					dbg_b = 8'h00;
-				end
-				3, 4, 5: begin // FC[2:0]: White=1, dim=0
-					dbg_r = fctx_val ? 8'hFF : 8'h30;
-					dbg_g = fctx_val ? 8'hFF : 8'h30;
-					dbg_b = fctx_val ? 8'hFF : 8'h30;
-				end
-				6: begin // ever_fetch_rom: Green=yes, Red=never
-					dbg_r = fctx_val ? 8'h00 : 8'hFF;
-					dbg_g = fctx_val ? 8'hFF : 8'h00;
-					dbg_b = 8'h00;
-				end
-				default: begin // ever_fetch_a0: Green=yes, Red=never
-					dbg_r = fctx_val ? 8'h00 : 8'hFF;
-					dbg_g = fctx_val ? 8'hFF : 8'h00;
-					dbg_b = 8'h00;
-				end
-			endcase
-		end else if (debug_live) begin
-			// Live status: Green=active/on, Red=off for first two, White for rest
-			if (live_block < 2) begin
-				// overlay and selectROM: Green=on, Red=off
-				dbg_r = live_val ? 8'h00 : 8'hFF;
-				dbg_g = live_val ? 8'hFF : 8'h00;
-				dbg_b = 8'h00;
-			end else begin
-				// Rest: White=1, Dark=0
-				dbg_r = live_val ? 8'hFF : 8'h30;
-				dbg_g = live_val ? 8'hFF : 8'h30;
-				dbg_b = live_val ? 8'hFF : 8'h30;
-			end
 		end else if (debug_pchex) begin
 			// Row H: PC hex display — bright green on dark
 			if (hex_in_glyph && hex_pixel_on) begin
@@ -706,6 +625,13 @@ module emu
 				dbg_r = 8'hFF; dbg_g = 8'h00; dbg_b = 8'hFF;
 			end else begin
 				dbg_r = 8'h10; dbg_g = 8'h00; dbg_b = 8'h10;
+			end
+		end else if (debug_r1hex) begin
+			// Row L: First ROM read — white on dark (2 digits SDRAM bank + 4 digits data)
+			if (hex_in_glyph && hex_pixel_on) begin
+				dbg_r = 8'hFF; dbg_g = 8'hFF; dbg_b = 8'hFF;
+			end else begin
+				dbg_r = 8'h10; dbg_g = 8'h10; dbg_b = 8'h10;
 			end
 		end
 	end
