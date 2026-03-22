@@ -397,6 +397,7 @@ module emu
 		.v8_hblank(v8_hblank),
 		.v8_vblank(v8_vblank),
 		.memoryOverlayOn(memoryOverlayOn),
+		.overlay_trigger_addr(),  // debug output, unused in sim
 
 		.loadSound(loadSound),
 

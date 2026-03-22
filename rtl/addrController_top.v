@@ -54,6 +54,7 @@ module addrController_top(
 
 	// misc
 	output memoryOverlayOn,
+	output [23:0] overlay_trigger_addr,  // debug: address that caused overlay disable
 
 	// interface to read dsk image from ram
 	input [21:0] dskReadAddrInt,
@@ -260,8 +261,10 @@ module addrController_top(
 	// ============================================================
 	reg rom_overlay = 1;
 	reg overlay_disable_pending = 0;
+	reg [23:0] overlay_trigger_addr_r = 0;
 
 	assign memoryOverlayOn = rom_overlay;
+	assign overlay_trigger_addr = overlay_trigger_addr_r;
 
 	wire overlay_trigger = !_cpuAS && (cpuAddr[23:20] == 4'hA);
 
@@ -269,9 +272,12 @@ module addrController_top(
 		if (!_cpuReset) begin
 			rom_overlay <= 1'b1;
 			overlay_disable_pending <= 1'b0;
+			overlay_trigger_addr_r <= 24'h0;
 		end else begin
-			if (overlay_trigger && rom_overlay)
+			if (overlay_trigger && rom_overlay) begin
 				overlay_disable_pending <= 1'b1;
+				overlay_trigger_addr_r <= cpuAddr;
+			end
 
 			if (overlay_disable_pending && _cpuAS) begin
 				rom_overlay <= 1'b0;

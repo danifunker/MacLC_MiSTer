@@ -387,9 +387,10 @@ module emu
 	wire debug_pchex  = (dbg_y >= 10'd120) && (dbg_y < 10'd135) && (dbg_x < 10'd92);
 	wire debug_ophex  = (dbg_y >= 10'd140) && (dbg_y < 10'd155) && (dbg_x < 10'd60);
 	wire debug_sahex  = (dbg_y >= 10'd160) && (dbg_y < 10'd175) && (dbg_x < 10'd92);
+	wire debug_ovhex  = (dbg_y >= 10'd180) && (dbg_y < 10'd195) && (dbg_x < 10'd92);
 	wire debug_any    = debug_egret || debug_68addr
 	                  || debug_alive || debug_pcaddr || debug_pclo || debug_fctx || debug_live
-	                  || debug_pchex || debug_ophex || debug_sahex;
+	                  || debug_pchex || debug_ophex || debug_sahex || debug_ovhex;
 
 	// Egret status row: 8 blocks, each 8px wide
 	// Block 0: running (Green=yes)
@@ -533,7 +534,8 @@ module emu
 
 	// Font row (0-4) — relative to start of whichever hex row is active
 	wire [9:0] hex_base_y = debug_pchex ? 10'd120 :
-	                         debug_ophex ? 10'd140 : 10'd160;
+	                         debug_ophex ? 10'd140 :
+	                         debug_sahex ? 10'd160 : 10'd180;
 	wire [9:0] hex_local_y = dbg_y - hex_base_y;
 	wire [2:0] hex_font_row = (hex_local_y < 10'd3) ? 3'd0 :
 	                           (hex_local_y < 10'd6) ? 3'd1 :
@@ -557,8 +559,15 @@ module emu
 	                        (hex_digit_idx == 3'd3) ? hex_sdram_addr[11:8] :
 	                        (hex_digit_idx == 3'd4) ? hex_sdram_addr[7:4] :
 	                                                  hex_sdram_addr[3:0];
+	wire [3:0] ov_nibble = (hex_digit_idx == 3'd0) ? overlay_trigger_addr[23:20] :
+	                        (hex_digit_idx == 3'd1) ? overlay_trigger_addr[19:16] :
+	                        (hex_digit_idx == 3'd2) ? overlay_trigger_addr[15:12] :
+	                        (hex_digit_idx == 3'd3) ? overlay_trigger_addr[11:8] :
+	                        (hex_digit_idx == 3'd4) ? overlay_trigger_addr[7:4] :
+	                                                  overlay_trigger_addr[3:0];
 	wire [3:0] hex_nibble = debug_pchex ? pc_nibble :
-	                         debug_ophex ? op_nibble : sa_nibble;
+	                         debug_ophex ? op_nibble :
+	                         debug_sahex ? sa_nibble : ov_nibble;
 
 	// 4×5 hex font glyphs — each digit is 5 rows of 4 bits (MSB=left)
 	reg [19:0] hex_glyph;
@@ -691,6 +700,13 @@ module emu
 			end else begin
 				dbg_r = 8'h10; dbg_g = 8'h10; dbg_b = 8'h00;
 			end
+		end else if (debug_ovhex) begin
+			// Row K: Overlay trigger addr hex — magenta on dark
+			if (hex_in_glyph && hex_pixel_on) begin
+				dbg_r = 8'hFF; dbg_g = 8'h00; dbg_b = 8'hFF;
+			end else begin
+				dbg_r = 8'h10; dbg_g = 8'h00; dbg_b = 8'h10;
+			end
 		end
 	end
 
@@ -775,6 +791,7 @@ module emu
 	// peripherals
 	wire vid_alt;
 	wire memoryOverlayOn, selectSCSI, selectSCC, selectIWM, selectVIA, selectRAM, selectROM, selectASC, selectUnmapped;
+	wire [23:0] overlay_trigger_addr;
 	wire [15:0] dataControllerDataOut;
 
 	// ========== SignalTap debug probes ==========
@@ -920,6 +937,7 @@ module emu
 		.v8_hblank(v8_hblank),
 		.v8_vblank(v8_vblank),
 		.memoryOverlayOn(memoryOverlayOn),
+		.overlay_trigger_addr(overlay_trigger_addr),
 
 		.loadSound(loadSound),
 
