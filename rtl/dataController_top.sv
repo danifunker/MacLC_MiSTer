@@ -29,7 +29,6 @@ module dataController_top(
 	input selectSCC,
 	input selectIWM,
 	input selectVIA,
-	input selectSEOverlay,
 	input _cpuVMA,
 	
 	input selectASC,
@@ -79,7 +78,6 @@ module dataController_top(
 	input loadSound,
 	
 	// misc
-	output memoryOverlayOn,
 	input [1:0] insertDisk,
 	input [1:0] diskSides,
 	output [1:0] diskEject,
@@ -379,22 +377,6 @@ module dataController_top(
 	end
 	wire onesec = vblankCount == 59;
 
-	// Mac SE ROM overlay switch
-	reg  SEOverlay;
-	always @(posedge clk32) begin
-		if (!_cpuReset) begin
-			`ifdef VERBOSE_TRACE
-			if (SEOverlay == 0) $display("DC: SEOverlay RESET to 1 @%0t", $time);
-			`endif
-			SEOverlay <= 1;
-		end else if (selectSEOverlay) begin
-			`ifdef VERBOSE_TRACE
-			if (SEOverlay == 1) $display("DC: SEOverlay CLEARED to 0 @%0t", $time);
-			`endif
-			SEOverlay <= 0;
-		end
-	end
-
 	// VIA
 	wire [2:0] snd_vol;
 	wire snd_ena;
@@ -416,7 +398,6 @@ module dataController_top(
 	assign snd_vol = ~via_pa_oe[2:0] | via_pa_o[2:0];
 	assign snd_alt = 1'b0;  // LC doesn't use alternate sound buffer
 	assign driveSel = ~via_pa_oe[4] | via_pa_o[4];  // Drive select from VIA PA4
-	assign memoryOverlayOn = SEOverlay;  // LC uses hardware overlay control
 	assign SEL = ~via_pa_oe[5] | via_pa_o[5];
 	assign vid_alt = ~via_pa_oe[6] | via_pa_o[6];
 

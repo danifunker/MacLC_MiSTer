@@ -645,7 +645,7 @@ module emu
 	wire v8_video_latch = memoryLatch && videoBusControl;
 	// peripherals
 	wire vid_alt, loadPixels, pixelOut, _hblank, _vblank, hsync, vsync;
-	wire memoryOverlayOn, selectSCSI, selectSCC, selectIWM, selectVIA, selectRAM, selectROM, selectSEOverlay, selectASC, selectUnmapped;
+	wire memoryOverlayOn, selectSCSI, selectSCC, selectIWM, selectVIA, selectRAM, selectROM, selectASC, selectUnmapped;
 	wire [15:0] dataControllerDataOut;
 
 	// ========== SignalTap debug probes ==========
@@ -761,6 +761,7 @@ module emu
 		.clk8_en_n(clk8_en_n),
 		.clk16_en_p(clk16_en_p),
 		.clk16_en_n(clk16_en_n),
+		._cpuReset(_cpuReset),
 		.cpuAddr(cpuAddr),
 		._cpuUDS(_cpuUDS),
 		._cpuLDS(_cpuLDS),
@@ -783,7 +784,6 @@ module emu
 		.selectVIA(selectVIA),
 		.selectRAM(selectRAM),
 		.selectROM(selectROM),
-		.selectSEOverlay(selectSEOverlay),
 		.selectAriel(selectAriel),
 		.selectPseudoVIA(selectPseudoVIA),
 		.selectVRAM(selectVRAM),
@@ -808,10 +808,6 @@ module emu
 		.dskReadAckExt(dskReadAckExt)
 	);
 
-	always @(posedge clk_sys) begin
-		if (selectSEOverlay && !_cpuAS)
-			$display("DC: selectSEOverlay ACTIVE (addr=%h) @%0t", cpuAddr, $time);
-	end
 
 	wire [1:0] diskEject;
 	wire [1:0] diskMotor, diskAct;
@@ -959,7 +955,6 @@ module emu
 		.selectVIA(selectVIA),
 		.selectASC(selectASC),
 		.asc_data_in(asc_data_out),
-		.selectSEOverlay(selectSEOverlay),
 		.cpuBusControl(cpuBusControl),
 		.videoBusControl(videoBusControl),
 		.memoryDataOut(memoryDataOut),
@@ -990,8 +985,6 @@ module emu
 		.pixelOut(pixelOut),
 		.loadPixels(loadPixels),
 		.vid_alt(vid_alt),
-
-		.memoryOverlayOn(memoryOverlayOn),
 
 		.audioOut(audio),
 		.snd_alt(snd_alt),

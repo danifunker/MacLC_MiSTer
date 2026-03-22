@@ -11,6 +11,7 @@ module addrController_top(
 	input [7:0] ram_config,  // V8 RAM config byte from pseudovia
 
 	// 68000 CPU memory interface:
+	input _cpuReset,
 	input [23:0] cpuAddr,
 	input _cpuUDS,
 	input _cpuLDS,
@@ -37,7 +38,6 @@ module addrController_top(
 	output selectVIA,
 	output selectRAM,
 	output selectROM,
-	output selectSEOverlay,
 
 	// LC Peripherals
 	output selectAriel,
@@ -60,7 +60,7 @@ module addrController_top(
 	output loadSound,
 
 	// misc
-	input memoryOverlayOn,
+	output memoryOverlayOn,
 
 	// interface to read dsk image from ram
 	input [21:0] dskReadAddrInt,
@@ -248,12 +248,44 @@ module addrController_top(
 		.selectIWM(selectIWM),
 		.selectASC(selectASC),
 		.selectVIA(selectVIA),
-		.selectSEOverlay(selectSEOverlay),
 		.selectAriel(selectAriel),
 		.selectPseudoVIA(selectPseudoVIA),
 		.selectVRAM(selectVRAM),
 		.selectUnmapped(selectUnmapped)
 	);
+
+	// ============================================================
+	// ROM Overlay Register
+	// ============================================================
+	// At reset, ROM is overlaid at $000000 so the CPU reads the reset
+	// vector from ROM.  The overlay is disabled when the CPU first
+	// accesses the ROM area ($A0xxxx).
+	//
+	// The disable is deferred until _cpuAS goes high (bus cycle ends),
+	// so the instruction/data read that triggered it completes with
+	// overlay still active.  The next bus cycle sees overlay OFF.
+	// ============================================================
+	reg rom_overlay = 1;
+	reg overlay_disable_pending = 0;
+
+	assign memoryOverlayOn = rom_overlay;
+
+	wire overlay_trigger = !_cpuAS && (cpuAddr[23:20] == 4'hA);
+
+	always @(posedge clk) begin
+		if (!_cpuReset) begin
+			rom_overlay <= 1'b1;
+			overlay_disable_pending <= 1'b0;
+		end else begin
+			if (overlay_trigger && rom_overlay)
+				overlay_disable_pending <= 1'b1;
+
+			if (overlay_disable_pending && _cpuAS) begin
+				rom_overlay <= 1'b0;
+				overlay_disable_pending <= 1'b0;
+			end
+		end
+	end
 
 	// ============================================================
 	// Video timing (Mac Plus legacy - generates hsync/vsync/_hblank/_vblank)

@@ -63,7 +63,6 @@ module addrDecoder(
     output reg selectIWM,
     output reg selectASC,
     output reg selectVIA,
-    output reg selectSEOverlay,  // Directly triggers overlay disable
 
     // Mac LC Specific Selects
     output reg selectAriel,
@@ -81,7 +80,6 @@ module addrDecoder(
         selectIWM = 0;
         selectASC = 0;
         selectVIA = 0;
-        selectSEOverlay = 0;
         selectAriel = 0;
         selectPseudoVIA = 0;
         selectVRAM = 0;
@@ -96,11 +94,8 @@ module addrDecoder(
             // ==========================================================
 
             // --- ROM ($A00000 - $AFFFFF) ---
-            // Reading from ROM area triggers overlay disable
             if (address[23:20] == 4'hA) begin
                 selectROM = 1;
-                selectSEOverlay = 1;  // Signal to disable overlay
-                // $display("AD: selectSEOverlay ACTIVE (addr=%h) @%0t", address, $time);
             end
 
             // --- RAM or Overlay ROM ($000000 - $9FFFFF) ---
