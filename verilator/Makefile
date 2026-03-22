@@ -69,8 +69,6 @@ V_SRC = \
 	$(RTL)/addrController_top.v \
 	$(RTL)/addrDecoder.v \
 	$(RTL)/dataController_top.sv \
-	$(RTL)/videoTimer.v \
-	$(RTL)/videoShifter.v \
 	$(RTL)/maclc_v8_video.sv \
 	$(RTL)/ariel_ramdac.sv \
 	$(RTL)/pseudovia.sv \

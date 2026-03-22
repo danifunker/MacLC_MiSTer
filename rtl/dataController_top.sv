@@ -66,10 +66,8 @@ module dataController_top(
 	input [32:0] timestamp,
 
 	// video:
-	output pixelOut,	
 	input _hblank,
 	input _vblank,
-	input loadPixels,
 	output vid_alt,
 
 	// audio
@@ -854,13 +852,6 @@ module dataController_top(
 		.rts(serialRTS)
 		);
 				
-	// Video
-	videoShifter vs(
-		.clk32(clk32), 
-		.memoryLatch(memoryLatch),
-		.dataIn(memoryDataIn),
-		.loadPixels(loadPixels), 
-		.pixelOut(pixelOut));
 	
 	// Mouse
 	ps2_mouse mouse(

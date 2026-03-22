@@ -46,12 +46,6 @@ module addrController_top(
 	output selectUnmapped,
 
 	// video:
-	output hsync,
-	output vsync,
-	output _hblank,
-	output _vblank,
-	output loadPixels,
-	input  vid_alt,
 	input  [21:0] v8_video_addr,
 	input  v8_hblank,
 	input  v8_vblank,
@@ -87,7 +81,7 @@ module addrController_top(
 	reg vblankD, vblankD2;
 	always @(posedge clk) begin
 		if(clk8_en_p && sndReadAckD) begin
-			vblankD <= _vblank;
+			vblankD <= ~v8_vblank;
 			vblankD2 <= vblankD;
 
 			if(vblankD2 && !vblankD) begin
@@ -286,22 +280,5 @@ module addrController_top(
 			end
 		end
 	end
-
-	// ============================================================
-	// Video timing (Mac Plus legacy - generates hsync/vsync/_hblank/_vblank)
-	// ============================================================
-	wire [21:0] plus_video_addr;  // Not used, but videoTimer generates timing signals
-
-	videoTimer vt(
-		.clk(clk),
-		.clk_en(clk8_en_p),
-		.busCycle(busCycle),
-		.vid_alt(vid_alt),
-		.videoAddr(plus_video_addr),
-		.hsync(hsync),
-		.vsync(vsync),
-		._hblank(_hblank),
-		._vblank(_vblank),
-		.loadPixels(loadPixels));
 
 endmodule

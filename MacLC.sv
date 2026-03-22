@@ -644,7 +644,7 @@ module emu
 	// Video latch: only pulse when memoryLatch AND in video bus cycle
 	wire v8_video_latch = memoryLatch && videoBusControl;
 	// peripherals
-	wire vid_alt, loadPixels, pixelOut, _hblank, _vblank, hsync, vsync;
+	wire vid_alt;
 	wire memoryOverlayOn, selectSCSI, selectSCC, selectIWM, selectVIA, selectRAM, selectROM, selectASC, selectUnmapped;
 	wire [15:0] dataControllerDataOut;
 
@@ -788,12 +788,6 @@ module emu
 		.selectPseudoVIA(selectPseudoVIA),
 		.selectVRAM(selectVRAM),
 		.selectUnmapped(selectUnmapped),
-		.hsync(hsync),
-		.vsync(vsync),
-		._hblank(_hblank),
-		._vblank(_vblank),
-		.loadPixels(loadPixels),
-		.vid_alt(vid_alt),
 		.v8_video_addr(v8_video_addr),
 		.v8_hblank(v8_hblank),
 		.v8_vblank(v8_vblank),
@@ -980,10 +974,8 @@ module emu
 		.timestamp(TIMESTAMP),
 
 		// video
-		._hblank(_hblank),
-		._vblank(_vblank), 
-		.pixelOut(pixelOut),
-		.loadPixels(loadPixels),
+		._hblank(~v8_hblank),
+		._vblank(~v8_vblank),
 		.vid_alt(vid_alt),
 
 		.audioOut(audio),
