@@ -235,6 +235,7 @@ module addrController_top(
 		._cpuAS(_cpuAS),
 		._cpuRW(_cpuRW),
 		.memoryOverlayOn(memoryOverlayOn),
+		.ram_config(ram_config),
 		.selectRAM(selectRAM),
 		.selectROM(selectROM),
 		.selectSCSI(selectSCSI),

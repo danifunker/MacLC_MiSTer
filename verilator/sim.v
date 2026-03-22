@@ -120,7 +120,7 @@ module emu
 
 			// Debug: track when download completes
 			if (dio_download_prev && !dio_download) begin
-				$display("SIM: dio_download went LOW - ROM download complete");
+				$display("[F%0d] SIM: dio_download went LOW - ROM download complete", sim_frame_count);
 			end
 
 			if(~pll_locked || reset || dio_download) begin
@@ -131,7 +131,7 @@ module emu
 				rst_cnt <= rst_cnt - 1'd1;
 				// Debug: show countdown at key points only
 				if (rst_cnt == 16'h0001) begin
-					$display("SIM: rst_cnt about to expire, n_reset will go high");
+					$display("[F%0d] SIM: rst_cnt about to expire, n_reset will go high", sim_frame_count);
 				end
 			end
 			else begin
@@ -140,7 +140,7 @@ module emu
 
 			// Debug: track when n_reset changes
 			if (n_reset != n_reset_prev) begin
-				$display("SIM: *** n_reset changed to %b *** (rst_cnt=%04x)", n_reset, rst_cnt);
+				$display("[F%0d] SIM: *** n_reset changed to %b *** (rst_cnt=%04x)", sim_frame_count, n_reset, rst_cnt);
 			end
 		end
 	end
@@ -158,6 +158,15 @@ module emu
 	assign VGA_HS = v8_hsync;
 	assign VGA_HB = v8_hblank;
 	assign VGA_VB = v8_vblank;
+
+	// Frame counter for debug logging
+	reg [31:0] sim_frame_count = 0;
+	reg vs_prev = 0;
+	always @(posedge clk_sys) begin
+		vs_prev <= VGA_VS;
+		if (VGA_VS && !vs_prev)  // Rising edge of vsync = new frame
+			sim_frame_count <= sim_frame_count + 1;
+	end
 
 	wire [10:0] audio;
 	assign AUDIO_L = {audio[10:0], 5'b00000};
@@ -672,7 +681,8 @@ module emu
 		.ds             ( ram_ds      ),
 		.we             ( ram_we      ),
 		.oe             ( ram_oe      ),
-		.dout           ( ram_do_raw  )
+		.dout           ( ram_do_raw  ),
+		.frame_count    ( sim_frame_count )
 	);
 
 	// RAM debug outputs
@@ -695,11 +705,33 @@ module emu
 	assign debug_selectASC = selectASC;
 	assign debug_selectVRAM = selectVRAM;
 `ifdef SIMULATION
+	// Track RAM test progress: log CPU data address during RAM writes
+	// Samples periodically to avoid flooding output
+	integer ram_wr_count = 0;
+	reg [23:0] last_ram_wr_addr = 0;
 	always @(posedge clk_sys) begin
 		if (selectPseudoVIA && selectVRAM)
-			$display("BUG: selectPseudoVIA AND selectVRAM both active! addr=%h @%0t", cpuAddr, $time);
+			$display("[F%0d] BUG: selectPseudoVIA AND selectVRAM both active! addr=%h", sim_frame_count, cpuAddr);
 		if (selectPseudoVIA && !_cpuRW && cpuBusControl)
-			$display("PVIA ACTIVE WRITE: cpuAddr=%h data=%h @%0t", cpuAddr, cpuDataOut, $time);
+			$display("[F%0d] PVIA ACTIVE WRITE: cpuAddr=%h data=%h", sim_frame_count, cpuAddr, cpuDataOut);
+
+		// Log RAM writes: first 10, then every 100000th
+		if (!_ramWE && cpuBusControl) begin
+			if (ram_wr_count < 10 || ram_wr_count % 100000 == 0) begin
+				$display("[F%0d] RAM_WR[%0d]: cpuAddr=%h sdramAddr=%h data=%h PC=%h",
+					sim_frame_count, ram_wr_count, cpuAddr, memoryAddr, cpuDataOut, last_fetch_pc);
+			end
+			last_ram_wr_addr <= cpuAddr;
+			ram_wr_count <= ram_wr_count + 1;
+		end
+
+		// Log RAM reads: every 100000th
+		if (!_ramOE && cpuBusControl) begin
+			if (ram_wr_count > 0 && ram_wr_count % 100000 == 50000) begin
+				$display("[F%0d] RAM_RD: cpuAddr=%h sdramAddr=%h PC=%h",
+					sim_frame_count, cpuAddr, memoryAddr, last_fetch_pc);
+			end
+		end
 	end
 `endif
 	assign debug_cpuAddr = cpuAddr;
