@@ -349,7 +349,7 @@ int verilate() {
 					// Enable trace after download completes to see initial 68K execution
 					static bool last_download = false;
 					if (last_download && !*bus.ioctl_download && !cpu_trace_enable) {
-						cpu_trace_enable = true;
+						cpu_trace_enable = false;
 						fprintf(stderr, "*** Enabling CPU trace after ROM download ***\n");
 						if (!cpu_trace_file) {
 							cpu_trace_file = fopen(cpu_trace_filename, "w");

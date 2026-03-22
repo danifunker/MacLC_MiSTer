@@ -371,16 +371,18 @@ module emu
 	// Row C (y=32..39):  68K alive counter [7:0] - Orange=1 (changes = CPU progressing)
 	// Row D (y=48..55):  68K PC addr[23:16] - Magenta=1 (instruction fetches only, FC[1]=1)
 	// Row E (y=64..71):  68K PC addr[15:8] - Cyan=1 (instruction fetches only)
-	// Row F (y=80..87):  LIVE: overlay|selROM|selRAM|AS|romOE|ramOE|cpuBus|dtack
+	// Row F (y=80..87):  Fetch context: overlay|selROM|selRAM|FC2|FC1|FC0|everROM|everA0
+	// Row G (y=96..103): LIVE: overlay|selROM|selRAM|AS|romOE|ramOE|cpuBus|dtack
 
 	wire debug_egret  = (dbg_y < 10'd8) && (dbg_x < 10'd64);
 	wire debug_68addr = (dbg_y >= 10'd16) && (dbg_y < 10'd24) && (dbg_x < 10'd64);
 	wire debug_alive  = (dbg_y >= 10'd32) && (dbg_y < 10'd40) && (dbg_x < 10'd64);
 	wire debug_pcaddr = (dbg_y >= 10'd48) && (dbg_y < 10'd56) && (dbg_x < 10'd64);
 	wire debug_pclo   = (dbg_y >= 10'd64) && (dbg_y < 10'd72) && (dbg_x < 10'd64);
-	wire debug_live   = (dbg_y >= 10'd80) && (dbg_y < 10'd88) && (dbg_x < 10'd64);
+	wire debug_fctx   = (dbg_y >= 10'd80) && (dbg_y < 10'd88) && (dbg_x < 10'd64);
+	wire debug_live   = (dbg_y >= 10'd96) && (dbg_y < 10'd104) && (dbg_x < 10'd64);
 	wire debug_any    = debug_egret || debug_68addr
-	                  || debug_alive || debug_pcaddr || debug_pclo || debug_live;
+	                  || debug_alive || debug_pcaddr || debug_pclo || debug_fctx || debug_live;
 
 	// Egret status row: 8 blocks, each 8px wide
 	// Block 0: running (Green=yes)
@@ -434,7 +436,39 @@ module emu
 	wire pc_bit_val = cpu_pc_upper[pc_bit_idx];
 	wire pclo_bit_val = cpu_pc_lower[pc_bit_idx];
 
-	// Row F: LIVE indicators
+	// Fetch context — capture memory state during instruction fetches
+	reg fetch_overlay = 0;
+	reg fetch_selROM = 0;
+	reg fetch_selRAM = 0;
+	reg [2:0] fetch_fc = 0;
+	reg ever_fetch_rom = 0;   // Latches 1 if CPU ever fetches with selectROM active
+	reg ever_fetch_a0 = 0;    // Latches 1 if CPU ever fetches from $A0xxxx (real ROM addr)
+	always @(posedge clk_sys) begin
+		if (!_cpuReset) begin
+			ever_fetch_rom <= 0;
+			ever_fetch_a0 <= 0;
+		end else if (cpu_as_prev && !_cpuAS && cpuFC[1]) begin
+			fetch_overlay <= memoryOverlayOn;
+			fetch_selROM <= selectROM;
+			fetch_selRAM <= selectRAM;
+			fetch_fc <= cpuFC;
+			if (selectROM) ever_fetch_rom <= 1;
+			if (cpuAddr[23:20] == 4'hA) ever_fetch_a0 <= 1;
+		end
+	end
+
+	// Row F: Fetch context indicators
+	wire [2:0] fctx_block = dbg_x[5:3];
+	wire fctx_val = (fctx_block == 0) ? fetch_overlay :
+	                (fctx_block == 1) ? fetch_selROM :
+	                (fctx_block == 2) ? fetch_selRAM :
+	                (fctx_block == 3) ? fetch_fc[2] :
+	                (fctx_block == 4) ? fetch_fc[1] :
+	                (fctx_block == 5) ? fetch_fc[0] :
+	                (fctx_block == 6) ? ever_fetch_rom :
+	                                    ever_fetch_a0;
+
+	// Row G: LIVE indicators
 	wire [2:0] live_block = dbg_x[5:3];
 	wire live_val = (live_block == 0) ? memoryOverlayOn :
 	                (live_block == 1) ? selectROM :
@@ -481,6 +515,40 @@ module emu
 			dbg_r = 8'h00;
 			dbg_g = pclo_bit_val ? 8'hFF : 8'h30;
 			dbg_b = pclo_bit_val ? 8'hFF : 8'h30;
+		end else if (debug_fctx) begin
+			// Row F: Fetch context - color-coded per block
+			case (fctx_block)
+				0: begin // overlay: Green=on, Red=off
+					dbg_r = fctx_val ? 8'h00 : 8'hFF;
+					dbg_g = fctx_val ? 8'hFF : 8'h00;
+					dbg_b = 8'h00;
+				end
+				1: begin // selROM: Green=ROM, dim=not
+					dbg_r = 8'h00;
+					dbg_g = fctx_val ? 8'hFF : 8'h30;
+					dbg_b = 8'h00;
+				end
+				2: begin // selRAM: Yellow=RAM, dim=not
+					dbg_r = fctx_val ? 8'hFF : 8'h30;
+					dbg_g = fctx_val ? 8'hFF : 8'h30;
+					dbg_b = 8'h00;
+				end
+				3, 4, 5: begin // FC[2:0]: White=1, dim=0
+					dbg_r = fctx_val ? 8'hFF : 8'h30;
+					dbg_g = fctx_val ? 8'hFF : 8'h30;
+					dbg_b = fctx_val ? 8'hFF : 8'h30;
+				end
+				6: begin // ever_fetch_rom: Green=yes, Red=never
+					dbg_r = fctx_val ? 8'h00 : 8'hFF;
+					dbg_g = fctx_val ? 8'hFF : 8'h00;
+					dbg_b = 8'h00;
+				end
+				default: begin // ever_fetch_a0: Green=yes, Red=never
+					dbg_r = fctx_val ? 8'h00 : 8'hFF;
+					dbg_g = fctx_val ? 8'hFF : 8'h00;
+					dbg_b = 8'h00;
+				end
+			endcase
 		end else if (debug_live) begin
 			// Live status: Green=active/on, Red=off for first two, White for rest
 			if (live_block < 2) begin
