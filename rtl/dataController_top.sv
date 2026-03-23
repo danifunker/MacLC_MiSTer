@@ -610,8 +610,13 @@ module dataController_top(
 	always @(posedge clk32) begin
 		if (!_cpuReset) begin
 			// Mac LC: TIP is idle (high) at reset
-			via_tip_latched <= 1'b1; 
+			via_tip_latched <= 1'b1;
 		end else if (clk8_en_p && via_pb_oe[5]) begin
+`ifdef SIMULATION
+			if (via_tip_latched != via_pb_o[5])
+				$display("TIP_LATCH: %b -> %b (pb_o=0x%02x pb_oe=0x%02x) @%0t",
+					via_tip_latched, via_pb_o[5], via_pb_o, via_pb_oe, $time);
+`endif
 			// Only update TIP when VIA is driving PB5 as output
 			via_tip_latched <= via_pb_o[5];
 		end

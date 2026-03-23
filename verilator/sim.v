@@ -55,6 +55,7 @@ module emu
 	output [31:0] debug_pc,
 	output [15:0] debug_opcode,
 	output        debug_fetch_valid,
+	output [31:0] debug_data_addr,
 
 	// RAM debug outputs
 	output [24:0] debug_ram_addr,
@@ -361,11 +362,19 @@ module emu
 		end
 	end
 
+	// Latch data address during non-fetch bus cycles (data read/write)
+	reg [31:0] last_data_addr;
+	always @(posedge clk_sys) begin
+		if (!n_reset)
+			last_data_addr <= 0;
+		else if (prev_as_n && !tg68_as_n && tg68_busstate != 2'b00)
+			last_data_addr <= tg68_a;
+	end
+
 	assign debug_pc = last_fetch_pc;
 	assign debug_opcode = last_fetch_opcode;
 	assign debug_fetch_valid = fetch_valid;
-
-	// PC-specific debug removed - add back as needed for targeted debugging
+	assign debug_data_addr = last_data_addr;
 
 	addrController_top ac0
 	(

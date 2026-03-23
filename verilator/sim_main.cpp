@@ -75,7 +75,7 @@ bool cpu_trace_started = false;  // Wait for ROM load and reset
 FILE* cpu_trace_file = nullptr;
 const char* cpu_trace_filename = "cpu_trace.log";
 int cpu_trace_count = 0;
-const int cpu_trace_max = 5000000;  // Stop after this many instructions
+const int cpu_trace_max = 0;  // 0 = unlimited
 int post_download_delay = 0;  // Delay after ROM load before tracing
 uint32_t cpu_trace_last_pc = 0xFFFFFFFF;  // For edge detection (new instruction)
 int cpu_trace_last_frame = -1;  // Track frame transitions in trace log
@@ -221,15 +221,18 @@ int verilate() {
 				// Only log when PC changes (new instruction) to avoid duplicates
 				if (pc != cpu_trace_last_pc) {
 					cpu_trace_last_pc = pc;
+					cpu_trace_count++;
 
-					// Disassemble - for now just use single opcode word
+					int cur_frame = video.count_frame;
+					uint32_t dataAddr = VERTOPINTERN->debug_data_addr;
+
+					// Disassemble
 					unsigned short opwords[2] = { opcode, 0 };
 					const char* disasm = disassemble_68k_ext(pc, opwords, 2);
 
-					int cur_frame = video.count_frame;
-
-					// Output to debug console
-					console.AddLog("[F%d] %08X: %04X  %s", cur_frame, pc, opcode, disasm);
+					// Output to debug console (clear every 1000 to keep it responsive)
+					if (cpu_trace_count % 1000 == 0) console.ClearLog();
+					console.AddLog("[F%d] %08X: %04X  %s  @%06X", cur_frame, pc, opcode, disasm, dataAddr);
 
 					// Also write to trace file if open
 					if (cpu_trace_file) {
@@ -238,10 +241,9 @@ int verilate() {
 							fprintf(cpu_trace_file, "--- frame %d ---\n", cur_frame);
 							cpu_trace_last_frame = cur_frame;
 						}
-						fprintf(cpu_trace_file, "[F%d] %08X: %04X  %s\n", cur_frame, pc, opcode, disasm);
-						cpu_trace_count++;
-						if (cpu_trace_count >= cpu_trace_max) {
-							fprintf(stderr, "CPU trace limit reached (%d instructions)\n", cpu_trace_max);
+						fprintf(cpu_trace_file, "[F%d] %08X: %04X  %s  @%06X\n", cur_frame, pc, opcode, disasm, dataAddr);
+						if (cpu_trace_max > 0 && cpu_trace_count >= cpu_trace_max) {
+							fprintf(stderr, "CPU trace limit reached (%d instructions)\n", cpu_trace_count);
 							fclose(cpu_trace_file);
 							cpu_trace_file = nullptr;
 						}

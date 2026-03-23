@@ -324,7 +324,7 @@ wire [7:0] pb_external = {
     1'b1,                   // Bit 6: DFAC data (tied high)
     via_cb2_in_stable,      // Bit 5: CB2 data from VIA (synchronized)
     1'b0,                   // Bit 4: CB1 clock (external reads as 0)
-    via_tip_stable,         // Bit 3: TIP from VIA (synchronized)
+    via_tip_effective,      // Bit 3: TIP from VIA (gated after reset release)
     via_byteack_in_stable,  // Bit 2: VIA_FULL/BYTEACK - from VIA PB4
     1'b0,                   // Bit 1: TREQ (external reads as 0)
     1'b1                    // Bit 0: +5V sense (always active)
@@ -365,10 +365,44 @@ reg [15:0] handshake_timer;
 reg handshake_done;
 reg force_treq;
 
-// TIP simulation: generate initial TIP toggle to kick-start communication
-reg via_tip_sim;
-reg [7:0] via_tip_sim_counter;
-wire via_tip_effective = (via_tip_sim_counter < 8'd200) ? via_tip_sim : via_tip_stable;
+// TIP gate: hold TIP HIGH from Egret's perspective after 68020 reset release
+// until Egret has entered its idle loop. Without this, the 68020 asserts TIP
+// ~1240 Egret cycles after reset release, but Egret doesn't enter its idle
+// poll loop until ~3300 cycles later — missing the TIP falling edge entirely.
+// The gate holds TIP=1 for 4096 cycles after reset release, then passes the
+// real value through, letting Egret see the high-to-low transition.
+reg [12:0] tip_gate_counter;  // 0-4096, 13 bits
+reg        tip_gate_active;
+
+always @(posedge clk) begin
+    if (reset) begin
+        tip_gate_counter <= 13'd0;
+        tip_gate_active <= 1'b0;
+    end else if (cen) begin
+        if (reset_680x0_latched && !tip_gate_active) begin
+            // 68020 in reset — keep gate inactive, ready for next release
+            tip_gate_counter <= 13'd0;
+        end else if (!reset_680x0_latched && !tip_gate_active) begin
+            // 68020 just released from reset — start gate
+            tip_gate_active <= 1'b1;
+            tip_gate_counter <= 13'd1;
+`ifdef SIMULATION
+            $display("EGRET[%0d]: TIP gate started (holding TIP=1 for Egret)", cycle_count);
+`endif
+        end else if (tip_gate_active && tip_gate_counter < 13'd4096) begin
+            tip_gate_counter <= tip_gate_counter + 13'd1;
+        end else if (tip_gate_active && tip_gate_counter == 13'd4096) begin
+            // Gate period over — pass real TIP through
+            tip_gate_counter <= tip_gate_counter + 13'd1;  // Stop incrementing after this
+`ifdef SIMULATION
+            $display("EGRET[%0d]: TIP gate released (real TIP=%b)", cycle_count, via_tip_stable);
+`endif
+        end
+    end
+end
+
+wire tip_gate_holding = tip_gate_active && (tip_gate_counter <= 13'd4096);
+wire via_tip_effective = tip_gate_holding ? 1'b1 : via_tip_stable;
 
 always @(posedge clk) begin
     if (reset) begin
@@ -376,16 +410,7 @@ always @(posedge clk) begin
         handshake_done <= 0;
         force_treq <= 0;
         init_state <= INIT_WAIT;
-        via_tip_sim <= 1'b1;
-        via_tip_sim_counter <= 8'd0;
     end else if (cen) begin
-        // TIP simulation for initial handshake
-        if (via_tip_sim_counter < 8'd200) begin
-            via_tip_sim_counter <= via_tip_sim_counter + 8'd1;
-            if (via_tip_sim_counter == 8'd100) via_tip_sim <= 1'b0;  // Pull TIP low
-            if (via_tip_sim_counter == 8'd150) via_tip_sim <= 1'b1;  // Release TIP
-        end
-
         // Removed force_treq state machine - let firmware control TREQ from start
         // The firmware initializes Port B with 0x92 (TREQ inactive), then asserts
         // TREQ via bclr 1, $01 at address 0x1549 when ready to transfer data.
