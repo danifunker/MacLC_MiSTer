@@ -144,7 +144,7 @@ always @(posedge clk_sys) begin
 
                         3'b100: begin  // $10: Video Config
                             video_config <= data_in;
-                            `ifdef SIMULATION
+                            `ifdef VERBOSE_TRACE
                             $display("PVIA: WRITE Video Config = %02x (bpp mode = %d) addr=%h @%0t",
                                      data_in, data_in[2:0], addr, $time);
                             `endif
@@ -209,7 +209,7 @@ always @(posedge clk_sys) begin
                         3'b100: begin  // $10: Video Config
                             data_out <= (video_config & 8'hC7) | ((monitor_id[2:0]) << 3);
                             pvia_reg10_reads <= pvia_reg10_reads + 1;
-                            `ifdef SIMULATION
+                            `ifdef VERBOSE_TRACE
                             $display("PVIA: READ Video Config -> %02x @%0t",
                                      (video_config & 8'hC7) | ((monitor_id[2:0]) << 3), $time);
                             `endif

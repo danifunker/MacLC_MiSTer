@@ -313,7 +313,7 @@ module via6522 (
                     pio_i_prb <= data_in;
 `ifdef VERBOSE_TRACE
                     $display("VIA ORB_W[%0t]: %02x TIP=%b BYTEACK=%b TREQ_in=%b",
-                             $time, data_in, ~data_in[5], ~data_in[4], ~port_b_i[3]);
+                             $time, data_in, data_in[5], data_in[4], ~port_b_i[3]);
 `endif
                     if (cb2_no_irq_clr == 1'b0) begin
                         irq_flags[3] <= 1'b0;

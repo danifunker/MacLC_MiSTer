@@ -90,7 +90,7 @@ const int ram_debug_max = 10000000;  // Stop after this many RAM accesses
 
 // Peripheral debug
 // ----------------
-bool periph_debug_enable = true;  // Disable for speed
+bool periph_debug_enable = false;  // Enable for peripheral access logging
 FILE* periph_debug_file = nullptr;
 const char* periph_debug_filename = "periph_debug.log";
 int periph_debug_count = 0;
@@ -230,8 +230,7 @@ int verilate() {
 					unsigned short opwords[2] = { opcode, 0 };
 					const char* disasm = disassemble_68k_ext(pc, opwords, 2);
 
-					// Output to debug console (clear every 1000 to keep it responsive)
-					if (cpu_trace_count % 1000 == 0) console.ClearLog();
+					// Output to debug console (rolling 100-entry window in AddLog)
 					console.AddLog("[F%d] %08X: %04X  %s  @%06X", cur_frame, pc, opcode, disasm, dataAddr);
 
 					// Also write to trace file if open

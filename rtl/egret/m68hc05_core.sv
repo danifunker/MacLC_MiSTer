@@ -599,7 +599,7 @@ module m68hc05_core (
                             
                             8'h9A, 8'h9B: begin  // CLI, SEI
                                 flagI <= datain[0];
-                                `ifdef SIMULATION
+                                `ifdef VERBOSE_TRACE
                                 if (datain[0] == 0)
                                     $display("HC05: CLI - Interrupts ENABLED at PC=%04x (flagI: 1->0)", regPC);
                                 else

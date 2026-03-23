@@ -939,18 +939,22 @@ always @(posedge clk) begin
         `endif
 
         // Log TREQ transitions (pb_out[1]=0 means TREQ active)
+        `ifdef VERBOSE_TRACE
         if (pb_out[1] != treq_prev) begin
             if (~pb_out[1])
                 $display("EGRET[%0d]: *** TREQ ACTIVE (requesting transfer) ***", cycle_count);
             else
                 $display("EGRET[%0d]: *** TREQ INACTIVE ***", cycle_count);
         end
+        `endif
 
         // Log TIP input changes from VIA
+        `ifdef VERBOSE_TRACE
         if (via_tip_stable != via_tip_prev) begin
             $display("EGRET[%0d]: TIP from VIA changed: %b -> %b",
                      cycle_count, via_tip_prev, via_tip_stable);
         end
+        `endif
 
         `ifdef VERBOSE_TRACE
         // Log CB1 clock edges

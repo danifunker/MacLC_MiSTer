@@ -126,9 +126,11 @@ always @(posedge clk_sys) begin
     if (reset)
         latch_count <= 0;
     else if (video_latch && !hblank && !vblank) begin
+        `ifdef VERBOSE_TRACE
         if (latch_count < 10 || (latch_count % 100000 == 0))
             $display("V8 FETCH[%0d] @%0t: addr=%h data=%h mode=%d pixel_idx=%h palette=%h",
                 latch_count, $time, video_addr, video_data_in, video_mode, pixel_index, palette_data);
+        `endif
         latch_count <= latch_count + 1;
     end
 end
