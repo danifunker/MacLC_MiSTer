@@ -459,7 +459,7 @@ module dataController_top(
 				if (!via_access_prev) begin
 					if (_cpuRW) begin
 						via_sr_read <= 1'b1;
-`ifdef VERBOSE_TRACE
+`ifdef SIMULATION
 						$display("VIA: SR READ - CPU reading shift register");
 `endif
 					end else begin
@@ -490,16 +490,26 @@ module dataController_top(
 
 	// Debug: Monitor Port B and CUDA signals
 	/* verilator lint_off STMTDLY */
+`ifdef SIMULATION
+	reg [7:0] via_pb_oe_prev_sim = 8'h00;
+	always @(posedge clk32) begin
+		if (via_pb_oe !== via_pb_oe_prev_sim) begin
+			$display("VIA: DDRB changed: 0x%02x -> 0x%02x (PB3=%b=%s, PB4=%b=%s, PB5=%b=%s)",
+				via_pb_oe_prev_sim, via_pb_oe,
+				via_pb_oe[3], via_pb_oe[3] ? "OUT" : "IN",
+				via_pb_oe[4], via_pb_oe[4] ? "OUT" : "IN",
+				via_pb_oe[5], via_pb_oe[5] ? "OUT" : "IN");
+			via_pb_oe_prev_sim <= via_pb_oe;
+		end
+	end
+`endif
 `ifdef VERBOSE_TRACE
 	reg [7:0] via_pb_oe_prev = 8'h00;
 	reg cuda_treq_prev = 1'b0;
 	always @(posedge clk32) begin
 		if (via_pb_oe !== via_pb_oe_prev) begin
-			$display("VIA: DDRB changed: 0x%02x -> 0x%02x (PB3=%b=%s, PB4=%b=%s, PB5=%b=%s)",
-				via_pb_oe_prev, via_pb_oe,
-				via_pb_oe[3], via_pb_oe[3] ? "OUT" : "IN",
-				via_pb_oe[4], via_pb_oe[4] ? "OUT" : "IN",
-				via_pb_oe[5], via_pb_oe[5] ? "OUT" : "IN");
+			$display("VIA_VERBOSE: DDRB changed: 0x%02x -> 0x%02x",
+				via_pb_oe_prev, via_pb_oe);
 			via_pb_oe_prev <= via_pb_oe;
 		end
 		if (cuda_treq !== cuda_treq_prev) begin
@@ -607,28 +617,29 @@ module dataController_top(
 	// which temporarily makes PB5 an input. Without latching, this causes
 	// TIP to toggle HIGH (external pull-up), interrupting communication.
 	//
-	// POLARITY: Mac LC Egret uses INVERTED TIP polarity vs Mac Plus CUDA:
-	//   Mac Plus/CUDA: PB5=0 → TIP asserted (active LOW)
-	//   Mac LC/Egret:  PB5=1 → TIP asserted (active HIGH on host side)
-	// We invert here so egret_wrapper always sees active-LOW TIP convention.
+	// POLARITY: Mac LC Egret — PB5 passed directly (no inversion).
+	// MAME: m_v8->pb5_callback().set(m_egret, FUNC(egret_device::set_sys_session))
+	// PB5=1 → TIP active (session), PB5=0 → TIP idle
 	reg via_tip_latched;
 	always @(posedge clk32) begin
 		if (!_cpuReset) begin
-			// Mac LC: TIP is idle (high in egret_wrapper convention) at reset
-			via_tip_latched <= 1'b1;
+			// Reset: TIP idle (0 = no session)
+			via_tip_latched <= 1'b0;
 		end else if (clk8_en_p && via_pb_oe[5]) begin
-`ifdef VERBOSE_TRACE
-			if (via_tip_latched != ~via_pb_o[5])
-				$display("TIP_LATCH: %b -> %b (pb_o=0x%02x pb_oe=0x%02x) @%0t",
-					via_tip_latched, ~via_pb_o[5], via_pb_o, via_pb_oe, $time);
+`ifdef SIMULATION
+			if (via_tip_latched != via_pb_o[5])
+				$display("TIP_LATCH: %b -> %b (pb_o=0x%02x pb_oe=0x%02x)",
+					via_tip_latched, via_pb_o[5], via_pb_o, via_pb_oe);
 `endif
-			// Invert PB5 for Mac LC Egret polarity (host HIGH = TIP asserted)
-			via_tip_latched <= ~via_pb_o[5];
+			// Pass PB5 directly to Egret as sys_session (no inversion)
+			// MAME: m_v8->pb5_callback().set(m_egret, FUNC(egret_device::set_sys_session))
+			// Host PB5=1 (TIP asserted) → Egret bit 3=1, PB5=0 (idle) → bit 3=0
+			via_tip_latched <= via_pb_o[5];
 		end
 	end
 
 `ifdef USE_EGRET_CPU
-	egret_wrapper egret_inst(
+	egret_behavioral egret_inst(
 		.clk            (clk32),
 		.clk8_en        (clk8_en_p),
 		.reset          (egretReset),  // Egret uses shorter reset than 68000
@@ -641,7 +652,7 @@ module dataController_top(
 		// This prevents TIP from toggling when VIA temporarily makes PB5 an input to read Port B
 		// Polarity already inverted in via_tip_latched (Mac LC: PB5 HIGH = TIP asserted)
 		.via_tip        (via_tip_latched),  // TIP from VIA (PB5 = SYS_SESSION)
-		.via_byteack_in (~via_pb_o[4]),    // BYTEACK from VIA - inverted for Mac LC Egret polarity
+		.via_byteack_in (via_pb_o[4]),     // BYTEACK from VIA - direct (no inversion, matches MAME)
 		.cuda_treq      (cuda_treq),       // TREQ to VIA (PB3 = XCVR_SESSION)
 		.cuda_byteack   (cuda_byteack),    // Not used in Egret
 
@@ -694,7 +705,7 @@ module dataController_top(
 		// TIP: Use latched value to prevent toggling when VIA reads Port B
 		// Polarity already inverted in via_tip_latched (Mac LC: PB5 HIGH = TIP asserted)
 		.via_tip        (via_tip_latched),  // TIP from VIA (PB5 = SYS_SESSION)
-		.via_byteack_in (~via_pb_o[4]),    // BYTEACK from VIA - inverted for Mac LC Egret polarity
+		.via_byteack_in (via_pb_o[4]),     // BYTEACK from VIA - direct (no inversion, matches MAME)
 		.cuda_treq      (cuda_treq),       // TREQ to VIA (PB3 = XCVR_SESSION)
 		.cuda_byteack   (cuda_byteack),    // Not used in V8 protocol
 

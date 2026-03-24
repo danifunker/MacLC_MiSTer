@@ -311,9 +311,9 @@ module via6522 (
             case (addr)
                 4'h0: begin // ORB
                     pio_i_prb <= data_in;
-`ifdef VERBOSE_TRACE
-                    $display("VIA ORB_W[%0t]: %02x TIP=%b BYTEACK=%b TREQ_in=%b",
-                             $time, data_in, data_in[5], data_in[4], ~port_b_i[3]);
+`ifdef SIMULATION
+                    $display("VIA_ORB[%0t]: W 0x%02x TIP=%b TACK=%b TREQ_in=%b",
+                             $time, data_in, data_in[5], data_in[4], port_b_i[3]);
 `endif
                     if (cb2_no_irq_clr == 1'b0) begin
                         irq_flags[3] <= 1'b0;
@@ -369,9 +369,9 @@ module via6522 (
                     
                 4'hA: begin // Serial port (SR write)
                     irq_flags[2] <= 1'b0;
-`ifdef VERBOSE_TRACE
-                    $display("VIA: SR WRITE = 0x%02x (shift_active=%b, shift_mode=%d)",
-                             data_in, shift_active, shift_mode_control);
+`ifdef SIMULATION
+                    $display("VIA_SR[%0t]: WRITE 0x%02x mode=%d dir=%b active=%b cnt=%d",
+                             $time, data_in, shift_mode_control, shift_dir, shift_active, bit_cnt);
 `endif
                 end
                     
@@ -471,11 +471,10 @@ module via6522 (
             end
             4'hD: begin // IFR
                 data_out <= {irq_out, irq_flags};
-`ifdef VERBOSE_TRACE
-                // Log IFR reads during shift register activity
+`ifdef SIMULATION
                 if (shift_active || irq_flags[2]) begin
-                    $display("VIA: IFR READ = 0x%02x (SR_bit=%b, IRQ=%b) [SR active=%b, bit_cnt=%d]",
-                             {irq_out, irq_flags}, irq_flags[2], irq_out, shift_active, bit_cnt);
+                    $display("VIA_SR[%0t]: IFR_READ 0x%02x SR_bit=%b active=%b cnt=%d",
+                             $time, {irq_out, irq_flags}, irq_flags[2], shift_active, bit_cnt);
                 end
 `endif
             end
@@ -518,8 +517,12 @@ module via6522 (
                     
                 4'hA: begin // SR
                     irq_flags[2] <= 1'b0;
+`ifdef SIMULATION
+                    $display("VIA_SR[%0t]: READ 0x%02x mode=%d dir=%b active=%b cnt=%d",
+                             $time, shift_reg, shift_mode_control, shift_dir, shift_active, bit_cnt);
+`endif
                 end
-    
+
                 default: begin
                 end
             endcase
@@ -727,7 +730,7 @@ module via6522 (
 
     // In external clock mode, latch rising edges until consumed by falling phase
     reg ext_edge_pending = 1'b0;
-    reg ext_fall_edge_pending = 1'b0;  // kept for debug port but not used in logic
+    reg ext_fall_edge_pending = 1'b0;  // Latch CB1 falling edges for shift-out in ext clock mode
     reg cb2_latched = 1'b0;            // kept for debug port but not used in logic
 
     always @(posedge clock) begin
@@ -741,6 +744,10 @@ module via6522 (
             // Latch rising edge until falling phase consumes it
             if (~shift_clock_d & shift_clock) begin
                 ext_edge_pending <= 1'b1;
+            end
+            // Latch falling edge until falling phase consumes it (for shift-out)
+            if (shift_clock_d & ~shift_clock) begin
+                ext_fall_edge_pending <= 1'b1;
             end
         end else if (rising == 1'b1) begin
             if (shift_active == 1'b0) begin
@@ -757,9 +764,12 @@ module via6522 (
 
         if (falling == 1'b1) begin
             shift_timer_tick <= timer_b_tick;
-            // Clear the pending edge after falling phase processes it
+            // Clear the pending edges after falling phase processes them
             if (ext_clock_mode && ext_edge_pending) begin
                 ext_edge_pending <= 1'b0;
+            end
+            if (ext_clock_mode && ext_fall_edge_pending) begin
+                ext_fall_edge_pending <= 1'b0;
             end
         end
 
@@ -767,6 +777,7 @@ module via6522 (
             shift_clock <= 1'b1;
             shift_clock_d <= 1'b1;
             ext_edge_pending <= 1'b0;
+            ext_fall_edge_pending <= 1'b0;
         end
     end
 
@@ -791,11 +802,13 @@ module via6522 (
         end else if (falling == 1'b1) begin
             if (wen == 1'b1 && addr == 4'hA) begin
                 shift_reg <= data_in;
-                `ifdef VERBOSE_TRACE
-                $display("VIA: SR write = 0x%02x, ACR=0x%02x (mode=%d, dir=%b)",
-                         data_in, acr, shift_mode_control, shift_dir);
+                `ifdef SIMULATION
+                $display("VIA: SR write = 0x%02x, ACR=0x%02x (mode=%d, dir=%b, serport_en=%b, cb2_o=%b)",
+                         data_in, acr, shift_mode_control, shift_dir, serport_en, ser_cb2_o);
                 `endif
-            end else if (shift_dir == 1'b1 && shift_tick_f == 1'b1) begin // output
+            end else if (shift_dir == 1'b1 &&
+                         ((ext_clock_mode && ext_fall_edge_pending) ||
+                          (!ext_clock_mode && shift_tick_f))) begin // output
                 shift_reg <= {shift_reg[6:0], shift_reg[7]};
             end else if (shift_mode_control != 3'b000 && shift_dir == 1'b0) begin // input (only when mode != 0)
                 // In external clock mode (mode 3), use ext_edge_pending to catch CB1 edges
@@ -879,9 +892,9 @@ module via6522 (
                     if (bit_cnt == 3'd0) begin
                         shift_active <= 1'b0;
                         missed_ext_edge <= 1'b0;  // Clear so post-completion edges don't affect next transfer
-                        `ifdef VERBOSE_TRACE
-                        $display("VIA: SR shift complete - final SR=0x%02x", shift_reg);
-                        `endif
+`ifdef SIMULATION
+                        $display("VIA_SR[%0t]: COMPLETE SR=0x%02x dir=%b", $time, shift_reg, shift_dir);
+`endif
                     end else begin
                         bit_cnt <= bit_cnt - 3'd1;
                         `ifdef VERBOSE_TRACE

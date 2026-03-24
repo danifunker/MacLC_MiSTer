@@ -365,44 +365,42 @@ reg [15:0] handshake_timer;
 reg handshake_done;
 reg force_treq;
 
-// TIP gate: hold TIP HIGH from Egret's perspective after 68020 reset release
-// until Egret has entered its idle loop. Without this, the 68020 asserts TIP
-// ~1240 Egret cycles after reset release, but Egret doesn't enter its idle
-// poll loop until ~3300 cycles later — missing the TIP falling edge entirely.
-// The gate holds TIP=1 for 4096 cycles after reset release, then passes the
-// real value through, letting Egret see the high-to-low transition.
-reg [12:0] tip_gate_counter;  // 0-4096, 13 bits
-reg        tip_gate_active;
+// TIP gate: hold TIP at idle level (0 = no session) from Egret's perspective
+// until the Egret firmware has entered its idle/communication loop. The firmware's main init loop at
+// $1034-$1066 probes for ADB devices (dozens of iterations with timeouts),
+// which takes far longer than the 68020's boot-to-first-Egret-command time.
+// We detect when the Egret PC reaches $12AC (the TIP polling instruction in
+// the idle loop) and only then release the gate, letting Egret see TIP.
+reg        tip_gate_holding;
+reg        egret_idle_reached;  // Set once Egret PC hits $12AC
 
 always @(posedge clk) begin
     if (reset) begin
-        tip_gate_counter <= 13'd0;
-        tip_gate_active <= 1'b0;
+        tip_gate_holding <= 1'b0;
+        egret_idle_reached <= 1'b0;
     end else if (cen) begin
-        if (reset_680x0_latched && !tip_gate_active) begin
-            // 68020 in reset — keep gate inactive, ready for next release
-            tip_gate_counter <= 13'd0;
-        end else if (!reset_680x0_latched && !tip_gate_active) begin
-            // 68020 just released from reset — start gate
-            tip_gate_active <= 1'b1;
-            tip_gate_counter <= 13'd1;
+        // Start holding TIP when 68020 is released from reset
+        if (!reset_680x0_latched && !tip_gate_holding && !egret_idle_reached) begin
+            tip_gate_holding <= 1'b1;
 `ifdef SIMULATION
-            $display("EGRET[%0d]: TIP gate started (holding TIP=1 for Egret)", cycle_count);
+            $display("EGRET[%0d]: TIP gate started (waiting for idle loop at $12AC)", cycle_count);
 `endif
-        end else if (tip_gate_active && tip_gate_counter < 13'd4096) begin
-            tip_gate_counter <= tip_gate_counter + 13'd1;
-        end else if (tip_gate_active && tip_gate_counter == 13'd4096) begin
-            // Gate period over — pass real TIP through
-            tip_gate_counter <= tip_gate_counter + 13'd1;  // Stop incrementing after this
+        end
+
+        // Detect Egret firmware reaching idle loop TIP poll at $12AC
+        // addr13 is the 13-bit ROM address; $12AC in CPU space = $12AC
+        if (!egret_idle_reached && rom_cs && cpu_wr && addr13 == 13'h12AC) begin
+            egret_idle_reached <= 1'b1;
+            tip_gate_holding <= 1'b0;
 `ifdef SIMULATION
-            $display("EGRET[%0d]: TIP gate released (real TIP=%b)", cycle_count, via_tip_stable);
+            $display("EGRET[%0d]: Idle loop reached! TIP gate released (real TIP=%b)", cycle_count, via_tip_stable);
 `endif
         end
     end
 end
 
-wire tip_gate_holding = tip_gate_active && (tip_gate_counter <= 13'd4096);
-wire via_tip_effective = tip_gate_holding ? 1'b1 : via_tip_stable;
+// Gate value 0 = idle (PB5=0 on host = no session). Matches MAME: sys_session=0 means idle.
+wire via_tip_effective = tip_gate_holding ? 1'b0 : via_tip_stable;
 
 always @(posedge clk) begin
     if (reset) begin
@@ -613,9 +611,10 @@ always @(posedge clk) begin
             5'h00: pa_latch <= cpu_dout;
             5'h01: begin
                 pb_latch <= cpu_dout;
-                `ifdef VERBOSE_TRACE
-                $display("EGRET[%0d]: *** PB_LATCH WRITE = 0x%02x (CB1_new=%b) ***", cycle_count, cpu_dout, cpu_dout[4]);
-                `endif
+`ifdef SIMULATION
+                if (cpu_dout[4] != pb_latch[4])  // CB1 changed
+                    $display("EGRET[%0d]: PB_W 0x%02x CB1=%b PC=%04x", cycle_count, cpu_dout, cpu_dout[4], last_pc);
+`endif
             end
             5'h02: pc_latch <= cpu_dout;
             5'h04: pa_ddr   <= cpu_dout;
@@ -827,12 +826,15 @@ wire combined_irq_n = 1'b1;  // No external IRQ source currently
 
 // Track TIP for edge detection in debug/display only
 reg via_tip_prev;
+reg via_byteack_prev;
 
 always @(posedge clk) begin
     if (reset) begin
         via_tip_prev <= 1'b1;  // TIP is idle high
+        via_byteack_prev <= 1'b0;
     end else if (cen) begin
-        via_tip_prev <= via_tip_stable;  // Use synchronized signal
+        via_tip_prev <= via_tip_stable;
+        via_byteack_prev <= via_byteack_in_stable;
     end
 end
 
@@ -939,35 +941,65 @@ always @(posedge clk) begin
         `endif
 
         // Log TREQ transitions (pb_out[1]=0 means TREQ active)
-        `ifdef VERBOSE_TRACE
+`ifdef SIMULATION
         if (pb_out[1] != treq_prev) begin
             if (~pb_out[1])
-                $display("EGRET[%0d]: *** TREQ ACTIVE (requesting transfer) ***", cycle_count);
+                $display("EGRET[%0d]: TREQ ACTIVE", cycle_count);
             else
-                $display("EGRET[%0d]: *** TREQ INACTIVE ***", cycle_count);
+                $display("EGRET[%0d]: TREQ INACTIVE", cycle_count);
         end
-        `endif
+`endif
 
         // Log TIP input changes from VIA
-        `ifdef VERBOSE_TRACE
+`ifdef SIMULATION
         if (via_tip_stable != via_tip_prev) begin
-            $display("EGRET[%0d]: TIP from VIA changed: %b -> %b",
-                     cycle_count, via_tip_prev, via_tip_stable);
+            $display("EGRET[%0d]: TIP %b->%b (effective=%b)", cycle_count, via_tip_prev, via_tip_stable, via_tip_effective);
         end
-        `endif
+`endif
 
-        `ifdef VERBOSE_TRACE
+`ifdef SIMULATION
         // Log CB1 clock edges
         if (pb_out[4] != pb_out_prev[4]) begin
-            $display("EGRET[%0d]: CB1 %s edge (CB2_out=%b CB2_in=%b)",
-                     cycle_count, pb_out[4] ? "RISING" : "FALLING",
-                     pb_out[5], via_cb2_in_stable);
+            $display("EGRET[%0d]: CB1 %s", cycle_count, pb_out[4] ? "RISE" : "FALL");
         end
-        `endif
+`endif
+
+`ifdef SIMULATION
+        // Log BYTEACK input changes
+        if (via_byteack_in_stable != via_byteack_prev) begin
+            $display("EGRET[%0d]: BYTEACK %b->%b", cycle_count, via_byteack_prev, via_byteack_in_stable);
+        end
+        // Periodic PC dump when TIP is active (every 256 cycles)
+        if (!via_tip_effective && cycle_count[7:0] == 8'h00) begin
+            $display("EGRET[%0d]: PC=%04x TIP_active PB_in=%02x PB_out=%02x PB_ddr=%02x",
+                     cycle_count, last_pc, pb_in, pb_out, pb_ddr);
+        end
+`endif
 
         // Track program counter
         if (rom_cs && cpu_wr) begin  // cpu_wr=1 means read
             last_pc <= cpu_addr;
+`ifdef SIMULATION
+            // Track key init milestones
+            if (addr13 == 13'h0FAF)
+                $display("EGRET[%0d]: >>> INIT RESTART ($0FAF)", cycle_count);
+            if (addr13 == 13'h12C2)
+                $display("EGRET[%0d]: >>> COMM HANDLER ($12C2) TIP=%b BYTEACK=%b", cycle_count, via_tip_effective, via_byteack_in_stable);
+            if (addr13 == 13'h132B)
+                $display("EGRET[%0d]: >>> SESSION HANDLER ($132B) TIP=%b", cycle_count, via_tip_effective);
+            if (addr13 == 13'h14C8)
+                $display("EGRET[%0d]: >>> CB1 HANDLER ($14C8) TIP=%b BYTEACK=%b", cycle_count, via_tip_effective, via_byteack_in_stable);
+            if (addr13 == 13'h14EC)
+                $display("EGRET[%0d]: >>> CB1 STROBING ($14EC)", cycle_count);
+            if (addr13 == 13'h1034)
+                $display("EGRET[%0d]: >>> PROBE LOOP ($1034)", cycle_count);
+            if (addr13 == 13'h1068)
+                $display("EGRET[%0d]: >>> PROBE DONE ($1068) — post-probe init", cycle_count);
+            if (addr13 == 13'h1445)
+                $display("EGRET[%0d]: >>> SESSION XFER ($1445) TIP=%b", cycle_count, via_tip_effective);
+            if (addr13 == 13'h1549)
+                $display("EGRET[%0d]: >>> WAIT_BYTEACK ($1549) TIP=%b", cycle_count, via_tip_effective);
+`endif
             `ifdef VERBOSE_TRACE
             // Key firmware addresses (match MAME trace points)
             if (addr13 == 13'h120A ||  // Init check loop entry

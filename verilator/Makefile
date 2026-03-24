@@ -85,9 +85,7 @@ V_SRC = \
 	$(RTL)/scc.v \
 	$(RTL)/cuda_maclc.sv \
 	$(RTL)/pll/pll_0002.v \
-	$(RTL)/egret/egret_wrapper.sv \
-	$(RTL)/egret/m68hc05_alu.sv \
-	$(RTL)/egret/m68hc05_core.sv \
+	$(RTL)/egret_behavioral.sv \
 	$(RTL)/uart/txuart.v \
 	$(RTL)/uart/rxuart.v
 
