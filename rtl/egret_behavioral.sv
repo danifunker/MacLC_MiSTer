@@ -447,22 +447,28 @@ module egret_behavioral (
                     CMD_SET_TIME: begin
                         rtc_seconds <= {recv_buf[2], recv_buf[3], recv_buf[4], recv_buf[5]};
                         send_buf[0] <= PKT_ERROR;
-                        send_buf[1] <= 8'h00;
-                        send_length <= 4'd2;
+                        send_length <= 4'd1;
                     end
 
                     CMD_GET_PRAM: begin
+                        // Response: [PKT_ERROR][pram_data]
+                        // Address: recv_buf[3] (low byte of 16-bit PRAM address)
                         send_buf[0] <= PKT_ERROR;
-                        send_buf[1] <= CMD_GET_PRAM;
-                        send_buf[2] <= pram[recv_buf[2]];
-                        send_length <= 4'd3;
+                        send_buf[1] <= pram[recv_buf[3]];
+                        send_length <= 4'd2;
+`ifdef SIMULATION
+                        $display("EGRET_BEH: GET_PRAM[0x%02x] = 0x%02x",
+                                 recv_buf[3], pram[recv_buf[3]]);
+`endif
                     end
 
                     CMD_SET_PRAM: begin
-                        pram[recv_buf[2]] <= recv_buf[3];
+                        pram[recv_buf[3]] <= recv_buf[4];
                         send_buf[0] <= PKT_ERROR;
-                        send_buf[1] <= 8'h00;
-                        send_length <= 4'd2;
+                        send_length <= 4'd1;
+`ifdef SIMULATION
+                        $display("EGRET_BEH: SET_PRAM[0x%02x] = 0x%02x", recv_buf[3], recv_buf[4]);
+`endif
                     end
 
                     CMD_SEND_DFAC: begin
@@ -548,7 +554,8 @@ module egret_behavioral (
                 end
                 endcase
 
-                // Assert TREQ and clock 8 dummy CB1 edges to notify host via IFR[2]
+                // Assert TREQ and clock 8 dummy CB1 edges to trigger VIA IFR[2]
+                // The host waits for IFR[2] interrupt to check TREQ and reconfigure VIA
                 treq_reg      <= 1'b1;
                 state         <= ST_SEND_NOTIFY;
                 clk_div       <= 6'd0;
@@ -644,6 +651,14 @@ module egret_behavioral (
                         cuda_cb1  <= 1'b1;
                         bit_count <= bit_count + 1'd1;
                         sample_phase <= 1'b1;
+                        // NOTE: TREQ stays asserted through last byte. Host reads SR,
+                        // sees TREQ=1, toggles TACK. Egret then deasserts TREQ and
+                        // clocks dummy byte. Host handler reads ORB, sees TREQ=0.
+`ifdef SIMULATION
+                        if (send_count < send_length)
+                            $display("EGRET_BEH: SEND bit[%0d] cb2=%b (byte %0d = 0x%02x)",
+                                     bit_count, cuda_cb2, send_count, send_buf[send_count]);
+`endif
                     end else begin
                         // Phase 1: Lower CB1, drive next data bit
                         cuda_cb1 <= 1'b0;
@@ -651,17 +666,24 @@ module egret_behavioral (
 
                         if (bit_count >= 4'd8) begin
                             // All 8 bits sent
-                            if (send_count < send_length)
-                                send_count <= send_count + 1'd1;
-                            state <= ST_SEND_DONE;
                             wait_counter <= 16'd0;
+
+                            if (send_count >= send_length) begin
+                                // Dummy byte complete → go to FINISH
+                                state <= ST_FINISH;
 `ifdef SIMULATION
-                            if (send_count < send_length)
-                                $display("EGRET_BEH: SEND byte[%0d] = 0x%02x complete",
-                                         send_count, send_buf[send_count]);
-                            else
-                                $display("EGRET_BEH: SEND dummy byte complete (waiting for TIP deassert)");
+                                $display("EGRET_BEH: SEND dummy byte complete, finishing");
 `endif
+                            end else begin
+                                send_count <= send_count + 1'd1;
+                                // Wait for host TACK toggle before sending next byte or dummy
+                                state <= ST_SEND_DONE;
+                                wait_counter <= 16'd0;
+`ifdef SIMULATION
+                                $display("EGRET_BEH: SEND byte[%0d] = 0x%02x complete, waiting for TACK",
+                                         send_count, send_buf[send_count]);
+`endif
+                            end
                         end else begin
                             // Drive next bit on CB2
                             shift_data <= {shift_data[6:0], 1'b0};
@@ -671,25 +693,39 @@ module egret_behavioral (
                 end
             end
 
-            // ==== SEND_DONE: byte sent, wait for host to read SR and toggle TACK ====
+            // ==== SEND_DONE: byte sent — wait for TACK toggle, then send next ====
+            // Egret protocol: after host reads SR, it toggles TACK (ORB bit 5).
+            // Egret must detect the toggle and clock the next byte (or dummy).
             ST_SEND_DONE: begin
                 wait_counter <= wait_counter + 1'd1;
                 cuda_cb1 <= 1'b0;
 
-                if (send_count >= send_length) begin
-                    // All bytes sent — deassert TREQ and keep clocking CB1
-                    // until host sees TREQ=0 (in its ORB check) and deasserts TIP
+                if (!tip) begin
+                    // Host deasserted TIP — transaction done
                     treq_reg <= 1'b0;
-                    if (!tip) begin
-                        // Host deasserted TIP — we're done
-                        state <= ST_FINISH;
-                        wait_counter <= 16'd0;
+                    state <= ST_FINISH;
+                    wait_counter <= 16'd0;
 `ifdef SIMULATION
-                        $display("EGRET_BEH: Host deasserted TIP after all bytes sent");
+                    $display("EGRET_BEH: Host deasserted TIP (sent %0d/%0d)", send_count, send_length);
+`endif
+                end else if (via_byteack_in != byteack_prev) begin
+                    // Host toggled TACK — acknowledged byte, send next
+                    if (send_count < send_length) begin
+                        // More real bytes to send
+                        state        <= ST_SEND_CLOCK;
+                        clk_div      <= 6'd0;
+                        bit_count    <= 4'd0;
+                        sample_phase <= 1'b0;
+                        shift_data   <= send_buf[send_count];
+                        cuda_cb2     <= send_buf[send_count][7];
+                        cuda_cb2_oe  <= 1'b1;
+`ifdef SIMULATION
+                        $display("EGRET_BEH: Sending byte[%0d] = 0x%02x (after TACK)", send_count, send_buf[send_count]);
 `endif
                     end else begin
-                        // Keep clocking dummy CB1 edges so host gets IFR[2]
-                        // and can read ORB to see TREQ=0
+                        // All real bytes sent — NOW deassert TREQ, then clock dummy.
+                        // Host handler for dummy reads ORB, sees TREQ=0, deasserts TIP.
+                        treq_reg     <= 1'b0;
                         state        <= ST_SEND_CLOCK;
                         clk_div      <= 6'd0;
                         bit_count    <= 4'd0;
@@ -697,39 +733,17 @@ module egret_behavioral (
                         shift_data   <= 8'h00;
                         cuda_cb2     <= 1'b0;
                         cuda_cb2_oe  <= 1'b1;
+`ifdef SIMULATION
+                        $display("EGRET_BEH: TACK after last byte, deassert TREQ + clocking dummy");
+`endif
                     end
-                end else begin
-                    // More bytes to send — wait for host to read SR (triggers next exchange)
+                end else if (wait_counter >= 16'd50000) begin
+                    // Timeout — host never toggled TACK
+                    treq_reg <= 1'b0;
+                    state <= ST_IDLE;
 `ifdef SIMULATION
-                    if (wait_counter == 16'd1)
-                        $display("EGRET_BEH: SEND_DONE waiting for SR read (sent %0d/%0d) tip=%b",
-                                 send_count, send_length, tip);
+                    $display("EGRET_BEH: SEND_DONE timeout waiting for TACK");
 `endif
-                    if (via_sr_read && !sr_read_prev) begin
-                        // Host read SR, prepare next byte
-                        state       <= ST_SEND_CLOCK;
-                        clk_div     <= 6'd0;
-                        bit_count   <= 4'd0;
-                        sample_phase <= 1'b0;
-                        shift_data  <= send_buf[send_count];
-                        cuda_cb2    <= send_buf[send_count][7];
-                        cuda_cb2_oe <= 1'b1;
-`ifdef SIMULATION
-                        $display("EGRET_BEH: Sending byte[%0d] = 0x%02x", send_count, send_buf[send_count]);
-`endif
-                    end else if (!tip) begin
-                        // Host aborted — deassert TREQ and finish
-                        treq_reg <= 1'b0;
-                        state    <= ST_FINISH;
-                        wait_counter <= 16'd0;
-`ifdef SIMULATION
-                        $display("EGRET_BEH: Host deasserted TIP mid-send (sent %0d/%0d)", send_count, send_length);
-`endif
-                    end else if (wait_counter >= 16'd50000) begin
-                        treq_reg <= 1'b0;
-                        state    <= ST_FINISH;
-                        wait_counter <= 16'd0;
-                    end
                 end
             end
 

@@ -460,7 +460,7 @@ module dataController_top(
 					if (_cpuRW) begin
 						via_sr_read <= 1'b1;
 `ifdef SIMULATION
-						$display("VIA: SR READ - CPU reading shift register");
+						$display("VIA: SR READ = 0x%02x", viaDataOut[15:8]);
 `endif
 					end else begin
 						via_sr_write <= 1'b1;

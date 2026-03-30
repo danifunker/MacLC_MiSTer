@@ -682,7 +682,6 @@ module via6522 (
     reg [2:0]  bit_cnt = 3'd0;
     reg        shift_pulse;
     reg        shift_active_prev_rising = 1'b0;  // For detecting shift completion
-    reg        missed_ext_edge = 1'b0;           // CB1 edge happened while shift_active=0
 
     always @(*) begin
         case (shift_clk_sel)
@@ -817,6 +816,9 @@ module via6522 (
                 // Per 6522 datasheet: "shift register counter is disabled" in mode 3
                 if ((ext_clock_mode && ext_edge_pending == 1'b1) ||
                     (shift_clk_sel != 2'b11 && shift_tick_r == 1'b1)) begin
+`ifdef SIMULATION
+                    $display("VIA: shift-in cb2_i=%b SR_before=0x%02x bit_cnt=%0d", cb2_i, shift_reg, bit_cnt);
+`endif
                     `ifdef VERBOSE_TRACE
                     $display("VIA: SR shift IN - CB2=%b (cb2_i=%b), SR 0x%02x -> 0x%02x, mode=%d, ext_clk=%b",
                              ser_cb2_c, cb2_i, shift_reg, {shift_reg[6:0], cb2_i}, shift_mode_control, (ext_clock_mode));
@@ -847,28 +849,23 @@ module via6522 (
                          trigger_serial, shift_active, shift_mode_control, wen, ren);
             end
 `endif
-            // In external clock mode, track CB1 edges that happen while shift_active=0
-            // so we can account for them when the SR is later triggered
-            if (ext_clock_mode && shift_active == 1'b0 && shift_pulse == 1'b1) begin
-                missed_ext_edge <= 1'b1;
-            end
-
             if (shift_active == 1'b0 && shift_mode_control != 3'b000) begin
                 if (trigger_serial == 1'b1) begin
-                    // In external clock mode, if a CB1 rising edge happened while shift_active
-                    // was 0 (either now via shift_pulse, or earlier via missed_ext_edge),
-                    // that edge would be "lost". Account for it by starting at 6 instead of 7.
-                    if (ext_clock_mode && (shift_pulse == 1'b1 || missed_ext_edge == 1'b1)) begin
+                    // In external clock mode, if a CB1 rising edge happens on the SAME
+                    // falling phase as the trigger, that edge is already consumed by the
+                    // shift-in/out path. Account for it by starting at 6 instead of 7.
+                    // Note: we do NOT accumulate missed_ext_edge across idle periods,
+                    // because dummy CB1 edges (e.g. SEND_NOTIFY) would falsely trigger it.
+                    if (ext_clock_mode && shift_pulse == 1'b1) begin
                         bit_cnt <= 3'd6;
-                        missed_ext_edge <= 1'b0;  // Clear the flag
-                        `ifdef VERBOSE_TRACE
-                        $display("VIA: SR triggered + missed_edge - mode=%d, dir=%b, start_cnt=6",
+                        `ifdef SIMULATION
+                        $display("VIA: SR triggered + simultaneous_edge - mode=%d, dir=%b, start_cnt=6",
                                  shift_mode_control, shift_dir);
                         `endif
                     end else begin
                         bit_cnt <= 3'd7;
-                        `ifdef VERBOSE_TRACE
-                        $display("VIA: SR triggered - mode=%d, dir=%b, ext_clk=%b",
+                        `ifdef SIMULATION
+                        $display("VIA: SR triggered - mode=%d, dir=%b, ext_clk=%b, start_cnt=7",
                                  shift_mode_control, shift_dir, (ext_clock_mode));
                         `endif
                     end
@@ -891,7 +888,6 @@ module via6522 (
                 end else if (shift_pulse == 1'b1 && (ext_clock_mode || shift_clock == 1'b1)) begin
                     if (bit_cnt == 3'd0) begin
                         shift_active <= 1'b0;
-                        missed_ext_edge <= 1'b0;  // Clear so post-completion edges don't affect next transfer
 `ifdef SIMULATION
                         $display("VIA_SR[%0t]: COMPLETE SR=0x%02x dir=%b", $time, shift_reg, shift_dir);
 `endif
@@ -915,7 +911,6 @@ module via6522 (
             shift_active <= 1'b0;
             shift_active_prev_rising <= 1'b0;
             bit_cnt <= 3'd0;
-            missed_ext_edge <= 1'b0;
         end
     end
 
