@@ -862,11 +862,11 @@ module dataController_top(
 		.we(!_cpuRW),  // Mac LC: SCC is on upper byte (even addr/UDS), not LDS like Mac Plus
 //		.we(!_cpuLDS),
 		.rs(cpuAddrRegLo),
-		.wdata(cpuDataIn[7:0]),
+		.wdata(cpuDataIn[7:0]),  // TG68K puts byte data on lower bus; FX68K needs [15:8]
 		.rdata(sccDataOut),
 		._irq(_sccIrq),
-		.dcd_a(mouseX1),
-		.dcd_b(mouseY1),
+		.dcd_a(1'b1),  // Mac LC uses ADB for mouse, not SCC DCD
+		.dcd_b(1'b1),
 		.wreq(sccWReq),
 		.txd(serialOut),
 		.rxd(serialIn),

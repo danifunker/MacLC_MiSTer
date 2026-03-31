@@ -6,8 +6,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a Macintosh LC emulation core for the MiSTer FPGA platform. It's based on the MacPlus core by Sorgelig, which originated from the Plus Too project. The core emulates the Motorola 68000 CPU and various Macintosh peripherals.
 
-**Current development focus:** The `change-to-verilog-cpu` branch is converting from TG68K (VHDL-based) to FX68K (pure Verilog) CPU implementation.
-
 ## Build Commands
 
 ### FPGA Build (Quartus)
@@ -62,9 +60,8 @@ Exit codes: 0=PASS, 1=FAIL, 2=missing log. Suitable for pre-commit hooks.
 
 ### RTL Structure (`/rtl`)
 
-**CPU Cores:**
-- `fx68k/` - Cycle-accurate Motorola 68000 in Verilog (active)
-- `tg68k/` - TG68K CPU core (being phased out)
+**CPU Core:**
+- `tg68k/` - TG68K CPU core (68000)
 
 **Memory & Storage:**
 - `sdram.v` - SDRAM controller
@@ -145,4 +142,4 @@ These were attempted for FPGA timing improvement but cause the 4th Egret SR tran
 - Floppy disks are read-only
 - SCSI writes work but are experimental
 - Floppy won't read at 16 MHz CPU speed
-- Bus retry via HALT signal not implemented on FX68K
+- Bus retry via HALT signal not implemented

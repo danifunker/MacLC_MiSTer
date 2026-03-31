@@ -7,7 +7,6 @@ V_INC = +incdir+$(RTL)
 
 V_DEFINE = +define+debug=1 +define+SIMULATION=1 +define+USE_EGRET_CPU=1  -CFLAGS "-I../sim/imgui -I../sim/vinc -I../sim/ -g "  --timescale-override 1ps/1ps -Wno-TIMESCALEMOD \
 	-I$(RTL) \
-	-I$(RTL)/fx68k \
 	-I$(RTL)/tg68k \
 	-I$(RTL)/uart \
 	-I$(RTL)/egret \
@@ -58,7 +57,6 @@ V_OPT =  --x-assign fast --x-initial fast --noassert
 CC_OPT =
 
 # MacLC RTL source files
-# Note: FX68K removed due to Verilator compatibility issues (mixed blocking/non-blocking assignments)
 V_SRC = \
 	sim.v \
 	sim_ram.v \

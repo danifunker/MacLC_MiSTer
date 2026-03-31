@@ -664,7 +664,7 @@ module emu
 	// Serial Ports
 	wire serialOut;
 	wire serialIn;
-	wire serialCTS;
+	wire serialCTS = 1'b1; // Idle/deasserted when no serial device connected
 	wire serialRTS;
 
 	// V8 Video system wires

@@ -48,7 +48,7 @@ The `sim_ram` module provides 8MB of unified memory:
 
 For simulation, the following settings are fixed:
 - Machine mode: LC (not Plus)
-- CPU: 68000 (FX68K)
+- CPU: 68000 (TG68K)
 - RAM: 4MB
 - Video mode: 4bpp
 - Monitor: 13" RGB (512x384)
@@ -113,7 +113,7 @@ The simulation uses 16-bit data paths to match the MacLC hardware:
 ## RTL Files Included
 
 From `files.qip`:
-- CPU: fx68k/*.sv, tg68k/*.v
+- CPU: tg68k/*.v
 - Memory: addrController_top.v, addrDecoder.v, dataController_top.sv
 - Video: maclc_v8_video.sv, ariel_ramdac.sv, videoTimer.v, videoShifter.v
 - I/O: via6522.sv, pseudovia.sv, adb.sv, ps2_kbd.sv, ps2_mouse.v
