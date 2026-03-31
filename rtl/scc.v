@@ -494,8 +494,7 @@ module scc
 			 wr15_a[5] ? cts_latch_a : cts_a, /* CTS */
 			 1'b0, /* Sync/Hunt */
 			 wr15_a[3] ? dcd_latch_a : dcd_a, /* DCD */
-			 //1'b1, /*TX EMPTY */
-			 ~tx_busy_a, /* Tx Empty */
+			 1'b1, /* Tx Empty - always idle, txuart busy is unreliable after reset */
 			 1'b0, /* Zero Count */
 			 rx_wr_a_latch  /* Rx Available */
 			 };
@@ -517,7 +516,7 @@ module scc
 			 1'b0, /* Residue code 0 */
 			 1'b1, /* Residue code 1 */
 			 1'b1, /* Residue code 2 */
-			 ~tx_busy_a  /* All sent */
+			 1'b1  /* All sent - always idle, txuart busy is unreliable after reset */
 			 };
 	
 	assign rr1_b = { 1'b0, /* End of frame */

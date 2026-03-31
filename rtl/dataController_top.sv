@@ -291,6 +291,7 @@ module dataController_top(
                         selectUnmapped ? 16'h0000 :
                         (cpuBusControl && memoryLatch) ? memoryDataIn : cpu_data;
 
+
     always @(posedge clk32) begin
         if (cpuBusControl && memoryLatch) begin
             if (selectVIA) begin
@@ -858,8 +859,8 @@ module dataController_top(
 		.reset_hw(~_cpuReset),
 		.cs(selectSCC && (_cpuLDS == 1'b0 || _cpuUDS == 1'b0)),
 //		.cs(selectSCC && (_cpuLDS == 1'b0 || _cpuUDS == 1'b0) && cpuBusControl),
-//		.we(!_cpuRW),
-		.we(!_cpuLDS),
+		.we(!_cpuRW),  // Mac LC: SCC is on upper byte (even addr/UDS), not LDS like Mac Plus
+//		.we(!_cpuLDS),
 		.rs(cpuAddrRegLo), 
 		.wdata(cpuDataIn[15:8]),
 		.rdata(sccDataOut),
