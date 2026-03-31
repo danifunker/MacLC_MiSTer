@@ -153,15 +153,18 @@ module scc
 	reg rx_wr_a_latch;
 	reg rx_first_a=1;
 	always@(posedge clk /*or posedge reset*/) begin
-	
-		if (rx_wr_a) begin
+
+		if (rx_wr_a && wr3_a[0]) begin  // Only latch Rx when receiver is enabled
 			rx_wr_a_latch<=1;
 		end
-	
-	
+		if (!wr3_a[0]) begin  // Clear Rx latch when receiver is disabled
+			rx_wr_a_latch<=0;
+		end
+
+
 		wr_data_a<=0;
 		wr_data_b<=0;
-		if (reset) begin
+		if (reset || reset_a) begin  // Channel A reset also clears Rx latch
 		  rindex_latch <= 0;
 			//data_a <= 0;
 			tx_data_a<=0;

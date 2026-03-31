@@ -177,9 +177,9 @@ module emu
 	wire [7:0] configRAMSize = 8'h24; // 2MB: no SIMM, 2MB board only
 	wire [7:0] pvia_ram_config_out;   // Active RAM config from pseudovia
 
-	// Serial Ports (loopback for sim)
+	// Serial Ports - force idle high to prevent SCC Rx false data (matches MacLC.sv)
 	wire serialOut;
-	wire serialIn = serialOut;
+	wire serialIn = 1'b1;
 	wire serialCTS = 1'b1;
 	wire serialRTS;
 
@@ -370,6 +370,7 @@ module emu
 		else if (prev_as_n && !tg68_as_n && tg68_busstate != 2'b00)
 			last_data_addr <= tg68_a;
 	end
+
 
 	assign debug_pc = last_fetch_pc;
 	assign debug_opcode = last_fetch_opcode;

@@ -275,8 +275,8 @@ module dataController_top(
 
 	// CPU-side data output mux
     wire [15:0] viaDataOut_full = viaDataOut;
-    wire [15:0] sccDataOut_full = { sccDataOut, 8'hEF };
-    wire [15:0] scsiDataOut_full = { scsiDataOut, 8'hEF };
+    wire [15:0] sccDataOut_full = { sccDataOut, sccDataOut };
+    wire [15:0] scsiDataOut_full = { scsiDataOut, scsiDataOut };
     wire [15:0] arielDataOut_full = {ariel_data_in, ariel_data_in};
     wire [15:0] pviaDataOut_full = {pseudovia_data_in, pseudovia_data_in};
     wire [15:0] ascDataOut_full = {asc_data_in, asc_data_in};
@@ -337,7 +337,7 @@ module dataController_top(
 		.ior(!_cpuUDS),
 		.iow(!_cpuLDS),
 		.dack(cpuAddrRegHi[0]),   // A9
-		.wdata(cpuDataIn[15:8]),
+		.wdata(cpuDataIn[7:0]),
 		.rdata(scsiDataOut),
 
 		// connections to io controller
@@ -861,8 +861,8 @@ module dataController_top(
 //		.cs(selectSCC && (_cpuLDS == 1'b0 || _cpuUDS == 1'b0) && cpuBusControl),
 		.we(!_cpuRW),  // Mac LC: SCC is on upper byte (even addr/UDS), not LDS like Mac Plus
 //		.we(!_cpuLDS),
-		.rs(cpuAddrRegLo), 
-		.wdata(cpuDataIn[15:8]),
+		.rs(cpuAddrRegLo),
+		.wdata(cpuDataIn[7:0]),
 		.rdata(sccDataOut),
 		._irq(_sccIrq),
 		.dcd_a(mouseX1),
