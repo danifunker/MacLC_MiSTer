@@ -29,7 +29,6 @@ module dataController_top(
 	input selectSCC,
 	input selectIWM,
 	input selectVIA,
-	input selectSEOverlay,
 	input _cpuVMA,
 	
 	input selectASC,
@@ -67,19 +66,15 @@ module dataController_top(
 	input [32:0] timestamp,
 
 	// video:
-	output pixelOut,	
 	input _hblank,
 	input _vblank,
-	input loadPixels,
 	output vid_alt,
 
 	// audio
 	output [10:0] audioOut,  // 8 bit audio + 3 bit volume
-	output snd_alt,
 	input loadSound,
 	
 	// misc
-	output memoryOverlayOn,
 	input [1:0] insertDisk,
 	input [1:0] diskSides,
 	output [1:0] diskEject,
@@ -101,7 +96,27 @@ module dataController_top(
 	input             [7:0] sd_buff_addr,
 	input            [15:0] sd_buff_dout,
 	output           [15:0] sd_buff_din[SCSI_DEVS],
-	input                   sd_buff_wr
+	input                   sd_buff_wr,
+
+	// VIA SR debug outputs for on-screen indicator
+	output [2:0]  via_sr_dbg_bit_cnt,
+	output        via_sr_dbg_edge_pending,
+	output        via_sr_dbg_fall_pending,
+	output [7:0]  via_sr_dbg_shift_reg,
+	output        via_sr_dbg_active,
+	output        via_sr_dbg_dir,
+	output        via_sr_dbg_cb1,
+	output        via_sr_dbg_cb2,
+
+	// Egret debug outputs for on-screen indicator
+	output        egret_dbg_running,       // HC05 not in reset
+	output        egret_dbg_port_test_done,
+	output        egret_dbg_handshake_done,
+	output        egret_dbg_treq,          // TREQ asserted
+	output        egret_dbg_tip,           // TIP from VIA (synced in Egret)
+	output        egret_dbg_byteack,       // BYTEACK from VIA (synced in Egret)
+	output        egret_dbg_reset_680x0,   // Egret holding 68K in reset
+	output        egret_dbg_cpu_reset_out  // Final _cpuReset signal
 );
 	
 	parameter SCSI_DEVS = 2;
@@ -260,8 +275,8 @@ module dataController_top(
 
 	// CPU-side data output mux
     wire [15:0] viaDataOut_full = viaDataOut;
-    wire [15:0] sccDataOut_full = { sccDataOut, 8'hEF };
-    wire [15:0] scsiDataOut_full = { scsiDataOut, 8'hEF };
+    wire [15:0] sccDataOut_full = { sccDataOut, sccDataOut };
+    wire [15:0] scsiDataOut_full = { scsiDataOut, scsiDataOut };
     wire [15:0] arielDataOut_full = {ariel_data_in, ariel_data_in};
     wire [15:0] pviaDataOut_full = {pseudovia_data_in, pseudovia_data_in};
     wire [15:0] ascDataOut_full = {asc_data_in, asc_data_in};
@@ -275,6 +290,7 @@ module dataController_top(
                         selectASC ? ascDataOut_full :
                         selectUnmapped ? 16'h0000 :
                         (cpuBusControl && memoryLatch) ? memoryDataIn : cpu_data;
+
 
     always @(posedge clk32) begin
         if (cpuBusControl && memoryLatch) begin
@@ -321,7 +337,7 @@ module dataController_top(
 		.ior(!_cpuUDS),
 		.iow(!_cpuLDS),
 		.dack(cpuAddrRegHi[0]),   // A9
-		.wdata(cpuDataIn[15:8]),
+		.wdata(cpuDataIn[7:0]),
 		.rdata(scsiDataOut),
 
 		// connections to io controller
@@ -350,24 +366,14 @@ module dataController_top(
 				end
 				else begin
 					vblankCount <= 6'h0;
+					`ifdef VERBOSE_TRACE
 					$display("DC: ONE SECOND TICK @%0t", $time);
+					`endif
 				end
 			end
 		end
 	end
 	wire onesec = vblankCount == 59;
-
-	// Mac SE ROM overlay switch
-	reg  SEOverlay;
-	always @(posedge clk32) begin
-		if (!_cpuReset) begin
-			if (SEOverlay == 0) $display("DC: SEOverlay RESET to 1 @%0t", $time);
-			SEOverlay <= 1;
-		end else if (selectSEOverlay) begin
-			if (SEOverlay == 1) $display("DC: SEOverlay CLEARED to 0 @%0t", $time);
-			SEOverlay <= 0;
-		end
-	end
 
 	// VIA
 	wire [2:0] snd_vol;
@@ -388,9 +394,7 @@ module dataController_top(
 	assign via_pa_i = 8'h55;
 	// Sound volume still comes from PA[2:0] output latch
 	assign snd_vol = ~via_pa_oe[2:0] | via_pa_o[2:0];
-	assign snd_alt = 1'b0;  // LC doesn't use alternate sound buffer
 	assign driveSel = ~via_pa_oe[4] | via_pa_o[4];  // Drive select from VIA PA4
-	assign memoryOverlayOn = SEOverlay;  // LC uses hardware overlay control
 	assign SEL = ~via_pa_oe[5] | via_pa_o[5];
 	assign vid_alt = ~via_pa_oe[6] | via_pa_o[6];
 
@@ -457,7 +461,7 @@ module dataController_top(
 					if (_cpuRW) begin
 						via_sr_read <= 1'b1;
 `ifdef SIMULATION
-						$display("VIA: SR READ - CPU reading shift register");
+						$display("VIA: SR READ = 0x%02x", viaDataOut[15:8]);
 `endif
 					end else begin
 						via_sr_write <= 1'b1;
@@ -474,11 +478,10 @@ module dataController_top(
 	wire via_cb1_in = cuda_cb1;
 
 	// Debug: track CB2 signal for VIA shift register
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
 	reg cuda_cb1_prev;
 	always @(posedge clk32) begin
 		cuda_cb1_prev <= cuda_cb1;
-		// Print when CB1 rises (when VIA will shift)
 		if (cuda_cb1 && !cuda_cb1_prev) begin
 			$display("DC: CB1 RISE - cuda_cb2_oe=%b, cuda_cb2=%b, final_cb2_i=%b",
 			         cuda_cb2_oe, cuda_cb2, (cuda_cb2_oe ? cuda_cb2 : 1'b1));
@@ -489,32 +492,32 @@ module dataController_top(
 	// Debug: Monitor Port B and CUDA signals
 	/* verilator lint_off STMTDLY */
 `ifdef SIMULATION
-	reg [7:0] via_pb_oe_prev = 8'h00;
-	reg cuda_treq_prev = 1'b0;
-	reg [7:0] treq_log_counter = 8'd0;
+	reg [7:0] via_pb_oe_prev_sim = 8'h00;
 	always @(posedge clk32) begin
-		// Log cuda_treq periodically during startup (disabled for faster sim)
-		// if (treq_log_counter < 8'd50 && clk8_en_p) begin
-		// 	treq_log_counter <= treq_log_counter + 1'd1;
-		// 	$display("CUDA DEBUG: treq=%b, treq_prev=%b, pb3_open_drain=%b, via_pb_i=0x%02x",
-		// 		cuda_treq, cuda_treq_prev, pb3_open_drain, via_pb_i);
-		// end
-		// Log when DDRB (via_pb_oe) changes
-		if (via_pb_oe !== via_pb_oe_prev) begin
+		if (via_pb_oe !== via_pb_oe_prev_sim) begin
 			$display("VIA: DDRB changed: 0x%02x -> 0x%02x (PB3=%b=%s, PB4=%b=%s, PB5=%b=%s)",
-				via_pb_oe_prev, via_pb_oe,
+				via_pb_oe_prev_sim, via_pb_oe,
 				via_pb_oe[3], via_pb_oe[3] ? "OUT" : "IN",
 				via_pb_oe[4], via_pb_oe[4] ? "OUT" : "IN",
 				via_pb_oe[5], via_pb_oe[5] ? "OUT" : "IN");
+			via_pb_oe_prev_sim <= via_pb_oe;
+		end
+	end
+`endif
+`ifdef VERBOSE_TRACE
+	reg [7:0] via_pb_oe_prev = 8'h00;
+	reg cuda_treq_prev = 1'b0;
+	always @(posedge clk32) begin
+		if (via_pb_oe !== via_pb_oe_prev) begin
+			$display("VIA_VERBOSE: DDRB changed: 0x%02x -> 0x%02x",
+				via_pb_oe_prev, via_pb_oe);
 			via_pb_oe_prev <= via_pb_oe;
 		end
-		// Log when CUDA TREQ changes
 		if (cuda_treq !== cuda_treq_prev) begin
 			$display("VIA: cuda_treq changed: %b -> %b, via_pb_external=0x%02x, via_pb_i=0x%02x",
 				cuda_treq_prev, cuda_treq, via_pb_external, via_pb_i);
 			cuda_treq_prev <= cuda_treq;
 		end
-		// PortB READ logging disabled - too verbose during polling
 	end
 `endif
 	/* verilator lint_on STMTDLY */
@@ -573,8 +576,33 @@ module dataController_top(
 		// Shift register status for CUDA
 		.sr_out_active (via_sr_active),
 		.sr_out_dir    (via_sr_dir),
-		.sr_ext_clk    (via_sr_ext_clk)
+		.sr_ext_clk    (via_sr_ext_clk),
+
+		// Debug outputs for FPGA SR diagnostics
+		.sr_dbg_bit_cnt     (via_sr_dbg_bit_cnt),
+		.sr_dbg_edge_pending(via_sr_dbg_edge_pending),
+		.sr_dbg_fall_pending(via_sr_dbg_fall_pending),
+		.sr_dbg_shift_reg   (via_sr_dbg_shift_reg)
 	);
+
+	assign via_sr_dbg_active = via_sr_active;
+	assign via_sr_dbg_dir    = via_sr_dir;
+	assign via_sr_dbg_cb1    = cuda_cb1;
+	assign via_sr_dbg_cb2    = cuda_cb2_oe ? cuda_cb2 : cb2_o;
+
+`ifdef USE_EGRET_CPU
+	assign egret_dbg_reset_680x0  = egret_reset_680x0;
+	assign egret_dbg_cpu_reset_out = _cpuReset;
+`else
+	assign egret_dbg_running       = 1'b0;
+	assign egret_dbg_port_test_done = 1'b0;
+	assign egret_dbg_handshake_done = 1'b0;
+	assign egret_dbg_treq          = 1'b0;
+	assign egret_dbg_tip           = 1'b0;
+	assign egret_dbg_byteack       = 1'b0;
+	assign egret_dbg_reset_680x0   = 1'b0;
+	assign egret_dbg_cpu_reset_out = _cpuReset;
+`endif
 
 	// Egret/CUDA controller for Mac LC - handles PRAM, RTC, and ADB
 	// Mac LC uses Egret (not CUDA) with V8 chip:
@@ -589,19 +617,30 @@ module dataController_top(
 	// The 68020 code frequently changes DDRB to read Port B (check TREQ),
 	// which temporarily makes PB5 an input. Without latching, this causes
 	// TIP to toggle HIGH (external pull-up), interrupting communication.
+	//
+	// POLARITY: Mac LC Egret — PB5 passed directly (no inversion).
+	// MAME: m_v8->pb5_callback().set(m_egret, FUNC(egret_device::set_sys_session))
+	// PB5=1 → TIP active (session), PB5=0 → TIP idle
 	reg via_tip_latched;
 	always @(posedge clk32) begin
 		if (!_cpuReset) begin
-			// Mac LC: TIP is idle (high) at reset
-			via_tip_latched <= 1'b1; 
+			// Reset: TIP idle (0 = no session)
+			via_tip_latched <= 1'b0;
 		end else if (clk8_en_p && via_pb_oe[5]) begin
-			// Only update TIP when VIA is driving PB5 as output
+`ifdef SIMULATION
+			if (via_tip_latched != via_pb_o[5])
+				$display("TIP_LATCH: %b -> %b (pb_o=0x%02x pb_oe=0x%02x)",
+					via_tip_latched, via_pb_o[5], via_pb_o, via_pb_oe);
+`endif
+			// Pass PB5 directly to Egret as sys_session (no inversion)
+			// MAME: m_v8->pb5_callback().set(m_egret, FUNC(egret_device::set_sys_session))
+			// Host PB5=1 (TIP asserted) → Egret bit 3=1, PB5=0 (idle) → bit 3=0
 			via_tip_latched <= via_pb_o[5];
 		end
 	end
 
 `ifdef USE_EGRET_CPU
-	egret_wrapper egret_inst(
+	egret_behavioral egret_inst(
 		.clk            (clk32),
 		.clk8_en        (clk8_en_p),
 		.reset          (egretReset),  // Egret uses shorter reset than 68000
@@ -612,8 +651,9 @@ module dataController_top(
 		// VIA Port B connections (Mac LC V8 protocol)
 		// TIP: Latch the value when VIA drives PB5 as output
 		// This prevents TIP from toggling when VIA temporarily makes PB5 an input to read Port B
+		// Polarity already inverted in via_tip_latched (Mac LC: PB5 HIGH = TIP asserted)
 		.via_tip        (via_tip_latched),  // TIP from VIA (PB5 = SYS_SESSION)
-		.via_byteack_in (via_pb_o[4]),     // BYTEACK from VIA (PB4 = VIA_FULL) - direct
+		.via_byteack_in (via_pb_o[4]),     // BYTEACK from VIA - direct (no inversion, matches MAME)
 		.cuda_treq      (cuda_treq),       // TREQ to VIA (PB3 = XCVR_SESSION)
 		.cuda_byteack   (cuda_byteack),    // Not used in Egret
 
@@ -640,7 +680,18 @@ module dataController_top(
 
 		// System control - Egret controls 68000 reset via Port C bit 3
 		.reset_680x0    (egret_reset_680x0),
-		.nmi_680x0      ()
+		.nmi_680x0      (),
+
+		// Debug outputs
+		.dbg_cen            (),
+		.dbg_port_test_done (egret_dbg_port_test_done),
+		.dbg_handshake_done (egret_dbg_handshake_done),
+		.dbg_treq           (egret_dbg_treq),
+		.dbg_tip_in         (egret_dbg_tip),
+		.dbg_byteack_in     (egret_dbg_byteack),
+		.dbg_pb_out         (),
+		.dbg_pc_out         (),
+		.dbg_cpu_running    (egret_dbg_running)
 	);
 `else
 	cuda_maclc cuda(
@@ -653,8 +704,9 @@ module dataController_top(
 
 		// VIA Port B connections (Mac LC V8 protocol)
 		// TIP: Use latched value to prevent toggling when VIA reads Port B
+		// Polarity already inverted in via_tip_latched (Mac LC: PB5 HIGH = TIP asserted)
 		.via_tip        (via_tip_latched),  // TIP from VIA (PB5 = SYS_SESSION)
-		.via_byteack_in (via_pb_o[4]),     // BYTEACK from VIA (PB4 = VIA_FULL) - direct
+		.via_byteack_in (via_pb_o[4]),     // BYTEACK from VIA - direct (no inversion, matches MAME)
 		.cuda_treq      (cuda_treq),       // TREQ to VIA (PB3 = XCVR_SESSION)
 		.cuda_byteack   (cuda_byteack),    // Not used in V8 protocol
 
@@ -807,10 +859,10 @@ module dataController_top(
 		.reset_hw(~_cpuReset),
 		.cs(selectSCC && (_cpuLDS == 1'b0 || _cpuUDS == 1'b0)),
 //		.cs(selectSCC && (_cpuLDS == 1'b0 || _cpuUDS == 1'b0) && cpuBusControl),
-//		.we(!_cpuRW),
-		.we(!_cpuLDS),
-		.rs(cpuAddrRegLo), 
-		.wdata(cpuDataIn[15:8]),
+		.we(!_cpuRW),  // Mac LC: SCC is on upper byte (even addr/UDS), not LDS like Mac Plus
+//		.we(!_cpuLDS),
+		.rs(cpuAddrRegLo),
+		.wdata(cpuDataIn[7:0]),
 		.rdata(sccDataOut),
 		._irq(_sccIrq),
 		.dcd_a(mouseX1),
@@ -822,13 +874,6 @@ module dataController_top(
 		.rts(serialRTS)
 		);
 				
-	// Video
-	videoShifter vs(
-		.clk32(clk32), 
-		.memoryLatch(memoryLatch),
-		.dataIn(memoryDataIn),
-		.loadPixels(loadPixels), 
-		.pixelOut(pixelOut));
 	
 	// Mouse
 	ps2_mouse mouse(

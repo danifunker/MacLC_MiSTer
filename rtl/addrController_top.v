@@ -8,10 +8,10 @@ module addrController_top(
 	output clk16_en_n,
 
 	// system config:
-	input turbo,
 	input [7:0] ram_config,  // V8 RAM config byte from pseudovia
 
 	// 68000 CPU memory interface:
+	input _cpuReset,
 	input [23:0] cpuAddr,
 	input _cpuUDS,
 	input _cpuLDS,
@@ -38,7 +38,6 @@ module addrController_top(
 	output selectVIA,
 	output selectRAM,
 	output selectROM,
-	output selectSEOverlay,
 
 	// LC Peripherals
 	output selectAriel,
@@ -47,21 +46,15 @@ module addrController_top(
 	output selectUnmapped,
 
 	// video:
-	output hsync,
-	output vsync,
-	output _hblank,
-	output _vblank,
-	output loadPixels,
-	input  vid_alt,
 	input  [21:0] v8_video_addr,
 	input  v8_hblank,
 	input  v8_vblank,
 
-	input  snd_alt,
 	output loadSound,
 
 	// misc
-	input memoryOverlayOn,
+	output memoryOverlayOn,
+	output [23:0] overlay_trigger_addr,  // debug: address that caused overlay disable
 
 	// interface to read dsk image from ram
 	input [21:0] dskReadAddrInt,
@@ -88,12 +81,12 @@ module addrController_top(
 	reg vblankD, vblankD2;
 	always @(posedge clk) begin
 		if(clk8_en_p && sndReadAckD) begin
-			vblankD <= _vblank;
+			vblankD <= ~v8_vblank;
 			vblankD2 <= vblankD;
 
 			if(vblankD2 && !vblankD) begin
 				// Sound buffer in motherboard RAM (SDRAM word $000000-$0FFFFF)
-				audioAddr <= snd_alt ? 23'h07D080 : 23'h07FE80;
+				audioAddr <= 23'h07FE80;
 				snd_div <= 20'd0;
 			end else begin
 				if(snd_div >= SIZE-1) begin
@@ -242,6 +235,7 @@ module addrController_top(
 		._cpuAS(_cpuAS),
 		._cpuRW(_cpuRW),
 		.memoryOverlayOn(memoryOverlayOn),
+		.ram_config(ram_config),
 		.selectRAM(selectRAM),
 		.selectROM(selectROM),
 		.selectSCSI(selectSCSI),
@@ -249,7 +243,6 @@ module addrController_top(
 		.selectIWM(selectIWM),
 		.selectASC(selectASC),
 		.selectVIA(selectVIA),
-		.selectSEOverlay(selectSEOverlay),
 		.selectAriel(selectAriel),
 		.selectPseudoVIA(selectPseudoVIA),
 		.selectVRAM(selectVRAM),
@@ -257,20 +250,41 @@ module addrController_top(
 	);
 
 	// ============================================================
-	// Video timing (Mac Plus legacy - generates hsync/vsync/_hblank/_vblank)
+	// ROM Overlay Register
 	// ============================================================
-	wire [21:0] plus_video_addr;  // Not used, but videoTimer generates timing signals
+	// At reset, ROM is overlaid at $000000 so the CPU reads the reset
+	// vector from ROM.  The overlay is disabled when the CPU first
+	// accesses the ROM area ($A0xxxx).
+	//
+	// The disable is deferred until _cpuAS goes high (bus cycle ends),
+	// so the instruction/data read that triggered it completes with
+	// overlay still active.  The next bus cycle sees overlay OFF.
+	// ============================================================
+	reg rom_overlay = 1;
+	reg overlay_disable_pending = 0;
+	reg [23:0] overlay_trigger_addr_r = 0;
 
-	videoTimer vt(
-		.clk(clk),
-		.clk_en(clk8_en_p),
-		.busCycle(busCycle),
-		.vid_alt(vid_alt),
-		.videoAddr(plus_video_addr),
-		.hsync(hsync),
-		.vsync(vsync),
-		._hblank(_hblank),
-		._vblank(_vblank),
-		.loadPixels(loadPixels));
+	assign memoryOverlayOn = rom_overlay;
+	assign overlay_trigger_addr = overlay_trigger_addr_r;
+
+	wire overlay_trigger = !_cpuAS && (cpuAddr[23:20] == 4'hA);
+
+	always @(posedge clk) begin
+		if (!_cpuReset) begin
+			rom_overlay <= 1'b1;
+			overlay_disable_pending <= 1'b0;
+			overlay_trigger_addr_r <= 24'h0;
+		end else begin
+			if (overlay_trigger && rom_overlay) begin
+				overlay_disable_pending <= 1'b1;
+				overlay_trigger_addr_r <= cpuAddr;
+			end
+
+			if (overlay_disable_pending && _cpuAS) begin
+				rom_overlay <= 1'b0;
+				overlay_disable_pending <= 1'b0;
+			end
+		end
+	end
 
 endmodule

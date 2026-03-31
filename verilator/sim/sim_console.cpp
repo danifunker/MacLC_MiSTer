@@ -28,6 +28,12 @@ void DebugConsole::AddLog(const char* fmt, ...)
 	buf[IM_ARRAYSIZE(buf) - 1] = 0;
 	va_end(args);
 	Items.push_back(Strdup(buf));
+
+	// Keep only the last 100 entries to avoid memory/performance issues
+	while (Items.Size > 100) {
+		free(Items[0]);
+		Items.erase(Items.begin());
+	}
 }
 
 DebugConsole::DebugConsole()

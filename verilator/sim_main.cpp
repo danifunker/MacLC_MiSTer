@@ -75,9 +75,10 @@ bool cpu_trace_started = false;  // Wait for ROM load and reset
 FILE* cpu_trace_file = nullptr;
 const char* cpu_trace_filename = "cpu_trace.log";
 int cpu_trace_count = 0;
-const int cpu_trace_max = 5000000;  // Stop after this many instructions
+const int cpu_trace_max = 0;  // 0 = unlimited
 int post_download_delay = 0;  // Delay after ROM load before tracing
 uint32_t cpu_trace_last_pc = 0xFFFFFFFF;  // For edge detection (new instruction)
+int cpu_trace_last_frame = -1;  // Track frame transitions in trace log
 
 // RAM debug
 // ---------
@@ -89,7 +90,7 @@ const int ram_debug_max = 10000000;  // Stop after this many RAM accesses
 
 // Peripheral debug
 // ----------------
-bool periph_debug_enable = true;  // Disable for speed
+bool periph_debug_enable = false;  // Enable for peripheral access logging
 FILE* periph_debug_file = nullptr;
 const char* periph_debug_filename = "periph_debug.log";
 int periph_debug_count = 0;
@@ -220,20 +221,28 @@ int verilate() {
 				// Only log when PC changes (new instruction) to avoid duplicates
 				if (pc != cpu_trace_last_pc) {
 					cpu_trace_last_pc = pc;
+					cpu_trace_count++;
 
-					// Disassemble - for now just use single opcode word
+					int cur_frame = video.count_frame;
+					uint32_t dataAddr = VERTOPINTERN->debug_data_addr;
+
+					// Disassemble
 					unsigned short opwords[2] = { opcode, 0 };
 					const char* disasm = disassemble_68k_ext(pc, opwords, 2);
 
-					// Output to debug console
-					console.AddLog("%08X: %04X  %s", pc, opcode, disasm);
+					// Output to debug console (rolling 100-entry window in AddLog)
+					console.AddLog("[F%d] %08X: %04X  %s  @%06X", cur_frame, pc, opcode, disasm, dataAddr);
 
 					// Also write to trace file if open
 					if (cpu_trace_file) {
-						fprintf(cpu_trace_file, "%08X: %04X  %s\n", pc, opcode, disasm);
-						cpu_trace_count++;
-						if (cpu_trace_count >= cpu_trace_max) {
-							fprintf(stderr, "CPU trace limit reached (%d instructions)\n", cpu_trace_max);
+						// Print frame separator when frame changes
+						if (cur_frame != cpu_trace_last_frame) {
+							fprintf(cpu_trace_file, "--- frame %d ---\n", cur_frame);
+							cpu_trace_last_frame = cur_frame;
+						}
+						fprintf(cpu_trace_file, "[F%d] %08X: %04X  %s  @%06X\n", cur_frame, pc, opcode, disasm, dataAddr);
+						if (cpu_trace_max > 0 && cpu_trace_count >= cpu_trace_max) {
+							fprintf(stderr, "CPU trace limit reached (%d instructions)\n", cpu_trace_count);
 							fclose(cpu_trace_file);
 							cpu_trace_file = nullptr;
 						}
@@ -567,7 +576,7 @@ int main(int argc, char** argv, char** env) {
 	}
 
 	// Auto-load Mac LC ROM at startup
-	const char* rom_file = "../releases/boot1.rom";
+	const char* rom_file = "../releases/boot0.rom";
 	bus.QueueDownload(rom_file, 0, 1);  // index 0 for ROM
 	fprintf(stderr, "Machine type: Mac LC, loading ROM: %s\n", rom_file);
 

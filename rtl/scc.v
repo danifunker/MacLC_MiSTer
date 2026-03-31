@@ -4,7 +4,7 @@
  * Zilog 8530 SCC module for minimigmac.
  *
  * Located on high data bus, but writes are done at odd addresses as
- * LDS is used as WR signals or something like that on a Mac Plus.
+ * On the original Mac Plus, LDS was used as the WR signal.
  * 
  * We don't care here and just ignore which side was used.
  * 
@@ -153,15 +153,18 @@ module scc
 	reg rx_wr_a_latch;
 	reg rx_first_a=1;
 	always@(posedge clk /*or posedge reset*/) begin
-	
-		if (rx_wr_a) begin
+
+		if (rx_wr_a && wr3_a[0]) begin  // Only latch Rx when receiver is enabled
 			rx_wr_a_latch<=1;
 		end
-	
-	
+		if (!wr3_a[0]) begin  // Clear Rx latch when receiver is disabled
+			rx_wr_a_latch<=0;
+		end
+
+
 		wr_data_a<=0;
 		wr_data_b<=0;
-		if (reset) begin
+		if (reset || reset_a) begin  // Channel A reset also clears Rx latch
 		  rindex_latch <= 0;
 			//data_a <= 0;
 			tx_data_a<=0;
@@ -494,8 +497,7 @@ module scc
 			 wr15_a[5] ? cts_latch_a : cts_a, /* CTS */
 			 1'b0, /* Sync/Hunt */
 			 wr15_a[3] ? dcd_latch_a : dcd_a, /* DCD */
-			 //1'b1, /*TX EMPTY */
-			 ~tx_busy_a, /* Tx Empty */
+			 1'b1, /* Tx Empty - always idle, txuart busy is unreliable after reset */
 			 1'b0, /* Zero Count */
 			 rx_wr_a_latch  /* Rx Available */
 			 };
@@ -517,7 +519,7 @@ module scc
 			 1'b0, /* Residue code 0 */
 			 1'b1, /* Residue code 1 */
 			 1'b1, /* Residue code 2 */
-			 ~tx_busy_a  /* All sent */
+			 1'b1  /* All sent - always idle, txuart busy is unreliable after reset */
 			 };
 	
 	assign rr1_b = { 1'b0, /* End of frame */

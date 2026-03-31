@@ -16,6 +16,8 @@ V_DEFINE = +define+debug=1 +define+SIMULATION=1 +define+USE_EGRET_CPU=1  -CFLAGS
 V_DEFINE += -Wno-WIDTH -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-IMPLICIT -Wno-PINMISSING -Wno-UNUSEDSIGNAL -Wno-UNOPTFLAT -Wno-CASEINCOMPLETE -Wno-UNSIGNED -Wno-CMPCONST -Wno-LATCH -Wno-UNDRIVEN -Wno-MISINDENT -Wno-COMBDLY -Wno-INITIALDLY -Wno-SYNCASYNCNET
 #V_DEFINE += --threads 8  # this slows it way down
 V_DEFINE += --trace-fst
+# Uncomment to enable verbose per-instruction/per-cycle debug traces (HC05, TG68, VIA, PVIA, etc.)
+# V_DEFINE += +define+VERBOSE_TRACE=1
 V_DEFINE +=
 
 UNAME_S := $(shell uname -s)
@@ -67,8 +69,6 @@ V_SRC = \
 	$(RTL)/addrController_top.v \
 	$(RTL)/addrDecoder.v \
 	$(RTL)/dataController_top.sv \
-	$(RTL)/videoTimer.v \
-	$(RTL)/videoShifter.v \
 	$(RTL)/maclc_v8_video.sv \
 	$(RTL)/ariel_ramdac.sv \
 	$(RTL)/pseudovia.sv \
@@ -85,9 +85,7 @@ V_SRC = \
 	$(RTL)/scc.v \
 	$(RTL)/cuda_maclc.sv \
 	$(RTL)/pll/pll_0002.v \
-	$(RTL)/egret/egret_wrapper.sv \
-	$(RTL)/egret/m68hc05_alu.sv \
-	$(RTL)/egret/m68hc05_core.sv \
+	$(RTL)/egret_behavioral.sv \
 	$(RTL)/uart/txuart.v \
 	$(RTL)/uart/rxuart.v
 

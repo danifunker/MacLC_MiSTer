@@ -339,7 +339,7 @@ jt6805 u_cpu (
 // ============================================================================
 // Debug
 // ============================================================================
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
 reg [7:0] pb_out_prev, pb_latch_prev, pb_ddr_prev;
 reg [7:0] pa_out_prev;
 reg       via_tip_prev;
@@ -459,10 +459,12 @@ always @(posedge clk) begin
         status_timer <= 0;
     end else if (cen) begin
         status_timer <= status_timer + 1;
+        `ifdef VERBOSE_TRACE
         if (status_timer == 0) begin
             $display("EGRET STATUS: PC~%04x PB_out=%02x PB_ddr=%02x TREQ=%b TIP=%b CB1=%b CB2=%b",
                      last_pc, pb_out, pb_ddr, ~pb_out[1], via_tip, pb_out[4], pb_out[5]);
         end
+        `endif
     end
 end
 `endif

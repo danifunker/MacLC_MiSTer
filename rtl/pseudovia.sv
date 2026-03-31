@@ -70,8 +70,12 @@ wire irq_pending = |active_ifr;
 // Debug counter
 integer pvia_reg10_reads = 0;
 
-// Register decode: {addr[4], addr[1:0]} for native mode
+// Register decode: use full byte offset for native mode (matching MAME)
+// Valid native registers: 0x00-0x03 (Group 0), 0x10-0x13 (Group 1), 0x20-0x2F (MSC)
+// Only addr[4] and addr[1:0] select the register, but other bits must be zero
+wire [7:0] native_offset = addr[7:0];
 wire [2:0] reg_sel = {addr[4], addr[1:0]};
+wire native_reg_valid = (native_offset[7:5] == 3'b000) && (native_offset[3:2] == 2'b00);
 
 // VIA-compat mode uses addr[1:0] to alias Group 0
 wire is_native = (addr[12:8] == 5'b00000);
@@ -85,7 +89,7 @@ always @(posedge clk_sys) begin
         slot_ier <= 8'h00;
         ier <= 8'h00;
         irq_out <= 1'b0;
-        video_config <= 8'h02;  // Default to 4bpp mode
+        video_config <= 8'h03;  // Default to 8bpp mode
     end else begin
         // Update slot IRQ summary in IFR (bit 1 = any slot)
         if (any_slot_irq)
@@ -103,23 +107,29 @@ always @(posedge clk_sys) begin
         end
 
         if (req) begin
-            if (is_native) begin
+            if (is_native && native_reg_valid) begin
                 // Native mode: decode {addr[4], addr[1:0]}
                 if (we) begin
                     case (reg_sel)
                         3'b000: begin  // $00: Port B
                             port_b <= data_in;
+                            `ifdef VERBOSE_TRACE
                             $display("PVIA: WRITE Port B = %02x @%0t", data_in, $time);
+                            `endif
                         end
 
                         3'b001: begin  // $01: RAM Config (writable per MAME)
                             ram_cfg <= data_in;
+                            `ifdef VERBOSE_TRACE
                             $display("PVIA: WRITE RAM Config = %02x @%0t", data_in, $time);
+                            `endif
                         end
 
                         3'b010: begin  // $02: Slot Status
                             // Write 1 to bit 6 to clear VBlank flag
+                            `ifdef VERBOSE_TRACE
                             $display("PVIA: WRITE Slot Status = %02x @%0t", data_in, $time);
+                            `endif
                         end
 
                         3'b011: begin  // $03: IFR
@@ -127,13 +137,17 @@ always @(posedge clk_sys) begin
                                 ifr <= ifr | (data_in & 8'h7F);
                             else
                                 ifr <= ifr & ~(data_in & 8'h7F);
+                            `ifdef VERBOSE_TRACE
                             $display("PVIA: WRITE IFR = %02x @%0t", data_in, $time);
+                            `endif
                         end
 
                         3'b100: begin  // $10: Video Config
                             video_config <= data_in;
-                            $display("PVIA: WRITE Video Config = %02x (bpp mode = %d) @%0t",
-                                     data_in, data_in[2:0], $time);
+                            `ifdef VERBOSE_TRACE
+                            $display("PVIA: WRITE Video Config = %02x (bpp mode = %d) addr=%h @%0t",
+                                     data_in, data_in[2:0], addr, $time);
+                            `endif
                         end
 
                         3'b101: ;  // $11: unused
@@ -143,7 +157,9 @@ always @(posedge clk_sys) begin
                                 slot_ier <= slot_ier | (data_in & 8'h7F);
                             else
                                 slot_ier <= slot_ier & ~(data_in & 8'h7F);
+                            `ifdef VERBOSE_TRACE
                             $display("PVIA: WRITE Slot IER = %02x @%0t", data_in, $time);
+                            `endif
                         end
 
                         3'b111: begin  // $13: IER
@@ -154,7 +170,9 @@ always @(posedge clk_sys) begin
                             end else begin
                                 ier <= ier & ~(data_in & 8'h7F);
                             end
+                            `ifdef VERBOSE_TRACE
                             $display("PVIA: WRITE IER = %02x @%0t", data_in, $time);
+                            `endif
                         end
                     endcase
                 end else begin
@@ -162,29 +180,39 @@ always @(posedge clk_sys) begin
                     case (reg_sel)
                         3'b000: begin  // $00: Port B
                             data_out <= port_b;
+                            `ifdef VERBOSE_TRACE
                             $display("PVIA: READ Port B -> %02x @%0t", port_b, $time);
+                            `endif
                         end
 
                         3'b001: begin  // $01: RAM Config (OR bit 2 on read)
                             data_out <= ram_cfg | 8'h04;
+                            `ifdef VERBOSE_TRACE
                             $display("PVIA: READ RAM Config -> %02x @%0t", ram_cfg | 8'h04, $time);
+                            `endif
                         end
 
                         3'b010: begin  // $02: Slot Status
                             data_out <= slot_status;
+                            `ifdef VERBOSE_TRACE
                             $display("PVIA: READ Slot Status -> %02x @%0t", slot_status, $time);
+                            `endif
                         end
 
                         3'b011: begin  // $03: IFR
                             data_out <= ifr;
+                            `ifdef VERBOSE_TRACE
                             $display("PVIA: READ IFR -> %02x @%0t", ifr, $time);
+                            `endif
                         end
 
                         3'b100: begin  // $10: Video Config
                             data_out <= (video_config & 8'hC7) | ((monitor_id[2:0]) << 3);
                             pvia_reg10_reads <= pvia_reg10_reads + 1;
+                            `ifdef VERBOSE_TRACE
                             $display("PVIA: READ Video Config -> %02x @%0t",
                                      (video_config & 8'hC7) | ((monitor_id[2:0]) << 3), $time);
+                            `endif
                         end
 
                         3'b101: begin  // $11: unused
@@ -193,12 +221,16 @@ always @(posedge clk_sys) begin
 
                         3'b110: begin  // $12: Slot IER
                             data_out <= slot_ier & 8'h7F;
+                            `ifdef VERBOSE_TRACE
                             $display("PVIA: READ Slot IER -> %02x @%0t", slot_ier & 8'h7F, $time);
+                            `endif
                         end
 
                         3'b111: begin  // $13: IER
                             data_out <= ier & 8'h7F;
+                            `ifdef VERBOSE_TRACE
                             $display("PVIA: READ IER -> %02x @%0t", ier & 8'h7F, $time);
+                            `endif
                         end
                     endcase
                 end
@@ -209,40 +241,56 @@ always @(posedge clk_sys) begin
                     case (compat_reg)
                         2'b00: begin  // Port B
                             port_b <= data_in;
+                            `ifdef VERBOSE_TRACE
                             $display("PVIA COMPAT: WRITE Port B = %02x @%0t", data_in, $time);
+                            `endif
                         end
                         2'b01: begin  // RAM Config
                             ram_cfg <= data_in;
+                            `ifdef VERBOSE_TRACE
                             $display("PVIA COMPAT: WRITE RAM Config = %02x @%0t", data_in, $time);
+                            `endif
                         end
                         2'b10: begin  // Slot Status
+                            `ifdef VERBOSE_TRACE
                             $display("PVIA COMPAT: WRITE Slot Status = %02x @%0t", data_in, $time);
+                            `endif
                         end
                         2'b11: begin  // IFR
                             if (data_in[7])
                                 ifr <= ifr | (data_in & 8'h7F);
                             else
                                 ifr <= ifr & ~(data_in & 8'h7F);
+                            `ifdef VERBOSE_TRACE
                             $display("PVIA COMPAT: WRITE IFR = %02x @%0t", data_in, $time);
+                            `endif
                         end
                     endcase
                 end else begin
                     case (compat_reg)
                         2'b00: begin
                             data_out <= port_b;
+                            `ifdef VERBOSE_TRACE
                             $display("PVIA COMPAT: READ Port B -> %02x @%0t", port_b, $time);
+                            `endif
                         end
                         2'b01: begin
                             data_out <= ram_cfg | 8'h04;
+                            `ifdef VERBOSE_TRACE
                             $display("PVIA COMPAT: READ RAM Config -> %02x @%0t", ram_cfg | 8'h04, $time);
+                            `endif
                         end
                         2'b10: begin
                             data_out <= slot_status;
+                            `ifdef VERBOSE_TRACE
                             $display("PVIA COMPAT: READ Slot Status -> %02x @%0t", slot_status, $time);
+                            `endif
                         end
                         2'b11: begin
                             data_out <= ifr;
+                            `ifdef VERBOSE_TRACE
                             $display("PVIA COMPAT: READ IFR -> %02x @%0t", ifr, $time);
+                            `endif
                         end
                     endcase
                 end

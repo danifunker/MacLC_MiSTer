@@ -34,9 +34,11 @@ if [ ! -f "$LOG" ]; then
     exit 2
 fi
 
-TOTAL_LINES=$(wc -l < "$LOG" | tr -d ' ')
-FIRST_PC=$(head -1 "$LOG" | awk '{print $1}' | sed 's/://')
-LAST_PC=$(tail -1 "$LOG" | awk '{print $1}' | sed 's/://')
+# Filter out frame separator lines for analysis
+TRACE_LINES=$(grep -v '^--- frame' "$LOG")
+TOTAL_LINES=$(echo "$TRACE_LINES" | wc -l | tr -d ' ')
+FIRST_PC=$(echo "$TRACE_LINES" | head -1 | awk '{print $2}' | sed 's/://')
+LAST_PC=$(echo "$TRACE_LINES" | tail -1 | awk '{print $2}' | sed 's/://')
 
 # Check if CPU ever left reset vector area
 # Note: Egret holds 68020 in reset for ~1M HC05 cycles, so short runs (<20 frames) produce no CPU trace
@@ -47,18 +49,18 @@ if [ "$TOTAL_LINES" -lt 100 ]; then
 fi
 
 # Get high-level PC range transitions (unique 4-char prefix changes)
-MILESTONES=$(awk '{pc=substr($1,1,6); if(pc!=last) {print NR" "pc; last=pc}}' "$LOG")
+MILESTONES=$(echo "$TRACE_LINES" | awk '{pc=substr($2,1,6); if(pc!=last) {print NR" "pc; last=pc}}')
 MILESTONE_COUNT=$(echo "$MILESTONES" | wc -l | tr -d ' ')
 
 # Check for known boot stages
 HAS_ROM_INIT=$(echo "$MILESTONES" | grep -c "00A02E" || true)
 HAS_MAIN_STARTUP=$(echo "$MILESTONES" | grep -c "00A463" || true)
 HAS_HW_INIT=$(echo "$MILESTONES" | grep -c "00A14C" || true)
-HAS_RAM_TEST=$(grep -c "00A46AF0" "$LOG" || true)
-HAS_MEM_CLEAR=$(grep -c "00A4685E" "$LOG" || true)
+HAS_RAM_TEST=$(echo "$TRACE_LINES" | grep -c "00A46AF0" || true)
+HAS_MEM_CLEAR=$(echo "$TRACE_LINES" | grep -c "00A4685E" || true)
 
 # Check last 1000 lines for stuck loop (same PC repeated)
-LAST_UNIQUE=$(tail -1000 "$LOG" | awk '{print substr($1,1,8)}' | sort -u | wc -l | tr -d ' ')
+LAST_UNIQUE=$(echo "$TRACE_LINES" | tail -1000 | awk '{print substr($2,1,8)}' | sort -u | wc -l | tr -d ' ')
 
 echo "=== CPU Boot Progress ==="
 echo "Total instructions: $TOTAL_LINES"

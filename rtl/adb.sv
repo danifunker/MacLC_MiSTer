@@ -1,4 +1,4 @@
-/* ADB implementation for plus_too */
+/* ADB implementation for MacLC */
 
 module adb(
 	input            clk,

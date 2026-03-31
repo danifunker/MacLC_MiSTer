@@ -16,7 +16,9 @@ module sim_ram
 	input [24:0]        addr,       // 25 bit word address
 	input [1:0]         ds,         // upper/lower data strobe
 	input               oe,         // cpu/chipset requests read
-	input               we          // cpu/chipset requests write
+	input               we,         // cpu/chipset requests write
+
+	input [31:0]        frame_count // frame counter for debug logging
 );
 
 // 16MB of RAM (8M words of 16 bits)
@@ -34,10 +36,12 @@ always @(posedge clk) begin
 		if (ds[1]) mem[addr[22:0]][15:8] <= din[15:8];
 		if (ds[0]) mem[addr[22:0]][7:0]  <= din[7:0];
 		wr_count <= wr_count + 1;
+		`ifdef VERBOSE_TRACE
 		// Log first 10 writes and every 50000th after that
 		if (wr_count < 10 || wr_count % 50000 == 0)
-			$display("sim_ram WR[%0d] @%0t: addr=%h din=%h ds=%b",
-				wr_count, $time, addr[22:0], din, ds);
+			$display("[F%0d] sim_ram WR[%0d]: addr=%h din=%h ds=%b",
+				frame_count, wr_count, addr[22:0], din, ds);
+		`endif
 	end
 
 	if (reset) begin
@@ -47,8 +51,8 @@ always @(posedge clk) begin
 			dout <= mem[addr[22:0]];
 			// Log first 20 ROM reads only
 			if (addr[22:0] >= 23'h500000 && addr[22:0] < 23'h540000 && rom_rd_count < 20) begin
-				$display("sim_ram RD_ROM[%0d] @%0t: addr=%h dout=%h",
-					rom_rd_count, $time, addr[22:0], mem[addr[22:0]]);
+				$display("[F%0d] sim_ram RD_ROM[%0d]: addr=%h dout=%h",
+					frame_count, rom_rd_count, addr[22:0], mem[addr[22:0]]);
 				rom_rd_count <= rom_rd_count + 1;
 			end
 		end

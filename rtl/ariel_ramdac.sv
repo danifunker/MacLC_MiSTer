@@ -16,7 +16,10 @@ module ariel_ramdac(
 
     // Palette lookup interface
     input [7:0] pixel_index,
-    output [23:0] rgb_out
+    output reg [23:0] rgb_out,
+
+    // Debug
+    output reg ariel_written  // Goes high when any CPU write occurs
 );
 
 // Ariel register map (matching MAME ariel.cpp - byte offsets)
@@ -34,10 +37,9 @@ localparam REG_KEY_COLOR  = 2'd3;
 // Compute byte register from A1 and LDS
 wire [1:0] byte_reg = {reg_addr[0], ~lds_n};
 
-// 256 entry palette, 24-bit RGB (8:8:8)
-reg [7:0] palette_r [0:255];
-reg [7:0] palette_g [0:255];
-reg [7:0] palette_b [0:255];
+// Dual-port palette RAM: port A = CPU, port B = video lookup
+// 256 entries x 24 bits (8:8:8 RGB)
+(* ramstyle = "M10K" *) reg [23:0] palette [0:255];
 
 // Palette address counter
 reg [7:0] palette_addr;
@@ -45,27 +47,20 @@ reg [1:0] color_comp; // 0=R, 1=G, 2=B
 reg [7:0] control_reg;
 reg [7:0] key_color;
 
-// Initialize default Mac CLUT-style palette
-// Mac 1bpp: index 0x7F = white, 0xFF = black (bit 7 inverted = brightness)
-// Mac 2/4/8bpp: upper nibble determines shade (inverted)
-// Formula: if MSB=0 → white, if MSB=1 → use upper nibble for darkness
-integer i;
-initial begin
-    for (i = 0; i < 256; i = i + 1) begin
-        // Mac CLUT: MSB (bit 7) determines black/white
-        // For entries 0x00-0x7F: white (255)
-        // For entries 0x80-0xFF: shade based on upper nibble inverted
-        if (i < 128) begin
-            palette_r[i] = 8'hFF;  // White for 0x00-0x7F
-            palette_g[i] = 8'hFF;
-            palette_b[i] = 8'hFF;
-        end else begin
-            // For 0x80-0xFF: use (255-i)*2 clamped, giving smooth gradient to black
-            palette_r[i] = (8'd255 - i[7:0]) << 1;  // 0x80→0xFE, 0xFF→0x00
-            palette_g[i] = (8'd255 - i[7:0]) << 1;
-            palette_b[i] = (8'd255 - i[7:0]) << 1;
-        end
-    end
+// Latched palette entry for CPU read/modify/write of individual components
+reg [23:0] palette_latch;
+
+// Reset-based initialization
+reg        init_active;
+reg [8:0]  init_addr;  // 9-bit to count to 256
+
+// Compute initial grayscale value for current init address
+wire [7:0] init_shade = (init_addr[7:0] < 8'd128) ? 8'hFF :
+                        (8'd255 - init_addr[7:0]) << 1;
+
+// Video lookup (port B) - synchronous read for block RAM inference
+always @(posedge clk_sys) begin
+    rgb_out <= palette[pixel_index];
 end
 
 // CPU register access (matching MAME ariel.cpp behavior)
@@ -75,32 +70,52 @@ always @(posedge clk_sys) begin
         palette_addr <= 8'd0;
         color_comp <= 2'd0;
         control_reg <= 8'd0;
+        ariel_written <= 1'b0;
         key_color <= 8'd0;
+        palette_latch <= 24'h0;
+        init_active <= 1'b1;
+        init_addr <= 9'd0;
+    end else if (init_active) begin
+        // Initialize palette from reset counter (one entry per clock)
+        palette[init_addr[7:0]] <= {init_shade, init_shade, init_shade};
+        if (init_addr == 9'd255)
+            init_active <= 1'b0;
+        init_addr <= init_addr + 9'd1;
     end else if (req) begin
         if (we) begin
+            ariel_written <= 1'b1;
             case (byte_reg)
                 REG_ADDR: begin
                     // Writing address resets the R/G/B component counter
                     palette_addr <= data_in;
                     color_comp <= 2'd0;
+                    // Latch current palette entry for component writes
+                    palette_latch <= palette[data_in];
                 end
                 REG_PALETTE: begin
                     // Write to current color component, cycle through R, G, B
-                    // HACK: Ignore writes of 0x7F since ROM is broken and writes 0x7F to everything
-                    // This preserves our initial grayscale palette
-                    if (data_in != 8'h7F) begin
-                        case (color_comp)
-                            2'd0: palette_r[palette_addr] <= data_in;
-                            2'd1: palette_g[palette_addr] <= data_in;
-                            2'd2: palette_b[palette_addr] <= data_in;
-                            default: ;
-                        endcase
-                    end
+                    case (color_comp)
+                        2'd0: begin
+                            palette_latch[23:16] <= data_in;
+                            palette[palette_addr] <= {data_in, palette_latch[15:0]};
+                        end
+                        2'd1: begin
+                            palette_latch[15:8] <= data_in;
+                            palette[palette_addr] <= {palette_latch[23:16], data_in, palette_latch[7:0]};
+                        end
+                        2'd2: begin
+                            palette_latch[7:0] <= data_in;
+                            palette[palette_addr] <= {palette_latch[23:8], data_in};
+                        end
+                        default: ;
+                    endcase
 
                     // Auto-increment: cycle R->G->B, then advance address
                     if (color_comp == 2'd2) begin
                         color_comp <= 2'd0;
                         palette_addr <= palette_addr + 8'd1;
+                        // Latch next entry for subsequent writes
+                        palette_latch <= palette[palette_addr + 8'd1];
                     end else begin
                         color_comp <= color_comp + 2'd1;
                     end
@@ -117,9 +132,9 @@ always @(posedge clk_sys) begin
                 end
                 REG_PALETTE: begin
                     case (color_comp)
-                        2'd0: data_out <= palette_r[palette_addr];
-                        2'd1: data_out <= palette_g[palette_addr];
-                        2'd2: data_out <= palette_b[palette_addr];
+                        2'd0: data_out <= palette_latch[23:16];
+                        2'd1: data_out <= palette_latch[15:8];
+                        2'd2: data_out <= palette_latch[7:0];
                         default: data_out <= 8'hFF;
                     endcase
 
@@ -127,6 +142,7 @@ always @(posedge clk_sys) begin
                     if (color_comp == 2'd2) begin
                         color_comp <= 2'd0;
                         palette_addr <= palette_addr + 8'd1;
+                        palette_latch <= palette[palette_addr + 8'd1];
                     end else begin
                         color_comp <= color_comp + 2'd1;
                     end
@@ -137,8 +153,5 @@ always @(posedge clk_sys) begin
         end
     end
 end
-
-// Palette lookup for video
-assign rgb_out = {palette_r[pixel_index], palette_g[pixel_index], palette_b[pixel_index]};
 
 endmodule

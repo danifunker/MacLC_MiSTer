@@ -123,6 +123,23 @@ ghdl synth -fsynopsys -fexplicit --latches --out=verilog
 
 **Conditional compilation:** `USE_EGRET_CPU` and `SIMULATION` are defined in `verilator/Makefile` for simulation. For FPGA, `USE_EGRET_CPU` is set in `MacLC.qsf`. Guard simulation-only code (`$display`, debug counters) with `` `ifdef SIMULATION ``.
 
+## VIA Shift Register — Simulation Sensitivity
+
+**Critical:** Changes to the VIA SR logic in `rtl/via6522.sv` can break Egret communication and stall the boot. After any SR change, verify simulation still boots:
+
+```bash
+cd verilator && make clean && make
+./obj_dir/Vemu --screenshot 350 --stop-at-frame 351 2>/dev/null 1>/dev/null
+```
+
+Check `screenshot_frame_0350.png` — it must show the grey/black alternating line pattern (memory test). Uniform grey means the SR change broke Egret communication.
+
+**Known-bad patterns (do not re-introduce):**
+- `ext_fall_edge_pending` — latching CB1 falling edges for shift-out. Use `shift_tick_f` instead.
+- `cb2_latched` — capturing CB2 at CB1 rising edge for shift-in. Use live `cb2_i` instead.
+
+These were attempted for FPGA timing improvement but cause the 4th Egret SR transfer to hang in Verilator (CPU stuck polling IFR bit 2 at `0xA14E5E`).
+
 ## Known Limitations
 
 - Floppy disks are read-only

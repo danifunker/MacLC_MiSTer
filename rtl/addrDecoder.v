@@ -55,6 +55,7 @@ module addrDecoder(
     input _cpuAS,
     input _cpuRW,
     input memoryOverlayOn,
+    input [7:0] ram_config,  // V8 RAM config: bits[7:6] = SIMM size
 
     output reg selectRAM,
     output reg selectROM,
@@ -63,7 +64,6 @@ module addrDecoder(
     output reg selectIWM,
     output reg selectASC,
     output reg selectVIA,
-    output reg selectSEOverlay,  // Directly triggers overlay disable
 
     // Mac LC Specific Selects
     output reg selectAriel,
@@ -71,6 +71,18 @@ module addrDecoder(
     output reg selectVRAM,
     output reg selectUnmapped
 );
+
+    // Decode SIMM byte size from ram_config[7:6]
+    wire [23:0] simm_byte_size = (ram_config[7:6] == 2'b00) ? 24'h000000 :  // 0MB
+                                  (ram_config[7:6] == 2'b01) ? 24'h200000 :  // 2MB
+                                  (ram_config[7:6] == 2'b10) ? 24'h400000 :  // 4MB
+                                                                24'h800000;   // 8MB
+
+    // Valid RAM ranges:
+    //   SIMM:        $000000 to simm_byte_size-1 (only if SIMM present)
+    //   Motherboard: $800000-$9FFFFF (always 2MB)
+    wire in_simm_range = (address[23:0] < simm_byte_size);
+    wire in_motherboard_range = (address[23:21] == 3'b100);  // $800000-$9FFFFF
 
     always @(*) begin
         // Defaults - active low accent for active state
@@ -81,7 +93,6 @@ module addrDecoder(
         selectIWM = 0;
         selectASC = 0;
         selectVIA = 0;
-        selectSEOverlay = 0;
         selectAriel = 0;
         selectPseudoVIA = 0;
         selectVRAM = 0;
@@ -96,11 +107,8 @@ module addrDecoder(
             // ==========================================================
 
             // --- ROM ($A00000 - $AFFFFF) ---
-            // Reading from ROM area triggers overlay disable
             if (address[23:20] == 4'hA) begin
                 selectROM = 1;
-                selectSEOverlay = 1;  // Signal to disable overlay
-                // $display("AD: selectSEOverlay ACTIVE (addr=%h) @%0t", address, $time);
             end
 
             // --- RAM or Overlay ROM ($000000 - $9FFFFF) ---
@@ -108,9 +116,12 @@ module addrDecoder(
                 if (memoryOverlayOn && _cpuRW) begin
                     // Overlay active: ROM appears at $000000 for READS
                     selectROM = 1;
-                end else begin
-                    // Normal operation OR overlay WRITES: RAM
+                end else if (in_simm_range || in_motherboard_range) begin
+                    // Normal operation: RAM only where it physically exists
                     selectRAM = 1;
+                end else begin
+                    // Address in $000000-$9FFFFF but no RAM here
+                    selectUnmapped = 1;
                 end
             end
 

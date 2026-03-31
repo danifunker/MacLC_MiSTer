@@ -55,6 +55,7 @@ module emu
 	output [31:0] debug_pc,
 	output [15:0] debug_opcode,
 	output        debug_fetch_valid,
+	output [31:0] debug_data_addr,
 
 	// RAM debug outputs
 	output [24:0] debug_ram_addr,
@@ -91,9 +92,7 @@ module emu
 	// Configuration
 	wire      status_mem = cfg_memSize;      // 0=1MB, 1=4MB
 	localparam [1:0] status_cpu = 2'b10;     // 68020
-	// Mac LC runs 68020 at C15M (~15.67 MHz), use 16 MHz mode (turbo=1)
-	// turbo=0 gives 8 MHz, turbo=1 gives 16 MHz
-	wire      status_turbo = 1'b1;           // 16 MHz for Mac LC
+	// Mac LC always runs at C15M (~15.67 MHz) - use 16 MHz clock enables
 
 	////////////////////   CLOCKS   ///////////////////
 
@@ -122,7 +121,7 @@ module emu
 
 			// Debug: track when download completes
 			if (dio_download_prev && !dio_download) begin
-				$display("SIM: dio_download went LOW - ROM download complete");
+				$display("[F%0d] SIM: dio_download went LOW - ROM download complete", sim_frame_count);
 			end
 
 			if(~pll_locked || reset || dio_download) begin
@@ -133,7 +132,7 @@ module emu
 				rst_cnt <= rst_cnt - 1'd1;
 				// Debug: show countdown at key points only
 				if (rst_cnt == 16'h0001) begin
-					$display("SIM: rst_cnt about to expire, n_reset will go high");
+					$display("[F%0d] SIM: rst_cnt about to expire, n_reset will go high", sim_frame_count);
 				end
 			end
 			else begin
@@ -142,7 +141,7 @@ module emu
 
 			// Debug: track when n_reset changes
 			if (n_reset != n_reset_prev) begin
-				$display("SIM: *** n_reset changed to %b *** (rst_cnt=%04x)", n_reset, rst_cnt);
+				$display("[F%0d] SIM: *** n_reset changed to %b *** (rst_cnt=%04x)", sim_frame_count, n_reset, rst_cnt);
 			end
 		end
 	end
@@ -161,17 +160,26 @@ module emu
 	assign VGA_HB = v8_hblank;
 	assign VGA_VB = v8_vblank;
 
+	// Frame counter for debug logging
+	reg [31:0] sim_frame_count = 0;
+	reg vs_prev = 0;
+	always @(posedge clk_sys) begin
+		vs_prev <= VGA_VS;
+		if (VGA_VS && !vs_prev)  // Rising edge of vsync = new frame
+			sim_frame_count <= sim_frame_count + 1;
+	end
+
 	wire [10:0] audio;
 	assign AUDIO_L = {audio[10:0], 5'b00000};
 	assign AUDIO_R = {audio[10:0], 5'b00000};
 
 	// Mac LC memory configuration
-	wire [7:0] configRAMSize = 8'hE4; // 10MB: 8MB SIMM + 2MB board
+	wire [7:0] configRAMSize = 8'h24; // 2MB: no SIMM, 2MB board only
 	wire [7:0] pvia_ram_config_out;   // Active RAM config from pseudovia
 
-	// Serial Ports (loopback for sim)
+	// Serial Ports - force idle high to prevent SCC Rx false data (matches MacLC.sv)
 	wire serialOut;
-	wire serialIn = serialOut;
+	wire serialIn = 1'b1;
 	wire serialCTS = 1'b1;
 	wire serialRTS;
 
@@ -213,12 +221,11 @@ module emu
 	// Video latch: only pulse when memoryLatch AND in video bus cycle
 	wire v8_video_latch = memoryLatch && videoBusControl;
 	// peripherals
-	wire vid_alt, loadPixels, pixelOut, _hblank, _vblank, hsync, vsync;
-	wire memoryOverlayOn, selectSCSI, selectSCC, selectIWM, selectVIA, selectRAM, selectROM, selectSEOverlay;
+	wire vid_alt;
+	wire memoryOverlayOn, selectSCSI, selectSCC, selectIWM, selectVIA, selectRAM, selectROM;
 	wire [15:0] dataControllerDataOut;
 
 	// audio
-	wire snd_alt;
 	wire loadSound;
 
 	// floppy disk image interface
@@ -227,23 +234,23 @@ module emu
 	wire dskReadAckExt;
 	wire [21:0] dskReadAddrExt;
 
-	// dtack generation in turbo mode
-	reg  turbo_dtack_en, cpuBusControl_d;
+	// dtack generation for 16 MHz mode
+	reg  dtack_en, cpuBusControl_d;
 	always @(posedge clk_sys) begin
 		if (!_cpuReset) begin
-			turbo_dtack_en <= 0;
+			dtack_en <= 0;
 		end
 		else begin
 			cpuBusControl_d <= cpuBusControl;
-			if (_cpuAS) turbo_dtack_en <= 0;
-			if (!_cpuAS & ((!cpuBusControl_d & cpuBusControl) | (!selectROM & !selectRAM))) turbo_dtack_en <= 1;
+			if (_cpuAS) dtack_en <= 0;
+			if (!_cpuAS & ((!cpuBusControl_d & cpuBusControl) | (!selectROM & !selectRAM))) dtack_en <= 1;
 		end
 	end
 
 	assign      _cpuVPA = (cpuFC == 3'b111) ? 1'b0 : ~(!_cpuAS && cpuAddr[23:21] == 3'b111);
-	assign      _cpuDTACK = ~(!_cpuAS && cpuAddr[23:21] != 3'b111) | (status_turbo & !turbo_dtack_en);
-	wire        cpu_en_p      = status_turbo ? clk16_en_p : clk8_en_p;
-	wire        cpu_en_n      = status_turbo ? clk16_en_n : clk8_en_n;
+	assign      _cpuDTACK = ~(!_cpuAS && cpuAddr[23:21] != 3'b111) | !dtack_en;
+	wire        cpu_en_p      = clk16_en_p;
+	wire        cpu_en_n      = clk16_en_n;
 	assign      _cpuReset_o   = tg68_reset_n;
 	assign      _cpuRW        = tg68_rw;
 	assign      _cpuAS        = tg68_as_n;
@@ -289,7 +296,7 @@ module emu
 		.reset_n    ( tg68_reset_n ),
 
 		.E          (  ),
-		.E_div      ( status_turbo ),
+		.E_div      ( 1'b1 ),
 		.E_PosClkEn ( tg68_E_falling ),
 		.E_NegClkEn ( tg68_E_rising  ),
 		.vma_n      ( tg68_vma_n ),
@@ -355,11 +362,20 @@ module emu
 		end
 	end
 
+	// Latch data address during non-fetch bus cycles (data read/write)
+	reg [31:0] last_data_addr;
+	always @(posedge clk_sys) begin
+		if (!n_reset)
+			last_data_addr <= 0;
+		else if (prev_as_n && !tg68_as_n && tg68_busstate != 2'b00)
+			last_data_addr <= tg68_a;
+	end
+
+
 	assign debug_pc = last_fetch_pc;
 	assign debug_opcode = last_fetch_opcode;
 	assign debug_fetch_valid = fetch_valid;
-
-	// PC-specific debug removed - add back as needed for targeted debugging
+	assign debug_data_addr = last_data_addr;
 
 	addrController_top ac0
 	(
@@ -369,12 +385,12 @@ module emu
 		.clk8_en_n(clk8_en_n),
 		.clk16_en_p(clk16_en_p),
 		.clk16_en_n(clk16_en_n),
+		._cpuReset(_cpuReset),
 		.cpuAddr(cpuAddr),
 		._cpuUDS(_cpuUDS),
 		._cpuLDS(_cpuLDS),
 		._cpuRW(_cpuRW),
 		._cpuAS(_cpuAS),
-		.turbo(status_turbo),
 		.ram_config(pvia_ram_config_out),
 		.memoryAddr(memoryAddr),
 		.memoryLatch(memoryLatch),
@@ -393,22 +409,15 @@ module emu
 		.selectVIA(selectVIA),
 		.selectRAM(selectRAM),
 		.selectROM(selectROM),
-		.selectSEOverlay(selectSEOverlay),
 		.selectAriel(selectAriel),
 		.selectPseudoVIA(selectPseudoVIA),
 		.selectVRAM(selectVRAM),
-		.hsync(hsync),
-		.vsync(vsync),
-		._hblank(_hblank),
-		._vblank(_vblank),
-		.loadPixels(loadPixels),
-		.vid_alt(vid_alt),
 		.v8_video_addr(v8_video_addr),
 		.v8_hblank(v8_hblank),
 		.v8_vblank(v8_vblank),
 		.memoryOverlayOn(memoryOverlayOn),
+		.overlay_trigger_addr(),  // debug output, unused in sim
 
-		.snd_alt(snd_alt),
 		.loadSound(loadSound),
 
 		.dskReadAddrInt(dskReadAddrInt),
@@ -443,7 +452,8 @@ module emu
 		.req(selectAriel && cpuBusControl),
 
 		.pixel_index(ariel_pixel_addr),
-		.rgb_out(ariel_palette_data)
+		.rgb_out(ariel_palette_data),
+		.ariel_written()  // Not used in sim
 	);
 
 	// Debug: disabled for now
@@ -497,6 +507,7 @@ module emu
 		.vga_g(v8_vga_g),
 		.vga_b(v8_vga_b),
 		.de(v8_de),
+		.ce_pix(),  // Not used in sim
 
 		.palette_addr(ariel_pixel_addr),
 		.palette_data(ariel_palette_data)
@@ -528,7 +539,6 @@ module emu
 		.selectVIA(selectVIA),
 		.selectASC(selectASC),
 		.asc_data_in(asc_data_out),
-		.selectSEOverlay(selectSEOverlay),
 		.cpuBusControl(cpuBusControl),
 		.videoBusControl(videoBusControl),
 		.memoryDataOut(memoryDataOut),
@@ -549,16 +559,11 @@ module emu
 
 		.timestamp(timestamp),
 
-		._hblank(_hblank),
-		._vblank(_vblank),
-		.pixelOut(pixelOut),
-		.loadPixels(loadPixels),
+		._hblank(~v8_hblank),
+		._vblank(~v8_vblank),
 		.vid_alt(vid_alt),
 
-		.memoryOverlayOn(memoryOverlayOn),
-
 		.audioOut(audio),
-		.snd_alt(snd_alt),
 		.loadSound(loadSound),
 
 		.insertDisk({dsk_ext_ins, dsk_int_ins}),
@@ -686,7 +691,8 @@ module emu
 		.ds             ( ram_ds      ),
 		.we             ( ram_we      ),
 		.oe             ( ram_oe      ),
-		.dout           ( ram_do_raw  )
+		.dout           ( ram_do_raw  ),
+		.frame_count    ( sim_frame_count )
 	);
 
 	// RAM debug outputs
@@ -708,6 +714,36 @@ module emu
 	assign debug_selectIWM = selectIWM;
 	assign debug_selectASC = selectASC;
 	assign debug_selectVRAM = selectVRAM;
+`ifdef SIMULATION
+	// Track RAM test progress: log CPU data address during RAM writes
+	// Samples periodically to avoid flooding output
+	integer ram_wr_count = 0;
+	reg [23:0] last_ram_wr_addr = 0;
+	always @(posedge clk_sys) begin
+		if (selectPseudoVIA && selectVRAM)
+			$display("[F%0d] BUG: selectPseudoVIA AND selectVRAM both active! addr=%h", sim_frame_count, cpuAddr);
+		if (selectPseudoVIA && !_cpuRW && cpuBusControl)
+			$display("[F%0d] PVIA ACTIVE WRITE: cpuAddr=%h data=%h", sim_frame_count, cpuAddr, cpuDataOut);
+
+		// Log RAM writes: first 10, then every 100000th
+		if (!_ramWE && cpuBusControl) begin
+			if (ram_wr_count < 10 || ram_wr_count % 100000 == 0) begin
+				$display("[F%0d] RAM_WR[%0d]: cpuAddr=%h sdramAddr=%h data=%h PC=%h",
+					sim_frame_count, ram_wr_count, cpuAddr, memoryAddr, cpuDataOut, last_fetch_pc);
+			end
+			last_ram_wr_addr <= cpuAddr;
+			ram_wr_count <= ram_wr_count + 1;
+		end
+
+		// Log RAM reads: every 100000th
+		if (!_ramOE && cpuBusControl) begin
+			if (ram_wr_count > 0 && ram_wr_count % 100000 == 50000) begin
+				$display("[F%0d] RAM_RD: cpuAddr=%h sdramAddr=%h PC=%h",
+					sim_frame_count, cpuAddr, memoryAddr, last_fetch_pc);
+			end
+		end
+	end
+`endif
 	assign debug_cpuAddr = cpuAddr;
 	assign debug_cpuDataIn = cpuDataOut;  // CPU writes this to peripherals
 	assign debug_cpuDataOut = dataControllerDataOut;  // Peripherals send this to CPU
