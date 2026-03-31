@@ -99,6 +99,7 @@ module egret_behavioral (
     localparam [7:0] CMD_AUTOPOLL      = 8'h01;
     localparam [7:0] CMD_GET_TIME      = 8'h03;
     localparam [7:0] CMD_GET_PRAM      = 8'h07;
+    localparam [7:0] CMD_WR_XPRAM     = 8'h08;  // Write Extended PRAM (block write)
     localparam [7:0] CMD_SET_TIME      = 8'h09;
     localparam [7:0] CMD_SET_PRAM      = 8'h0C;
     localparam [7:0] CMD_SEND_DFAC     = 8'h0E;
@@ -160,11 +161,11 @@ module egret_behavioral (
     reg        sample_phase;    // 0 = drive CB2/sample, 1 = rising edge
 
     // Buffers
-    reg [7:0]  recv_buf [0:15];
-    reg [3:0]  recv_count;
-    reg [7:0]  send_buf [0:15];
-    reg [3:0]  send_count;
-    reg [3:0]  send_length;
+    reg [7:0]  recv_buf [0:23];
+    reg [4:0]  recv_count;
+    reg [7:0]  send_buf [0:39];
+    reg [5:0]  send_count;
+    reg [5:0]  send_length;
 
     // xcvrSes output (active-high = pulling PB3 pin low = "I have data")
     reg        treq_reg;
@@ -496,11 +497,17 @@ module egret_behavioral (
                     end
 
                     CMD_GET_PRAM: begin
-                        send_buf[3] <= pram[recv_buf[3]];
-                        send_length <= 4'd4;
+                        // ROM calls with D1=32 and expects 3 header + 32 data = 35 bytes
+                        // Fill 32 PRAM bytes starting at offset recv_buf[3]
+                        begin : get_pram_block
+                            integer j;
+                            for (j = 0; j < 32; j = j + 1)
+                                send_buf[3 + j] <= pram[recv_buf[3] + j[7:0]];
+                        end
+                        send_length <= 6'd35;
 `ifdef SIMULATION
-                        $display("EGRET_BEH: GET_PRAM[0x%02x] = 0x%02x",
-                                 recv_buf[3], pram[recv_buf[3]]);
+                        $display("EGRET_BEH: GET_PRAM offset=0x%02x, sending 32 bytes",
+                                 recv_buf[3]);
 `endif
                     end
 
@@ -509,6 +516,23 @@ module egret_behavioral (
                         send_length <= 4'd3;
 `ifdef SIMULATION
                         $display("EGRET_BEH: SET_PRAM[0x%02x] = 0x%02x", recv_buf[3], recv_buf[4]);
+`endif
+                    end
+
+                    CMD_WR_XPRAM: begin
+                        // Write Extended PRAM: recv_buf = [0x01, 0x08, flags, offset, data...]
+                        // Data bytes start at recv_buf[4], count = recv_count - 4
+                        begin : wr_xpram_block
+                            integer k;
+                            for (k = 0; k < 20; k = k + 1) begin
+                                if (4 + k < recv_count)
+                                    pram[recv_buf[3] + k[7:0]] <= recv_buf[4 + k];
+                            end
+                        end
+                        send_length <= 4'd3;
+`ifdef SIMULATION
+                        $display("EGRET_BEH: WR_XPRAM offset=0x%02x count=%0d",
+                                 recv_buf[3], recv_count - 5'd4);
 `endif
                     end
 
@@ -688,8 +712,9 @@ module egret_behavioral (
                             wait_counter <= 16'd0;
 
                             if (send_count + 1'd1 >= send_length) begin
-                                // Last byte just sent — deassert xcvrSes BEFORE host checks
-                                // Host will do viaFullAck, then check xcvrSes → sees HIGH → @done
+                                // Last byte sent — deassert xcvrSes BEFORE host checks
+                                // Host's last-byte handler (4081540E) does: read SR, set viaFull,
+                                // delay, deassert TIP, poll TREQ. We need TREQ deasserted by then.
                                 treq_reg <= 1'b0;  // Deassert xcvrSes (PB3=1)
                                 state <= ST_SEND_WAIT_VIAFULL;
 `ifdef SIMULATION
@@ -715,7 +740,7 @@ module egret_behavioral (
             // clear before sending the next byte.
             //
             // For the last byte, xcvrSes is already deasserted. Host does viaFullAck,
-            // checks xcvrSes=1 → goes to @done, clears viaFull + sysSes.
+            // then deasserts TIP, polls TREQ (sees deasserted), clears viaFull.
             ST_SEND_WAIT_VIAFULL: begin
                 wait_counter <= wait_counter + 1'd1;
                 cuda_cb1 <= 1'b0;
@@ -733,8 +758,7 @@ module egret_behavioral (
                     // Host set viaFull (PB4 rising) = acknowledged byte
                     // Now wait for viaFull to clear before sending next byte
                     if (send_count >= send_length) begin
-                        // Last byte was ack'd — host will check xcvrSes=1 → @done
-                        // Wait for sysSes to deassert (host finishes @done path)
+                        // Last byte was ack'd — host will deassert TIP, poll TREQ → done
                         // Already in this state, just keep waiting for !tip
 `ifdef SIMULATION
                         $display("EGRET_BEH: Last byte ack'd (viaFull), waiting for sysSes deassert");

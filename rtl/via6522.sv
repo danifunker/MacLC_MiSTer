@@ -471,7 +471,7 @@ module via6522 (
             end
             4'hD: begin // IFR
                 data_out <= {irq_out, irq_flags};
-`ifdef SIMULATION
+`ifdef VERBOSE_TRACE
                 if (shift_active || irq_flags[2]) begin
                     $display("VIA_SR[%0t]: IFR_READ 0x%02x SR_bit=%b active=%b cnt=%d",
                              $time, {irq_out, irq_flags}, irq_flags[2], shift_active, bit_cnt);
