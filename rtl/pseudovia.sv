@@ -10,7 +10,9 @@
 //   Group 0 (addr[4]=0): Port B, RAM Config, Slot Status, IFR
 //   Group 1 (addr[4]=1): Video Config, (unused), Slot IER, IER
 //
-// VIA-compat mode (offset >= 0x100) decodes addr[1:0] to access Group 0.
+// VIA-compat mode (offset >= 0x100) uses addr[12:9] as 6522 register number.
+// Only registers 13 (IFR) and 14 (IER) are meaningful (per MAME).
+// VIA-compat IER is a separate register from native $13, used for IRQ masking.
 
 module pseudovia(
     input clk_sys,
@@ -50,7 +52,8 @@ reg [7:0] port_b;
 reg [7:0] ram_cfg;      // Writable RAM config register
 reg [7:0] ifr;          // Interrupt flag register
 reg [7:0] slot_ier;     // Slot interrupt enable register
-reg [7:0] ier;          // Main interrupt enable register
+reg [7:0] ier;          // Native mode IER (register $13, has IIci POST quirk)
+reg [7:0] ier_compat;   // VIA-compat mode IER (used for IRQ calculation)
 
 // Slot interrupt status - active LOW
 // Bit 6: VBlank (active low = VBlank is happening)
@@ -64,7 +67,7 @@ wire [7:0] slot_irqs = (~slot_status) & 8'h78;  // Check bits 3-6 (slots + vblan
 wire [7:0] slot_irqs_masked = slot_irqs & (slot_ier & 8'h78);
 wire any_slot_irq = |slot_irqs_masked;
 
-wire [7:0] active_ifr = ifr & ier & 8'h1B;
+wire [7:0] active_ifr = ifr & ier_compat & 8'h1B;
 wire irq_pending = |active_ifr;
 
 // Debug counter
@@ -77,9 +80,9 @@ wire [7:0] native_offset = addr[7:0];
 wire [2:0] reg_sel = {addr[4], addr[1:0]};
 wire native_reg_valid = (native_offset[7:5] == 3'b000) && (native_offset[3:2] == 2'b00);
 
-// VIA-compat mode uses addr[1:0] to alias Group 0
+// VIA-compat mode uses addr[12:9] as 6522 register number (512-byte spacing)
 wire is_native = (addr[12:8] == 5'b00000);
-wire [1:0] compat_reg = addr[1:0];
+wire [3:0] compat_reg = addr[12:9];
 
 always @(posedge clk_sys) begin
     if (reset) begin
@@ -88,6 +91,7 @@ always @(posedge clk_sys) begin
         ifr <= 8'h00;
         slot_ier <= 8'h00;
         ier <= 8'h00;
+        ier_compat <= 8'h00;
         irq_out <= 1'b0;
         video_config <= 8'h03;  // Default to 8bpp mode
     end else begin
@@ -234,62 +238,51 @@ always @(posedge clk_sys) begin
                         end
                     endcase
                 end
-            end else begin
+            end else if (!is_native) begin
                 // VIA-compat mode: offset >= 0x100
-                // Aliases Group 0 native registers via addr[1:0]
+                // Emulates 6522 register layout with 512-byte spacing
+                // addr[12:9] gives the VIA register number (0-15)
+                // Per MAME: only registers 13 (IFR) and 14 (IER) are meaningful
                 if (we) begin
                     case (compat_reg)
-                        2'b00: begin  // Port B
-                            port_b <= data_in;
-                            `ifdef VERBOSE_TRACE
-                            $display("PVIA COMPAT: WRITE Port B = %02x @%0t", data_in, $time);
-                            `endif
-                        end
-                        2'b01: begin  // RAM Config
-                            ram_cfg <= data_in;
-                            `ifdef VERBOSE_TRACE
-                            $display("PVIA COMPAT: WRITE RAM Config = %02x @%0t", data_in, $time);
-                            `endif
-                        end
-                        2'b10: begin  // Slot Status
-                            `ifdef VERBOSE_TRACE
-                            $display("PVIA COMPAT: WRITE Slot Status = %02x @%0t", data_in, $time);
-                            `endif
-                        end
-                        2'b11: begin  // IFR
-                            if (data_in[7])
-                                ifr <= ifr | (data_in & 8'h7F);
-                            else
-                                ifr <= ifr & ~(data_in & 8'h7F);
+                        4'd13: begin  // IFR (write just triggers recalc, per MAME)
                             `ifdef VERBOSE_TRACE
                             $display("PVIA COMPAT: WRITE IFR = %02x @%0t", data_in, $time);
+                            `endif
+                        end
+                        4'd14: begin  // IER (standard VIA set/clear behavior)
+                            if (data_in[7])
+                                ier_compat <= ier_compat | (data_in & 8'h7F);
+                            else
+                                ier_compat <= ier_compat & ~(data_in & 8'h7F);
+                            `ifdef VERBOSE_TRACE
+                            $display("PVIA COMPAT: WRITE IER = %02x @%0t", data_in, $time);
+                            `endif
+                        end
+                        default: begin
+                            `ifdef VERBOSE_TRACE
+                            $display("PVIA COMPAT: WRITE unknown reg %0d = %02x @%0t", compat_reg, data_in, $time);
                             `endif
                         end
                     endcase
                 end else begin
                     case (compat_reg)
-                        2'b00: begin
-                            data_out <= port_b;
-                            `ifdef VERBOSE_TRACE
-                            $display("PVIA COMPAT: READ Port B -> %02x @%0t", port_b, $time);
-                            `endif
-                        end
-                        2'b01: begin
-                            data_out <= ram_cfg | 8'h04;
-                            `ifdef VERBOSE_TRACE
-                            $display("PVIA COMPAT: READ RAM Config -> %02x @%0t", ram_cfg | 8'h04, $time);
-                            `endif
-                        end
-                        2'b10: begin
-                            data_out <= slot_status;
-                            `ifdef VERBOSE_TRACE
-                            $display("PVIA COMPAT: READ Slot Status -> %02x @%0t", slot_status, $time);
-                            `endif
-                        end
-                        2'b11: begin
+                        4'd13: begin  // IFR
                             data_out <= ifr;
                             `ifdef VERBOSE_TRACE
                             $display("PVIA COMPAT: READ IFR -> %02x @%0t", ifr, $time);
+                            `endif
+                        end
+                        4'd14: begin  // IER
+                            data_out <= ier_compat;
+                            `ifdef VERBOSE_TRACE
+                            $display("PVIA COMPAT: READ IER -> %02x @%0t", ier_compat, $time);
+                            `endif
+                        end
+                        default: begin
+                            data_out <= 8'h00;
+                            `ifdef VERBOSE_TRACE
+                            $display("PVIA COMPAT: READ unknown reg %0d @%0t", compat_reg, $time);
                             `endif
                         end
                     endcase
