@@ -28,6 +28,7 @@
 #include "sim_audio.h"
 #include "sim_input.h"
 #include "sim_clock.h"
+#include "sim_serial.h"
 #include "m68k_dasm.h"
 
 #include "../imgui/imgui_memory_editor.h"
@@ -121,6 +122,7 @@ const char* windowTitle_Audio = "Audio output";
 bool showDebugLog = true;
 DebugConsole console;
 MemoryEditor mem_edit;
+SimSerialTerminal serialTerminal;
 
 // HPS emulator
 // ------------
@@ -347,6 +349,21 @@ int verilate() {
 				}
 		
 				if (clk_sys.IsRising()) {
+					// Serial terminal: tick soft UART and drive SCC RX
+					{
+						bool fpga_txd = VERTOPINTERN->serial_txd;
+						bool sim_rxd = serialTerminal.Tick(fpga_txd);
+						VERTOPINTERN->serial_rxd = sim_rxd;
+
+						// Auto-detect baud rate from SCC's baud divider register
+						static uint32_t last_baud_div = 0;
+						uint32_t baud_div = VERTOPINTERN->emu__DOT__dc0__DOT__s__DOT__baud_divid_speed_a;
+						if (baud_div != last_baud_div) {
+							serialTerminal.UpdateConfigDirect(baud_div, 8, 1, false, false);
+							last_baud_div = baud_div;
+						}
+					}
+
 					main_time++;
 					// Print progress every 10 million cycles (~300ms of simulated time at 32MHz)
 					if ((main_time % 10000000) == 0) {
@@ -676,6 +693,15 @@ int main(int argc, char** argv, char** env) {
 		// Draw VGA output
 		ImGui::Image(video.texture_id, ImVec2(video.output_width * VGA_SCALE_X, video.output_height * VGA_SCALE_Y));
 		ImGui::End();
+
+		// Serial terminal window
+		serialTerminal.UpdateSCCStatus(
+			VERTOPINTERN->emu__DOT__dc0__DOT__s__DOT__wr3_a,
+			VERTOPINTERN->emu__DOT__dc0__DOT__s__DOT__wr5_a,
+			VERTOPINTERN->emu__DOT__dc0__DOT__s__DOT__wr9,
+			VERTOPINTERN->emu__DOT__dc0__DOT__s__DOT__wr14_a);
+		static bool showSerial = true;
+		serialTerminal.Draw("Serial Terminal A", &showSerial);
 
 		if (ImGuiFileDialog::Instance()->Display("ChooseFileDlgKey"))
 		{
