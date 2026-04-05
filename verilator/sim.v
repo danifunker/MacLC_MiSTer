@@ -82,6 +82,10 @@ module emu
 	output        debug_cpuRW,        // 1=read, 0=write
 	output        debug_cpuBusControl,
 
+	// Serial port (SCC Channel A)
+	output        serial_txd,       // SCC Channel A TX output (for sim-side RX)
+	input         serial_rxd,       // SCC Channel A RX input (from sim-side TX)
+
 	// Machine configuration inputs
 	input  [1:0]  cfg_cpuType,      // Unused, kept for sim_main.cpp compatibility
 	input         cfg_memSize       // 0=1MB, 1=4MB
@@ -177,11 +181,12 @@ module emu
 	wire [7:0] configRAMSize = 8'h24; // 2MB: no SIMM, 2MB board only
 	wire [7:0] pvia_ram_config_out;   // Active RAM config from pseudovia
 
-	// Serial Ports - force idle high to prevent SCC Rx false data (matches MacLC.sv)
-	wire serialOut;
-	wire serialIn = 1'b1;
-	wire serialCTS = 1'b1;
+	// Serial Ports - connect SCC Channel A to sim via serial_txd/serial_rxd ports
+	wire serialOut;              // SCC Channel A TX (driven by SCC)
+	wire serialIn = serial_rxd;  // SCC Channel A RX (driven by sim)
+	wire serialCTS = 1'b0;
 	wire serialRTS;
+	assign serial_txd = serialOut;
 
 	// V8 Video system wires
 	wire [21:0] v8_video_addr;
