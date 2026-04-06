@@ -88,7 +88,7 @@ struct SimSerialTerminal {
                             bool parity_even = false);
 
     // Update SCC register state for status display
-    void UpdateSCCStatus(uint8_t wr3, uint8_t wr5, uint8_t wr9, uint8_t wr14);
+    void UpdateSCCStatus(uint8_t wr3, uint8_t wr4, uint8_t wr5, uint8_t wr9, uint8_t wr14);
 
     // Draw the ImGui window
     void Draw(const char* title, bool* p_open);
@@ -124,7 +124,19 @@ private:
 
     // SCC register state for status display
     uint8_t m_scc_wr3 = 0;
+    uint8_t m_scc_wr4 = 0;
     uint8_t m_scc_wr5 = 0;
     uint8_t m_scc_wr9 = 0;
     uint8_t m_scc_wr14 = 0;
+
+    // Noise suppression
+    enum class NoiseMute { Off, Auto, On };
+    NoiseMute m_noise_mute = NoiseMute::Auto;
+    bool m_is_sync_mode = false;
+
+    // Auto-suppress state: suppress runs of consecutive 0x00 bytes
+    static const int NULL_RUN_THRESHOLD = 8;  // start suppressing after this many
+    int m_null_run_count = 0;
+    uint64_t m_suppressed_count = 0;
+    bool m_suppressing = false;
 };

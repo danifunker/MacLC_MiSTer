@@ -200,7 +200,51 @@ bool SimSerialTerminal::Tick(bool fpga_txd_pin) {
         m_rx_byte_count++;
         if (m_uart.RxFrameError())
             m_frame_error_count++;
-        AddReceivedChar(byte);
+
+        bool mute_on = (m_noise_mute == NoiseMute::On);
+        bool mute_auto = (m_noise_mute == NoiseMute::Auto);
+
+        if (mute_on) {
+            // Unconditional mute
+            m_suppressed_count++;
+        } else if (mute_auto) {
+            // Auto: suppress runs of consecutive 0x00 bytes
+            if (byte == 0x00) {
+                m_null_run_count++;
+                if (m_null_run_count >= NULL_RUN_THRESHOLD) {
+                    if (!m_suppressing) {
+                        m_suppressing = true;
+                        // Show a marker when suppression starts
+                        char msg[64];
+                        snprintf(msg, sizeof(msg), "[muted: sync/null noise]");
+                        m_current_line += msg;
+                        m_lines.push_back(m_current_line);
+                        m_current_line.clear();
+                        m_scroll_to_bottom = true;
+                    }
+                    m_suppressed_count++;
+                } else {
+                    AddReceivedChar(byte);
+                }
+            } else {
+                if (m_suppressing && m_suppressed_count > 0) {
+                    char msg[64];
+                    snprintf(msg, sizeof(msg), "[%llu bytes suppressed]",
+                             (unsigned long long)m_suppressed_count);
+                    m_current_line += msg;
+                    m_lines.push_back(m_current_line);
+                    m_current_line.clear();
+                    m_scroll_to_bottom = true;
+                }
+                m_null_run_count = 0;
+                m_suppressed_count = 0;
+                m_suppressing = false;
+                AddReceivedChar(byte);
+            }
+        } else {
+            // Off: show everything
+            AddReceivedChar(byte);
+        }
     }
 
     // TX: drive rxd pin into FPGA
@@ -289,11 +333,14 @@ void SimSerialTerminal::SendInput() {
     m_input_buf[0] = '\0';
 }
 
-void SimSerialTerminal::UpdateSCCStatus(uint8_t wr3, uint8_t wr5, uint8_t wr9, uint8_t wr14) {
+void SimSerialTerminal::UpdateSCCStatus(uint8_t wr3, uint8_t wr4, uint8_t wr5, uint8_t wr9, uint8_t wr14) {
     m_scc_wr3 = wr3;
+    m_scc_wr4 = wr4;
     m_scc_wr5 = wr5;
     m_scc_wr9 = wr9;
     m_scc_wr14 = wr14;
+    // WR4 bits [3:2]: 00 = sync mode, 01 = 1 stop bit (async), 10 = 1.5 stop, 11 = 2 stop
+    m_is_sync_mode = (wr4 & 0x0C) == 0x00;
 }
 
 void SimSerialTerminal::Draw(const char* title, bool* p_open) {
@@ -319,6 +366,11 @@ void SimSerialTerminal::Draw(const char* title, bool* p_open) {
         ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "SCC READY");
     else
         ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "SCC INIT");
+    ImGui::SameLine();
+    if (m_is_sync_mode)
+        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "SYNC");
+    else
+        ImGui::TextDisabled("ASYNC");
     ImGui::SameLine();
     ImGui::TextDisabled("RX:%s TX:%s BRG:%s MIE:%s",
                         rx_en ? "on" : "--", tx_en ? "on" : "--",
@@ -357,6 +409,15 @@ void SimSerialTerminal::Draw(const char* title, bool* p_open) {
     ImGui::Checkbox("Hex", &m_hex_mode);
     ImGui::SameLine();
     ImGui::Checkbox("Auto-scroll", &m_auto_scroll);
+    ImGui::SameLine();
+    {
+        const char* mute_labels[] = { "Off", "Auto", "On" };
+        int mute_idx = (int)m_noise_mute;
+        ImGui::PushItemWidth(60);
+        if (ImGui::Combo("Noise mute", &mute_idx, mute_labels, 3))
+            m_noise_mute = (NoiseMute)mute_idx;
+        ImGui::PopItemWidth();
+    }
 
     ImGui::Separator();
 

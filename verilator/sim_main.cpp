@@ -697,6 +697,7 @@ int main(int argc, char** argv, char** env) {
 		// Serial terminal window
 		serialTerminal.UpdateSCCStatus(
 			VERTOPINTERN->emu__DOT__dc0__DOT__s__DOT__wr3_a,
+			VERTOPINTERN->emu__DOT__dc0__DOT__s__DOT__wr4_a,
 			VERTOPINTERN->emu__DOT__dc0__DOT__s__DOT__wr5_a,
 			VERTOPINTERN->emu__DOT__dc0__DOT__s__DOT__wr9,
 			VERTOPINTERN->emu__DOT__dc0__DOT__s__DOT__wr14_a);
