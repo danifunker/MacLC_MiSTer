@@ -1,11 +1,62 @@
-# Egret Behavioral Boot Problem — 2026-03-30
+# Boot Problems Log
 
-## Summary
+## Current Status (2026-04-06)
 
-The behavioral Egret (`rtl/egret_behavioral.sv`) replaces the real HC05 CPU + firmware
-with a simple state machine. Boot gets past RAM test and memory clear but stalls during
-Egret communication. The screen is uniform grey at frame 350 instead of the expected
-grey/black alternating line pattern (memory test).
+Boot reaches **Stage 7e (SetUpTimeK)** successfully and completes timing calibration.
+The Egret protocol is fully working (68 transactions, memory test visible at frame 350).
+Boot then stalls in the **AppleTalk/LocalTalk driver** serial protocol loop at frame 360+.
+
+**Fix applied:** See "AppleTalk Boot Hang" section below.
+
+---
+
+## AppleTalk Boot Hang — 2026-04-06
+
+### Problem
+
+Boot hangs at frame 360+ in an infinite SCC serial loop at ROM address `0xA49F00`.
+The CPU endlessly writes bytes to SCC TX, polls for TX completion, and loops back.
+
+### Root Cause
+
+The LocalTalk (atlk) driver loads unconditionally during Boot3.a and performs a
+self-test by writing WR14=0x11 to the SCC (BRG enable + local loopback). With the
+SCC's internal loopback active, TX data echoes back to RX perfectly, so:
+
+1. The self-test passes — driver thinks LocalTalk hardware is present
+2. Driver enters an LLAP protocol loop trying to establish a network connection
+3. With loopback, every frame echoes back, creating an infinite loop
+
+Additionally, `SPConfig` (XPRAM byte 0x13) defaulted to 0x00. The ROM checks
+`SPConfig & 0x0F`: zero means "AppleTalk active" (it's the default boot state).
+This prevented the `emAppleTalkInactiveOnBoot` flag from being set.
+
+### Fix (commit 83c226c)
+
+Two changes applied:
+
+1. **PRAM:** Set XPRAM 0x13 = 0x22 (both ports useAsync) in `egret_behavioral.sv`
+   and `cuda_maclc.sv`. With `SPConfig & 0x0F = 2`, AppleTalk is flagged inactive
+   on boot and never loaded.
+
+2. **SCC:** Disabled local loopback in `rtl/scc.v` — RX always reads from the
+   external pin, ignoring WR14 bit 4. The loopback self-test fails harmlessly and
+   the driver skips LocalTalk initialization.
+
+### PRAM Fixes (commit a516d0c)
+
+Also fixed incorrect PRAM defaults that caused InitUtil to reinitialize XPRAM on
+every boot:
+
+- Added extended PRAM validity signature 'NuMc' at bytes 0x0C-0x0F
+- Set XPRAM 0x10 = 0xA8 (SPValid) instead of incorrect 0x02
+- Removed dead `rtl/rtc.v` (legacy Mac Plus serial RTC, unused in Mac LC)
+
+---
+
+## Egret Behavioral Boot Problem — 2026-03-30 (RESOLVED)
+
+### Summary
 
 ## What Works
 
@@ -117,17 +168,11 @@ According to the conversation summary, the previous session had a version that c
 The exact mechanism that made it work for multiple transactions is unclear — it may have
 relied on the 50000-tick timeout path creating specific timing that satisfied the host.
 
-## Recommended Next Steps
+## Resolution
 
-1. **Test attempt 5** — the TREQ timing change is genuinely different from previous attempts
-2. **If attempt 5 fails, use waveform tracing** — enable FST trace (`--trace` flag) around
-   the first Egret transaction and examine the exact CB1/CB2/TIP/TREQ/TACK/IFR signals
-3. **Disassemble the ROM handler** — the jmp(A5) target code determines what the host
-   actually does when IFR[2] fires. Understanding this handler is critical.
-   ROM disassembly is partially available in `docs/MacLC_ROM_disasm.txt`
-4. **Consider the CUDA path** — if `USE_EGRET_CPU` is removed, the system uses CUDA
-   protocol which works. Could compare ROM behavior with CUDA vs Egret to understand
-   the protocol differences at the signal level.
+The Egret protocol issues were resolved in earlier sessions. The behavioral Egret now
+uses the correct Apple protocol (xcvrSes/viaFull/sysSes) and completes 68+ transactions
+successfully. Boot reaches the memory test pattern at frame 350.
 
 ## File References
 
