@@ -178,7 +178,11 @@ module cuda_maclc (
             pram[i] = 8'h00;
         pram[8'h08] = 8'h00;
         pram[8'h09] = 8'h08;
-        pram[8'h10] = 8'h02;  // 4bpp mode
+        pram[8'h0C] = 8'h4E;  // Extended PRAM validity 'N'
+        pram[8'h0D] = 8'h75;  // Extended PRAM validity 'u'
+        pram[8'h0E] = 8'h4D;  // Extended PRAM validity 'M'
+        pram[8'h0F] = 8'h63;  // Extended PRAM validity 'c'
+        pram[8'h10] = 8'hA8;  // SPValid
         pram[8'h78] = 8'h07;  // Volume
         pram[8'h7C] = 8'hA8;  // PRAM signature
         pram[8'h7D] = 8'h00;
