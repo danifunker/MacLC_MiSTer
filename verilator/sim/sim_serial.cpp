@@ -343,6 +343,17 @@ void SimSerialTerminal::Draw(const char* title, bool* p_open) {
         m_frame_error_count = 0;
     }
     ImGui::SameLine();
+    if (ImGui::SmallButton("Copy")) {
+        std::string all_text;
+        for (const auto& line : m_lines) {
+            all_text += line;
+            all_text += '\n';
+        }
+        if (!m_current_line.empty())
+            all_text += m_current_line;
+        ImGui::SetClipboardText(all_text.c_str());
+    }
+    ImGui::SameLine();
     ImGui::Checkbox("Hex", &m_hex_mode);
     ImGui::SameLine();
     ImGui::Checkbox("Auto-scroll", &m_auto_scroll);

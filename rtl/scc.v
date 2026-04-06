@@ -171,9 +171,9 @@ module scc
 	reg wr8_wr_a;
 	reg wr8_wr_b;
 		
-	/* Register/Data access helpers */
-	assign wreg_a  = cs & we & (~rs[1]) &  rs[0];
-	assign wreg_b  = cs & we & (~rs[1]) & ~rs[0];
+	/* Register/Data access helpers - gated by cs_access_done to ensure one access per CS assertion */
+	assign wreg_a  = cs & we & (~rs[1]) &  rs[0] & ~cs_access_done;
+	assign wreg_b  = cs & we & (~rs[1]) & ~rs[0] & ~cs_access_done;
 
 	// FIX: rindex_latch selects the active channel's pointer combinatorially
 	// This ensures reads and writes see the correct channel's register pointer immediately
@@ -197,6 +197,12 @@ module scc
 
 	reg rx_first_a=1;
 	reg rx_first_b=1;
+
+	// Edge detection for chip select - only process one access per CS assertion
+	// The SCC was seeing multiple cen pulses per CPU bus cycle, causing the
+	// state machine to bounce between READY and REGISTER states within a
+	// single write. cs_access_done ensures only one access per CS assertion.
+	reg cs_access_done = 0;
 
 	always@(posedge clk /*or posedge reset*/) begin
 
@@ -252,8 +258,14 @@ module scc
 			wr_data_b<=0;
 			rx_first_a<=1;
 			rx_first_b<=1;
+			cs_access_done <= 0;
 		end else begin
-			if (cen && cs) begin
+			// Track CS edges - only process one access per CS assertion
+			if (cen) begin
+				if (!cs) cs_access_done <= 0;  // Reset when CS deasserts
+			end
+			if (cen && cs && !cs_access_done) begin
+				cs_access_done <= 1;  // Mark as processed for this CS assertion
             if (!rs[1]) begin
                 /* Reset register pointer after completing access to the selected register */
                 /* - Writes: when state==REGISTER, the write targets the selected register; reset afterward */
@@ -898,7 +910,7 @@ end
 
 			// Clear on ADATA write
 
-			if (cs && we && rs[1] && rs[0]) begin
+			if (cs && we && rs[1] && rs[0] && !cs_access_done) begin
 
 				tx_int_latch_a <= 1'b0;
 
@@ -940,7 +952,7 @@ end
 			tx_int_latch_b <= 1'b0;
 		end else begin
 			// Clear on BDATA write (rs[1]=1, rs[0]=0)
-			if (cs && we && rs[1] && !rs[0]) begin
+			if (cs && we && rs[1] && !rs[0] && !cs_access_done) begin
 				tx_int_latch_b <= 1'b0;
 			end
 			// Clear on WR8 write for Channel B
@@ -1167,7 +1179,7 @@ end
     end else begin
         // Combinational detect of ADATA write (channel A data port)
         // Clear TXEMPTY immediately on ADATA write
-        if (cs && we && rs[1] && rs[0]) begin
+        if (cs && we && rs[1] && rs[0] && !cs_access_done) begin
             tx_empty_latch_a <= 1'b0;
             $display("SCC_LATCH: tx_empty_latch_a <= 0 (ADATA write) baud_divid=%d WR4=%02x WR12=%02x WR13=%02x WR14=%02x", baud_divid_speed_a, wr4_a, wr12_a, wr13_a, wr14_a);
         end
@@ -1438,7 +1450,7 @@ end
 
 // Log BDATA writes
 always @(posedge clk) begin
-    if (cs && we && rs[1] && !rs[0]) begin
+    if (cs && we && rs[1] && !rs[0] && !cs_access_done) begin
         $display("SCC_BDATA_WRITE: data=%02x loop=%b tx_busy=%b WR3=%02x WR5=%02x WR4=%02x WR12=%02x WR13=%02x WR14=%02x time=%0t",
                  wdata, local_loopback_b, tx_busy_b, wr3_b, wr5_b, wr4_b, wr12_b, wr13_b, wr14_b, $time);
     end
@@ -1565,7 +1577,7 @@ end
 
 // Log ADATA writes with SCC context
 always @(posedge clk) begin
-    if (cs && we && rs[1] && rs[0]) begin
+    if (cs && we && rs[1] && rs[0] && !cs_access_done) begin
         $display("SCC_ADATA_WRITE: data=%02x loop=%b tx_busy=%b WR3=%02x WR5=%02x WR4=%02x WR12=%02x WR13=%02x WR14=%02x time=%0t",
                  wdata, local_loopback_a, tx_busy_a, wr3_a, wr5_a, wr4_a, wr12_a, wr13_a, wr14_a, $time);
     end
