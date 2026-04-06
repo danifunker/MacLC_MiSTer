@@ -183,6 +183,7 @@ module cuda_maclc (
         pram[8'h0E] = 8'h4D;  // Extended PRAM validity 'M'
         pram[8'h0F] = 8'h63;  // Extended PRAM validity 'c'
         pram[8'h10] = 8'hA8;  // SPValid
+        pram[8'h13] = 8'h22;  // SPConfig: both ports useAsync (AppleTalk inactive)
         pram[8'h78] = 8'h07;  // Volume
         pram[8'h7C] = 8'hA8;  // PRAM signature
         pram[8'h7D] = 8'h00;

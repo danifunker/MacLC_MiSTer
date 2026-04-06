@@ -1372,8 +1372,9 @@ wire auto_echo_a = wr14_a[3];
 wire local_loopback_a = wr14_a[4];
 wire tx_internal_a;  // Internal TX signal
 
-// In local loopback mode, RX receives from internal TX instead of external pin
-wire rx_input_a = local_loopback_a ? tx_internal_a : rxd;
+// Local loopback disabled: self-test will fail harmlessly, prevents AppleTalk
+// driver from thinking LocalTalk hardware is present and entering protocol loop
+wire rx_input_a = rxd;
 
 // Debug loopback signals
 reg tx_internal_a_r = 1'b1;
@@ -1406,8 +1407,9 @@ wire auto_echo_b = wr14_b[3];
 wire local_loopback_b = wr14_b[4];
 wire tx_internal_b;  // Internal TX signal
 
-// In local loopback mode, RX receives from internal TX instead of external pin
-wire rx_input_b = local_loopback_b ? tx_internal_b : rxd_b;
+// Local loopback disabled: self-test will fail harmlessly, prevents AppleTalk
+// driver from thinking LocalTalk hardware is present and entering protocol loop
+wire rx_input_b = rxd_b;
 
 // Debug loopback signals for channel B
 reg tx_internal_b_r = 1'b1;
