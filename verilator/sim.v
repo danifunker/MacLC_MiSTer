@@ -501,6 +501,11 @@ module emu
 		.ram_config_out(pvia_ram_config_out)
 	);
 
+	// ASC sample outputs (Commit C will route to AUDIO_L/R)
+	wire signed [15:0] asc_sample_l;
+	wire signed [15:0] asc_sample_r;
+	wire               asc_sample_tick;
+
 	asc asc_inst(
 		.clk(clk_sys),
 		.reset(~n_reset),
@@ -509,6 +514,9 @@ module emu
 		.data_in(cpuDataOut[7:0]),
 		.data_out(asc_data_out),
 		.we(!_cpuRW && cpuBusControl),
+		.sample_l(asc_sample_l),
+		.sample_r(asc_sample_r),
+		.sample_tick(asc_sample_tick),
 		.irq(asc_irq)
 	);
 
