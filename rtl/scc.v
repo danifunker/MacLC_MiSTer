@@ -207,7 +207,8 @@ module scc
 	always@(posedge clk /*or posedge reset*/) begin
 
 		// FIFO enqueue: add byte to queue if space available
-		if (rx_wr_a) begin
+		// Suppress after loopback cleared (no cable = no valid frames expected)
+		if (rx_wr_a && !post_loopback_a) begin
 			$display("SCC_SERIAL_IN: ch=A byte=%02x time=%0t", data_a, $time);
 			if (rx_queue_pos_a < 3) begin
 				rx_queue_a[rx_queue_pos_a] <= data_a;
@@ -223,7 +224,8 @@ module scc
 		end
 
 		// Channel B FIFO enqueue: add byte to queue if space available (from rxuart_b)
-		if (rx_wr_b) begin
+		// Suppress after loopback cleared
+		if (rx_wr_b && !post_loopback_b) begin
 			$display("SCC_SERIAL_IN: ch=B byte=%02x time=%0t", data_b, $time);
 			if (rx_queue_pos_b < 3) begin
 				rx_queue_b[rx_queue_pos_b] <= data_b;
@@ -750,32 +752,69 @@ module scc
 				rs[0] ? "A" : "B", rdata_mux, rs[0] ? rx_queue_pos_a : rx_queue_pos_b);
 		end
 	end
+	// Z8530 loopback behavior: WR14 bit 4 forces CTS and DCD active internally.
+	// From Z8530 datasheet: "In Local Loopback mode, CTS and DCD inputs are
+	// forced active (low)." This allows the self-test to transmit and receive.
+	// When loopback is off, CTS/DCD reflect pin state (0 = no cable).
+	wire rr0_cts_a = local_loopback_a;  // 1 during loopback, 0 otherwise (no cable)
+	wire rr0_dcd_a = local_loopback_a;
+	wire rr0_cts_b = local_loopback_b;
+	wire rr0_dcd_b = local_loopback_b;
+
+	// Track whether loopback was ever enabled on each channel.
+	// After loopback self-test passes and is cleared, the atlk driver enters
+	// the LLAP protocol. At that point CTS=0 (no cable) should block TX.
+	// We use "loopback was used then cleared" to gate TX empty reporting.
+	reg loopback_was_used_a = 0;
+	reg loopback_was_used_b = 0;
+	always @(posedge clk) begin
+		if (reset_hw) begin
+			loopback_was_used_a <= 0;
+			loopback_was_used_b <= 0;
+		end else begin
+			if (local_loopback_a) loopback_was_used_a <= 1;
+			if (local_loopback_b) loopback_was_used_b <= 1;
+		end
+	end
+
+	// "Post-loopback, no cable" condition: loopback was used and is now off
+	wire post_loopback_a = loopback_was_used_a & ~local_loopback_a;
+	wire post_loopback_b = loopback_was_used_b & ~local_loopback_b;
+
+	// TX buffer empty gating: after loopback self-test, with loopback now off
+	// and no cable connected, report TX buffer as not empty. A real Z8530 with
+	// Auto Enable and CTS=0 won't drain the TX buffer, so the driver's TX
+	// routine stalls and eventually gives up.
+	wire tx_empty_gated_a = post_loopback_a ? 1'b0 : tx_empty_latch_a;
+	wire tx_empty_gated_b = post_loopback_b ? 1'b0 : tx_empty_latch_b;
+
 	/* RR0 */
-	assign rr0_a = { 1'b0, /* Break */
-			 eom_latch_a, /* Tx Underrun/EOM - use latch instead of hardcoded 1 */
-			 1'b1, /* CTS - hardcode to 1 (always ready) for now */
-			 1'b0, /* Sync/Hunt */
-			 1'b1, /* DCD - hardcode to 1 (carrier detected) */
-			 tx_empty_latch_a, /* Tx Empty - use latch like Clemens does */
+	assign rr0_a = { post_loopback_a, /* Break/Abort - 1 after loopback cleared (no cable) */
+			 eom_latch_a, /* Tx Underrun/EOM */
+			 rr0_cts_a, /* CTS - forced 1 in loopback, 0 otherwise (no cable) */
+			 post_loopback_a, /* Sync/Hunt - 1 after loopback cleared (permanently hunting) */
+			 rr0_dcd_a, /* DCD - forced 1 in loopback, 0 otherwise (no cable) */
+			 tx_empty_gated_a, /* Tx Empty - blocked after loopback cleared (no cable) */
 			 1'b0, /* Zero Count */
-			 (rx_queue_pos_a > 0)  /* Rx Available - based on FIFO not empty */
+			 post_loopback_a ? 1'b0 : (rx_queue_pos_a > 0)  /* Rx Available */
 			 };
 
 	// Debug: Show RR0 composition when reading from control register
 	always @(posedge clk) begin
 		if (cen && cs && !we && !rs[1] && rs[0] && rindex == 0) begin
-			$display("SCC_RR0_READ: ch=A rr0=%02x eom=%b tx_empty=%b rx_avail=%b (fifo_pos=%d)",
-			         rr0_a, eom_latch_a, tx_empty_latch_a, (rx_queue_pos_a > 0), rx_queue_pos_a);
+			$display("SCC_RR0_READ: ch=A rr0=%02x eom=%b tx_empty=%b rx_avail=%b cts=%b dcd=%b loopback=%b post_lb=%b (fifo_pos=%d)",
+			         rr0_a, eom_latch_a, tx_empty_gated_a, (rx_queue_pos_a > 0),
+			         rr0_cts_a, rr0_dcd_a, local_loopback_a, post_loopback_a, rx_queue_pos_a);
 		end
 	end
-	assign rr0_b = { 1'b0, /* Break */
-			 eom_latch_b, /* Tx Underrun/EOM - use latch instead of hardcoded 1 */
-			 1'b1, /* CTS - HARDCODED to 1 (no modem on channel B) */
-			 1'b0, /* Sync/Hunt */
-			 1'b1, /* DCD - HARDCODED to 1 (no modem on channel B) */
-			 tx_empty_latch_b, /* Tx Empty - use latch */
+	assign rr0_b = { post_loopback_b, /* Break/Abort */
+			 eom_latch_b, /* Tx Underrun/EOM */
+			 rr0_cts_b, /* CTS - forced 1 in loopback, 0 otherwise */
+			 post_loopback_b, /* Sync/Hunt */
+			 rr0_dcd_b, /* DCD - forced 1 in loopback, 0 otherwise */
+			 tx_empty_gated_b, /* Tx Empty - blocked after loopback cleared */
 			 1'b0, /* Zero Count */
-			 (rx_queue_pos_b > 0)  /* Rx Available - based on FIFO not empty */
+			 post_loopback_b ? 1'b0 : (rx_queue_pos_b > 0)  /* Rx Available */
 			 };
 
 	/* RR1 */
@@ -1045,9 +1084,9 @@ end
 	/* Internal IP bit set if latch different from source and
 	 * corresponding interrupt is enabled in WR15
 	 */
-	assign dcd_ip_a = (dcd_a != dcd_latch_a) & wr15_a[3];
-	assign cts_ip_a = (cts_a != cts_latch_a) & wr15_a[5];
-	assign dcd_ip_b = (dcd_b != dcd_latch_b) & wr15_b[3];
+	assign dcd_ip_a = (rr0_dcd_a != dcd_latch_a) & wr15_a[3];
+	assign cts_ip_a = (rr0_cts_a != cts_latch_a) & wr15_a[5];
+	assign dcd_ip_b = (rr0_dcd_b != dcd_latch_b) & wr15_b[3];
 
 	/* Latches close when an enabled IP bit is set and latches
 	 * are currently open
@@ -1103,25 +1142,25 @@ end
 	always@(posedge clk or posedge reset or posedge reset_a) begin
 		if (reset || reset_a) begin
 			// Initialize latches to match actual signal values
-			// DCD is tied to 1 in wrapper, CTS = ~tx_busy = ~0 = 1 after UART reset
-			dcd_latch_a <= 1;
-			cts_latch_a <= 1;
+			// Initialize latches to 0 (no cable = CTS/DCD deasserted)
+			dcd_latch_a <= 0;
+			cts_latch_a <= 0;
 			/* cts ... */
 		end else if(cep) begin
 			if (do_latch_a)
-			  dcd_latch_a <= dcd_a;
-			  cts_latch_a <= cts_a;
+			  dcd_latch_a <= rr0_dcd_a;
+			  cts_latch_a <= rr0_cts_a;
 			/* cts ... */
 		end
 	end
 	always@(posedge clk or posedge reset or posedge reset_b) begin
 		if (reset || reset_b) begin
-			// Initialize latch to match actual signal value (DCD tied to 1)
-			dcd_latch_b <= 1;
+			// Initialize latches to 0 (no cable = DCD deasserted)
+			dcd_latch_b <= 0;
 			/* cts ... */
 		end else if(cep) begin
 			if (do_latch_b)
-			  dcd_latch_b <= dcd_b;
+			  dcd_latch_b <= rr0_dcd_b;
 			/* cts ... */
 		end
 	end
@@ -1372,9 +1411,10 @@ wire auto_echo_a = wr14_a[3];
 wire local_loopback_a = wr14_a[4];
 wire tx_internal_a;  // Internal TX signal
 
-// Local loopback disabled: self-test will fail harmlessly, prevents AppleTalk
-// driver from thinking LocalTalk hardware is present and entering protocol loop
-wire rx_input_a = rxd;
+// Local loopback: when WR14 bit 4 is set, TX echoes to RX internally
+// (Z8530 datasheet behavior). Self-test passes. When loopback is later
+// cleared, CTS returns to 0 (no cable) and TX is blocked.
+wire rx_input_a = local_loopback_a ? tx_internal_a : rxd;
 
 // Debug loopback signals
 reg tx_internal_a_r = 1'b1;
@@ -1407,9 +1447,9 @@ wire auto_echo_b = wr14_b[3];
 wire local_loopback_b = wr14_b[4];
 wire tx_internal_b;  // Internal TX signal
 
-// Local loopback disabled: self-test will fail harmlessly, prevents AppleTalk
-// driver from thinking LocalTalk hardware is present and entering protocol loop
-wire rx_input_b = rxd_b;
+// Local loopback: when WR14 bit 4 is set, TX echoes to RX internally.
+// When loopback is off, CTS=0 blocks TX so no data reaches this path anyway.
+wire rx_input_b = local_loopback_b ? tx_internal_b : rxd_b;
 
 // Debug loopback signals for channel B
 reg tx_internal_b_r = 1'b1;
@@ -1622,8 +1662,6 @@ txuart txuart_a
 	.o_uart_tx(tx_internal_a),  // Connect to internal signal for loopback
 	.o_busy(tx_busy_a)); // TODO -- do we need this busy line?? probably
 
-	wire cts_a = ~tx_busy_a;
-
 // External TX output
 assign txd = tx_internal_a;
 
@@ -1659,8 +1697,6 @@ txuart txuart_b
 	.i_cts_n(1'b0),
 	.o_uart_tx(tx_internal_b),
 	.o_busy(tx_busy_b));
-
-	wire cts_b = ~tx_busy_b;
 
 // External TX output for Channel B
 assign txd_b_out = tx_internal_b;

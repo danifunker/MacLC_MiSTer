@@ -530,8 +530,17 @@ module egret_behavioral (
                         begin : wr_xpram_block
                             integer k;
                             for (k = 0; k < 20; k = k + 1) begin
-                                if (4 + k < recv_count)
-                                    pram[recv_buf[3] + k[7:0]] <= recv_buf[4 + k];
+                                if (4 + k < recv_count) begin
+                                    // Protect SPConfig (byte 0x13): prevent ROM from
+                                    // overwriting our "AppleTalk inactive" setting
+                                    if ((recv_buf[3] + k[7:0]) != 8'h13)
+                                        pram[recv_buf[3] + k[7:0]] <= recv_buf[4 + k];
+`ifdef SIMULATION
+                                    else
+                                        $display("EGRET_BEH: WR_XPRAM BLOCKED write to 0x13 (SPConfig), ROM wanted 0x%02x, keeping 0x%02x",
+                                                 recv_buf[4 + k], pram[8'h13]);
+`endif
+                                end
                             end
                         end
                         send_length <= 4'd3;
