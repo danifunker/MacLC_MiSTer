@@ -76,7 +76,7 @@ module emu
 	output        debug_selectIWM,
 	output        debug_selectASC,
 	output        debug_selectVRAM,
-	output [23:0] debug_cpuAddr,
+	output [31:0] debug_cpuAddr,
 	output [15:0] debug_cpuDataIn,    // Data from CPU to peripherals
 	output [15:0] debug_cpuDataOut,   // Data from peripherals to CPU
 	output        debug_cpuRW,        // 1=read, 0=write
@@ -210,7 +210,9 @@ module emu
 	wire [2:0] _cpuIPL;
 	wire [2:0] cpuFC;
 	wire [7:0] cpuAddrHi;
-	wire [23:0] cpuAddr;
+	wire [31:0] cpuAddr;
+	assign cpuAddr[0] = 1'b0;
+	wire [7:0]  cpuAddrFullHi = cpuAddr[31:24];
 	wire [15:0] cpuDataOut;
 
 	// RAM/ROM
@@ -227,7 +229,7 @@ module emu
 	wire v8_video_latch = memoryLatch && videoBusControl;
 	// peripherals
 	wire vid_alt;
-	wire memoryOverlayOn, selectSCSI, selectSCC, selectIWM, selectVIA, selectRAM, selectROM;
+	wire memoryOverlayOn, selectSCSI, selectSCC, selectIWM, selectVIA, selectRAM, selectROM, selectUnmapped;
 	wire [15:0] dataControllerDataOut;
 
 	// audio
@@ -267,7 +269,7 @@ module emu
 	assign      cpuFC[0]      = tg68_fc0;
 	assign      cpuFC[1]      = tg68_fc1;
 	assign      cpuFC[2]      = tg68_fc2;
-	assign      cpuAddr[23:1] = tg68_a[23:1];
+	assign      cpuAddr[31:1] = tg68_a[31:1];
 	assign      cpuDataOut    = tg68_dout;
 
 	wire        tg68_rw;
@@ -284,6 +286,23 @@ module emu
 	wire [31:0] tg68_a;
 	wire        tg68_reset_n;
 	wire [1:0]  tg68_busstate;
+
+	// BERR: autovector path only for now. Unmapped-BERR disabled — see
+	// docs/plan_040526.md: enabling it regresses boot because the CPU
+	// emits high-bit addresses ($50xxxxxx etc.) early in ROM execution.
+	wire cpu_berr = (cpuFC == 3'b111);
+`ifdef SIMULATION
+	reg _cpuAS_d;
+	always @(posedge clk_sys) _cpuAS_d <= _cpuAS;
+	always @(posedge clk_sys) begin
+		if (_cpuAS_d && !_cpuAS && cpuBusControl && selectUnmapped)
+			$display("[F%0d] BERR_UNMAPPED: addr=%h fc=%b rw=%b", sim_frame_count, cpuAddr, cpuFC, _cpuRW);
+`ifdef VERBOSE_TRACE
+		if (_cpuAS_d && !_cpuAS && |cpuAddrFullHi)
+			$display("[F%0d] HIGH_ADDR: hi=%h addr=%h fc=%b rw=%b", sim_frame_count, cpuAddrFullHi, cpuAddr, cpuFC, _cpuRW);
+`endif
+	end
+`endif
 
 	tg68k tg68k (
 		.clk        ( clk_sys      ),
@@ -417,6 +436,7 @@ module emu
 		.selectAriel(selectAriel),
 		.selectPseudoVIA(selectPseudoVIA),
 		.selectVRAM(selectVRAM),
+		.selectUnmapped(selectUnmapped),
 		.v8_video_addr(v8_video_addr),
 		.v8_hblank(v8_hblank),
 		.v8_vblank(v8_vblank),

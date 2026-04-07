@@ -12,7 +12,7 @@ module addrController_top(
 
 	// 68000 CPU memory interface:
 	input _cpuReset,
-	input [23:0] cpuAddr,
+	input [31:0] cpuAddr,
 	input _cpuUDS,
 	input _cpuLDS,
 	input _cpuRW,

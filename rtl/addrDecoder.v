@@ -99,9 +99,6 @@ module addrDecoder(
         selectUnmapped = 0;
 
         if (!_cpuAS) begin
-            if (!_cpuRW) begin
-                // $display("AD: WRITE addr=%h fc=%d @%0t", address, address[23:21], $time); // Wait! I'll use the proper FC signal later
-            end
             // ==========================================================
             // Mac LC (V8) Memory Map - CPU Addresses
             // ==========================================================
