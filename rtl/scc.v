@@ -762,12 +762,13 @@ module scc
 	end
 	// Z8530 loopback behavior: WR14 bit 4 forces CTS and DCD active internally.
 	// From Z8530 datasheet: "In Local Loopback mode, CTS and DCD inputs are
-	// forced active (low)." This allows the self-test to transmit and receive.
-	// When loopback is off, CTS/DCD reflect pin state (0 = no cable).
-	wire rr0_cts_a = local_loopback_a;  // 1 during loopback, 0 otherwise (no cable)
-	wire rr0_dcd_a = local_loopback_a;
-	wire rr0_cts_b = local_loopback_b;
-	wire rr0_dcd_b = local_loopback_b;
+	// Per MAME z80scc.cpp: loopback forces CTS/DCD active internally for
+	// TX/RX state machines but does NOT change RR0 bits 5/3. RR0 reflects
+	// external pin state only. No cable connected = 0.
+	wire rr0_cts_a = 1'b0;
+	wire rr0_dcd_a = 1'b0;
+	wire rr0_cts_b = 1'b0;
+	wire rr0_dcd_b = 1'b0;
 
 	// Track whether loopback was ever enabled on each channel.
 	// After loopback self-test passes and is cleared, the atlk driver enters
@@ -1431,9 +1432,7 @@ wire auto_echo_a = wr14_a[3];
 wire local_loopback_a = wr14_a[4];
 wire tx_internal_a;  // Internal TX signal
 
-// Local loopback: when WR14 bit 4 is set, TX echoes to RX internally
-// (Z8530 datasheet behavior). Self-test passes. When loopback is later
-// cleared, CTS returns to 0 (no cable) and TX is blocked.
+// Local loopback: internal TX connects to RX for self-test (WR14 bit 4)
 wire rx_input_a = local_loopback_a ? tx_internal_a : rxd;
 
 // Debug loopback signals
@@ -1467,8 +1466,7 @@ wire auto_echo_b = wr14_b[3];
 wire local_loopback_b = wr14_b[4];
 wire tx_internal_b;  // Internal TX signal
 
-// Local loopback: when WR14 bit 4 is set, TX echoes to RX internally.
-// When loopback is off, CTS=0 blocks TX so no data reaches this path anyway.
+// Local loopback: internal TX connects to RX for self-test (WR14 bit 4)
 wire rx_input_b = local_loopback_b ? tx_internal_b : rxd_b;
 
 // Debug loopback signals for channel B

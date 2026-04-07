@@ -946,7 +946,7 @@ module emu
 	pseudovia pvia(
 		.clk_sys(clk_sys),
 		.reset(~n_reset),
-		.addr(cpuAddr[12:0]),
+		.addr({cpuAddr[12:1], tg68_a[0]}),
 		.data_in(cpuDataOut[7:0]),
 		.data_out(pseudovia_dout),
 		.we(selectPseudoVIA && !_cpuRW && cpuBusControl),

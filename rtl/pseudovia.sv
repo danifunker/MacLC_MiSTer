@@ -52,8 +52,7 @@ reg [7:0] port_b;
 reg [7:0] ram_cfg;      // Writable RAM config register
 reg [7:0] ifr;          // Interrupt flag register
 reg [7:0] slot_ier;     // Slot interrupt enable register
-reg [7:0] ier;          // Native mode IER (register $13, has IIci POST quirk)
-reg [7:0] ier_compat;   // VIA-compat mode IER (used for IRQ calculation)
+reg [7:0] ier;          // IER (shared between native $13 and compat reg 14, per MAME RBV)
 
 // Slot interrupt status - active LOW
 // Bit 6: VBlank (active low = VBlank is happening)
@@ -67,8 +66,12 @@ wire [7:0] slot_irqs = (~slot_status) & 8'h78;  // Check bits 3-6 (slots + vblan
 wire [7:0] slot_irqs_masked = slot_irqs & (slot_ier & 8'h78);
 wire any_slot_irq = |slot_irqs_masked;
 
-wire [7:0] active_ifr = ifr & ier_compat & 8'h1B;
-wire irq_pending = |active_ifr;
+// Per MAME pseudovia.cpp: non-AIV3 uses m_pseudovia_ier for IRQ masking.
+// However, the Mac LC ROM only writes to slot_ier (native $12) and never
+// sets the compat IER. Use any_slot_irq directly — slot_ier already gates
+// individual slot/VBL sources, so this is equivalent for our use case.
+wire [7:0] active_ifr = ifr & 8'h1B;
+wire irq_pending = any_slot_irq;
 
 // Debug counter
 integer pvia_reg10_reads = 0;
@@ -91,7 +94,6 @@ always @(posedge clk_sys) begin
         ifr <= 8'h00;
         slot_ier <= 8'h00;
         ier <= 8'h00;
-        ier_compat <= 8'h00;
         irq_out <= 1'b0;
         video_config <= 8'h03;  // Default to 8bpp mode
     end else begin
@@ -252,9 +254,9 @@ always @(posedge clk_sys) begin
                         end
                         4'd14: begin  // IER (standard VIA set/clear behavior)
                             if (data_in[7])
-                                ier_compat <= ier_compat | (data_in & 8'h7F);
+                                ier <= ier | (data_in & 8'h7F);
                             else
-                                ier_compat <= ier_compat & ~(data_in & 8'h7F);
+                                ier <= ier & ~(data_in & 8'h7F);
                             `ifdef VERBOSE_TRACE
                             $display("PVIA COMPAT: WRITE IER = %02x @%0t", data_in, $time);
                             `endif
@@ -274,9 +276,9 @@ always @(posedge clk_sys) begin
                             `endif
                         end
                         4'd14: begin  // IER
-                            data_out <= ier_compat;
+                            data_out <= ier;
                             `ifdef VERBOSE_TRACE
-                            $display("PVIA COMPAT: READ IER -> %02x @%0t", ier_compat, $time);
+                            $display("PVIA COMPAT: READ IER -> %02x @%0t", ier, $time);
                             `endif
                         end
                         default: begin
