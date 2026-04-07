@@ -1,12 +1,185 @@
 # Boot Problems Log
 
-## Current Status (2026-04-06)
+## Current Status (2026-04-07)
 
-Boot reaches **Stage 7e (SetUpTimeK)** successfully and completes timing calibration.
-The Egret protocol is fully working (68 transactions, memory test visible at frame 350).
-Boot then stalls in the **AppleTalk/LocalTalk driver** serial protocol loop at frame 360+.
+Boot reaches the atlk/LocalTalk driver self-test and hangs at ROM address
+`0xA49F00` starting at frame 356. The hang is deterministic: ~367 iterations
+per frame of a 5-instruction polling loop inside an outer LLAP handshake
+state machine, 100% CPU-bound, zero instructions executed outside the
+`0xA498xx–0xA49Fxx` atlk range in frames 370–400.
 
-**Fix applied:** See "AppleTalk Boot Hang" section below.
+**Not yet resolved.** Three commits landed during investigation; see below.
+
+---
+
+## 2026-04-07 Investigation Session
+
+### Commits landed
+
+1. **`a89c671`** — pseudovia A0 routing, unified IER, SCC loopback re-enabled
+   - `MacLC.sv:949`: pseudovia now sees `tg68_a[0]` (was hardwired to 0).
+     Odd-address writes to pseudovia native IER (`$13`) were aliasing to
+     Slot IER (`$12`).
+   - `rtl/pseudovia.sv`: collapsed `ier`/`ier_compat` into one register per
+     MAME `pseudovia.cpp:167` (non-AIV3 chips share IER between native
+     `$13` and compat reg 14). LC ROM never writes to either IER path so
+     `irq_pending` now drives from `any_slot_irq` directly.
+   - `rtl/scc.v`: re-enabled `rx_input_a = local_loopback_a ? tx_internal_a
+     : rxd` and same for B. Removed the `rr0_cts_a = local_loopback_a` /
+     `rr0_dcd_a = local_loopback_a` hack per MAME `z80scc.cpp` — loopback
+     forces CTS/DCD internally for the TX/RX state machines but does NOT
+     change RR0 bits 5/3, which reflect pin state only.
+   - Verified: SCC self-test passes, VBlank IRQs now assert at level 2
+     (confirmed via temporary `IPL_CHANGE` debug — `_cpuIPL` transitions
+     from `111` to `101`).
+
+2. **`1020346`** — verilator trace now filters extension words
+   - TG68 issues a bus fetch for every code-space word; the previous trace
+     logged all of them, so a single `move.w #imm, Dn` appeared as two
+     entries with the extension word disassembled as nonsense
+     (`ori.b #0, D0`). Loop iteration counts were inflated proportionally.
+   - New `disassemble_68k_ext_len()` helper returns Musashi's instruction
+     length; `sim_main.cpp` buffers consecutive sequential fetches and
+     advances past extension words using that length. Non-sequential
+     fetches (branches) flush the buffer first.
+
+3. **`d467c4d`** — SCC: mark CS access consumed on WR9 hardware-reset writes
+   - When the ROM writes `0xC0` to WR9 (hardware-reset command), the
+     combinatorial `reset` signal fires and the top-level `if (reset)`
+     branch runs. The old code cleared `cs_access_done` back to 0, which
+     caused the same CS assertion to be re-processed on the next `cen`
+     pulse as a spurious WR0 write (with the reset data `0xC0`). Fix:
+     `cs_access_done <= ~reset_hw` — external hardware reset clears as
+     before, CPU-initiated reset marks the cycle consumed.
+   - Functional impact was benign (WR0 has no backing storage; subsequent
+     RR0 reads naturally cleared the stale state), but the fix is a
+     correctness cleanup and made the debug trace coherent.
+   - **Did NOT unblock the boot hang.**
+
+### Observations after the three commits
+
+Clean trace of the inner loop at `0xA49F00`:
+
+```asm
+A49F00: move.w  #$1, D0
+A49F04: move.b  D0, ($2,A3,D3.l)    ; TX byte to SCC ch A data ($50F04006)
+A49F08: btst    #$0, ($2,A3)        ; poll RR0 bit 0 (Rx Char Available)
+A49F0E: beq     $a49f00              ; loop until echo — NEVER TAKEN (echo works)
+A49F10: jmp     (A6)                 ; return to caller
+```
+
+All three PCs (`A49F00`, `A49F08`, `A49F10`) have identical execution counts,
+meaning the `beq` is never taken — the loopback echo arrives every iteration.
+The loop exits via `jmp (A6)` into the outer LLAP state machine at
+`0xA498EC`/`0xA49FCA`, which comes back around to call this inner loop again.
+
+Outer LLAP state machine (reconstructed from the trace):
+
+- `0xA498EC`: `lea ($6,PC),A6 / jmp ($6d8,PC)` — sets A6=`0xA498F4`, jumps to
+  the `Snd` subroutine at `0xA49FCA`.
+- `0xA49FCA`: `move.w #$8000,D0 / btst #$11,D7 / beq $a49ff8` — checks state
+  bit 17 of D7; if clear, skip to end.
+- `0xA49FD4`: `btst #$0,($2,A3) / beq $a49ff8` — checks RR0 bit 0.
+- `0xA49FDC`: `moveq #$1,D0 / move.b D0,($2,A3,D3.l)` — TX byte.
+- `0xA49FE2`: `move.b ($2,A3),D0 / andi.b #$70,D0 / beq $a49ff2` — read RR0,
+  mask ext/status bits 4–6, skip if none.
+- `0xA49FFA` onward: `tst.w D0 / bmi / cmp2.b / andi.b #$7f,D0 /
+  cmpi.b #$2a,D0 / bne / bset #$0,D7` — compares received byte against
+  `0x2A` (AppleTalk sync byte), sets D7 bit 0 on match.
+
+D7 bit manipulations observed in the trace:
+
+- `0xA49EC0 bset #$11,D7` — sets **bit 17** (happens once at frame 356)
+- `0xA49904 bset #$13,D7` — sets **bit 19**
+- `0xA49914 bclr #$13,D7` — clears bit 19
+- `0xA49904 bset #$0,D7` — sets bit 0 (AppleTalk sync seen)
+- `0xA49A10 bclr #$0,D7 / bclr #$17,D7` — clears bit 0 and bit 23
+
+Bit 17 is set once at frame 356 and **never cleared** in the trace range.
+The loop tests `btst #$11,D7` at `0xA49FCE` and falls through every iteration
+because bit 17 is sticky. Bit 19 toggles set/clear within the loop. The loop
+does NOT contain a byte counter or a timeout — it's a pure state-machine
+handshake that runs deterministically at ~367 Snd calls per frame, with no
+forward progress.
+
+### SCC register-write reverse engineering
+
+After the state-machine fix, the `SCC_WREG_A`/`SCC_WREG_A_PTR` debug prints
+give a clean view of the ROM's SCC channel-A initialization sequence:
+
+- **Registers written**: WR0, WR1, WR2, WR3, WR5, WR7, WR9, WR10, WR12, WR14, WR15
+- **WR4 is NEVER observed** being written on channel A — stays at reset default
+  (our RTL resets to `0x00` = 8-bit sync mode; Z8530 datasheet says reset
+  default is `0x04` = async 1-stop, minor discrepancy worth fixing)
+- **WR3 = 0x0F** → 8-bit RX + **hunt mode** (bit 4) + RX enable. Hunt mode is
+  only meaningful in sync/SDLC modes.
+- **WR7 = 0x0D then 0x0E** → sync character value. Only used in sync modes.
+- **WR10 = 0x0B** → `0000_1011` = NRZ + Tx CRC enable + Mark Idle (bit 3).
+  WR10 is entirely a sync/SDLC control register.
+- **WR14 = 0x11** → Local Loopback + BRG enable.
+- **WR15 = 0x08** → DCD ext/status interrupt enable (also Abort/Underrun in
+  SDLC mode).
+
+**Conclusion: the ROM is programming sync/SDLC-mode behavior**, but our SCC
+has no sync or SDLC framing — it just echoes bytes as if in async mode.
+Whether the driver is in monosync or SDLC mode specifically is ambiguous
+without a WR4 value; the WR10 underrun bits and hunt-mode use suggest SDLC.
+
+### What would SDLC + DPLL actually fix?
+
+Analysis after careful look at the polling loop:
+
+**Probably necessary but not clearly sufficient.**
+
+- In SDLC mode, a single byte written to TX does NOT transmit immediately —
+  it waits for an EOM or more payload before framing. So in true SDLC, the
+  polling loop at `0xA49F00` (write 1 byte, wait for echo) should never see
+  an echo because the byte sits in the TX FIFO. But in our sim, the echo
+  arrives every time (because we don't implement SDLC framing), so the
+  `beq` is never taken. This matches **async mode** behavior, suggesting
+  the driver may actually be in async mode for this specific subroutine.
+
+- On real hardware with no cable: DPLL never locks, RX never delivers a
+  byte, driver's internal counter (stored somewhere in memory, not D7)
+  times out and exits. SDLC+DPLL would reproduce this by making the
+  loopback return no bytes when framing is invalid.
+
+- BUT: bits 17 and 19 of D7 are set by explicit `bset` instructions
+  at `0xA49EC0` and `0xA49904`, not by an interrupt handler. Those
+  instructions DO execute (observed in frame 356). So the state machine
+  IS advancing — it's just stuck in a steady-state orbit.
+
+- **Open question**: where is the loop's actual exit condition? It may be
+  a memory-location counter (A2-relative, A6-relative, etc) that we
+  haven't identified. Searching for it would be the next investigative
+  step before committing to SDLC+DPLL.
+
+### Debug infrastructure left in tree
+
+See `docs/extradebugging.md` for the current list. Summary:
+
+- `rtl/scc.v`: `SCC_WREG_A[_PTR]` / `SCC_WREG_B[_PTR]` prints — still useful,
+  keep until SCC init is settled.
+- Earlier temporary debug (`SCC_STATE_A`, `SCC_CS`, `SCC_RREG_*`,
+  `PVIA_VBL_DEBUG`, `PVIA_WRITE`, `IPL_CHANGE`) has been removed.
+
+### Recommended next steps (ranked)
+
+1. **Dedicated `wr4_a <= wdata` $display** — 15 min sanity check that WR4 is
+   really never written, not just missed by the control-register state
+   tracer. Rules out our debug having a blind spot.
+2. **Grep the ROM for the atlk loop exit condition** — find what clears bit
+   17 of D7 (or sets a different exit flag). If it's a memory counter, we
+   can figure out what increments it.
+3. **Investigate skipping the atlk driver load** — the ROM's LoadDrivers
+   phase runs unconditionally; find the decision point. PRAM SPConfig byte
+   `0x13` was tried previously and didn't prevent loading — that's the
+   Mac Plus path, LC may use a different mechanism.
+4. **Full SDLC + DPLL** (`docs/plan_040726.md`) — big commitment; defer
+   until #1–#3 are ruled out.
+
+The session ended without unblocking the boot hang, but with a much better
+understanding of the atlk loop structure and cleaner debug infrastructure.
 
 ---
 
