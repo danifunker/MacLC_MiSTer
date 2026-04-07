@@ -1,5 +1,9 @@
 // Ariel RAMDAC (343S1045/344S0145)
 // Palette controller for Mac LC V8 video
+//
+// On real hardware the RAMDAC is clocked by V8's CULTDAC0 output (pixel
+// clock). Here we use clk_sys directly; the pixel-clock divider lives in
+// maclc_v8_video.sv. See plan_040526.md Step 4.
 
 module ariel_ramdac(
     input clk_sys,

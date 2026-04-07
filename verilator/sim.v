@@ -235,6 +235,7 @@ module emu
 	// Video latch: only pulse when memoryLatch AND in video bus cycle
 	wire v8_video_latch = memoryLatch && videoBusControl;
 	// peripherals
+	wire pds_slot_irq = 1'b0;  // PDS slot interrupt — single point for future PDS work
 	wire vid_alt;
 	wire memoryOverlayOn, selectSCSI, selectSCC, selectIWM, selectVIA, selectRAM, selectROM, selectUnmapped;
 	wire [15:0] dataControllerDataOut;
@@ -495,7 +496,7 @@ module emu
 		.we(selectPseudoVIA && !_cpuRW && cpuBusControl),
 		.req(selectPseudoVIA && cpuBusControl),
 		.vblank_irq(v8_vblank),
-		.slot_irq(1'b0),
+		.slot_irq(pds_slot_irq),
 		.asc_irq(asc_irq),
 		.irq_out(pseudovia_irq),
 		.ram_config(configRAMSize),

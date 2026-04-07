@@ -1343,8 +1343,14 @@ wr_3_a[7:6]  -- bits per char
 // Baud rate generator (BRG) and multiplier pipeline (simplified Clemens model)
 // Compute clocks_per_baud for txuart/rxuart based on WR12/WR13, WR14 (BRG enable), and WR4 multiplier
 // Z8530 async formula: BAUD = Source_Clock / (2 * (WR12/13 + 2) * ClockMode)
-// Since our UART uses the core 14.32MHz clock, and we choose Source_Clock=PCLK=14.32MHz,
-// clocks_per_baud simplifies to 2 * (N) * ClockMode, where N=(WR13:WR12)+2 and ClockMode ∈ {1,16,32,64}
+//
+// Two paths (selected at compile time):
+//   Default:        ratio = 32.5 / 3.6864 ≈ 8.82  (fixed-point 1129/128)
+//   SCC_USE_RTXC:   ratio = 32.5 / 3.672  ≈ 8.85  (fixed-point 1133/128)
+//
+// The Mac LC's real RTxC is 3.672 MHz (V8 SCSI_PCLK). The default path
+// preserves the legacy 3.6864 MHz assumption for safe regression; enable
+// SCC_USE_RTXC once the new clock path is validated.
         always @(posedge clk) begin
                 // Multiplier from WR4[7:6]: 00->1, 01->16, 10->32, 11->64
                 reg [7:0] mult;
@@ -1386,10 +1392,16 @@ wr_3_a[7:6]  -- bits per char
                             // Normal BRG calculation for configured values
                             // base = 2 * N * mult
                             mult_n = ( ( {16'd0, n} << 1 ) * mult );
-                            // BRG runs from XTAL (3.6864 MHz), UART clock is system clock.
-                            // Map BRG timing to UART divider: clocks_per_baud = base * (SysClk/XTAL)
-                            // Mac LC: SysClk=32.5 MHz, ratio=32.5/3.6864 ≈ 8.82, fixed-point 1129/128
+`ifdef SCC_USE_RTXC
+                            // RTxC path: source clock is V8 SCSI_PCLK = 3.672 MHz
+                            // clocks_per_baud = base * (SysClk / RTxC) = base * (32.5 / 3.672)
+                            // Fixed-point: 1133/128 ≈ 8.8516 (error < 0.01%)
+                            cpb = (mult_n * 32'd1133) >> 7;
+`else
+                            // Legacy path: assumes XTAL = 3.6864 MHz
+                            // Fixed-point: 1129/128 ≈ 8.8203
                             cpb = (mult_n * 32'd1129) >> 7;
+`endif
                             if (cpb[23:0] == 24'd0)
                                 baud_divid_speed_a <= 24'd1;
                             else
@@ -1551,7 +1563,13 @@ always @(posedge clk) begin
             baud_divid_speed_b <= 24'd4;
         end else begin
             mult_n_b = (({16'd0, n_b} << 1) * mult_b);
+`ifdef SCC_USE_RTXC
+            // RTxC path: V8 SCSI_PCLK = 3.672 MHz, ratio = 1133/128
+            cpb_b = (mult_n_b * 32'd1133) >> 7;
+`else
+            // Legacy path: XTAL = 3.6864 MHz, ratio = 1129/128
             cpb_b = (mult_n_b * 32'd1129) >> 7;
+`endif
             baud_divid_speed_b <= (cpb_b[23:0] == 24'd0) ? 24'd1 : cpb_b[23:0];
         end
     end else begin

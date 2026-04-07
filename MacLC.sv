@@ -724,6 +724,7 @@ module emu
 	// Video latch: only pulse when memoryLatch AND in video bus cycle
 	wire v8_video_latch = memoryLatch && videoBusControl;
 	// peripherals
+	wire pds_slot_irq = 1'b0;  // PDS slot interrupt — single point for future PDS work
 	wire vid_alt;
 	wire memoryOverlayOn, selectSCSI, selectSCC, selectIWM, selectVIA, selectRAM, selectROM, selectASC, selectUnmapped;
 	wire [23:0] overlay_trigger_addr;
@@ -912,7 +913,9 @@ module emu
 							   status[17] ? 3'd4 : 3'd2;       // 16bpp override
 	*/
 
-	// Monitor ID Selection
+	// Monitor ID Selection — OSD-driven via status[11:10] instead of V8
+	// SENSE0/SENSE2 pins.  This is intentional for emulation: real hardware
+	// reads the monitor sense lines on the DB-15 connector.
 	wire [3:0] v8_monitor_id = status[11:10] == 2'b00 ? 4'h2 : // 512x384 12" RGB
 							   status[11:10] == 2'b01 ? 4'h6 : // 640x480 VGA
 							   4'h1;                           // Portrait
@@ -949,7 +952,7 @@ module emu
 		.we(selectPseudoVIA && !_cpuRW && cpuBusControl),
 		.req(selectPseudoVIA && cpuBusControl),
 		.vblank_irq(v8_vblank),
-		.slot_irq(1'b0),
+		.slot_irq(pds_slot_irq),
 		.asc_irq(asc_irq),
 		.irq_out(pseudovia_irq),
 		.ram_config(configRAMSize),
@@ -993,6 +996,7 @@ module emu
 	wire signed [15:0] asc_sample_r;
 	wire               asc_sample_tick;
 
+	// V8 schematic SND[0:2]/DFAC_CLK/CULTDAC0: see rtl/asc.sv / rtl/ariel_ramdac.sv
 	asc asc_inst(
 		.clk(clk_sys),
 		.reset(~n_reset),
