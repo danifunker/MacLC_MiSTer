@@ -72,3 +72,16 @@ const char* disassemble_68k_ext(unsigned int pc, const unsigned short* opwords, 
 
     return dasm_buffer;
 }
+
+const char* disassemble_68k_ext_len(unsigned int pc, const unsigned short* opwords, int num_words, unsigned int* out_len) {
+    unsigned char opdata[16] = {0};
+
+    for (int i = 0; i < num_words && i < 5; i++) {
+        opdata[i*2]     = (opwords[i] >> 8) & 0xFF;
+        opdata[i*2 + 1] = opwords[i] & 0xFF;
+    }
+
+    unsigned int len = m68k_disassemble_raw(dasm_buffer, pc, opdata, opdata, M68K_CPU_TYPE_68020);
+    if (out_len) *out_len = len;
+    return dasm_buffer;
+}

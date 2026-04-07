@@ -81,6 +81,17 @@ int post_download_delay = 0;  // Delay after ROM load before tracing
 uint32_t cpu_trace_last_pc = 0xFFFFFFFF;  // For edge detection (new instruction)
 int cpu_trace_last_frame = -1;  // Track frame transitions in trace log
 
+// Fetch buffer: sliding window of recent code-space fetches (PC -> word).
+// Used to (a) skip extension-word fetches so only opcodes are logged and
+// (b) feed the disassembler real extension words for correct operand display.
+// TG68 fetches opcode then extension words sequentially, so we buffer up to
+// 5 consecutive fetches and emit the oldest when we have enough context.
+struct FetchEntry { uint32_t pc; uint16_t word; int frame; uint32_t data_addr; };
+const int FETCH_BUF_SIZE = 8;
+FetchEntry fetch_buf[FETCH_BUF_SIZE];
+int fetch_buf_len = 0;
+uint32_t next_opcode_pc = 0xFFFFFFFF;  // Expected PC of next real opcode (after last emit)
+
 // RAM debug
 // ---------
 bool ram_debug_enable = false;  // Disable for speed
@@ -215,39 +226,89 @@ int verilate() {
 			if (clk_sys.clk) { bus.AfterEval(); blockdevice.AfterEval(); }
 
 			// CPU trace output - skip while ROM is downloading
+			// TG68 issues a bus fetch for every code-space word (opcode AND extension
+			// words). We buffer consecutive sequential fetches and only emit a log
+			// entry when we have enough context to disassemble the full instruction,
+			// using Musashi's reported length to advance past extension words.
 			if (cpu_trace_enable && VERTOPINTERN->debug_fetch_valid && !*bus.ioctl_download) {
-				// Use the debug signals from sim.v that capture actual bus transactions
 				uint32_t pc = VERTOPINTERN->debug_pc;
 				uint16_t opcode = VERTOPINTERN->debug_opcode;
 
-				// Only log when PC changes (new instruction) to avoid duplicates
 				if (pc != cpu_trace_last_pc) {
 					cpu_trace_last_pc = pc;
-					cpu_trace_count++;
-
 					int cur_frame = video.count_frame;
 					uint32_t dataAddr = VERTOPINTERN->debug_data_addr;
 
-					// Disassemble
-					unsigned short opwords[2] = { opcode, 0 };
-					const char* disasm = disassemble_68k_ext(pc, opwords, 2);
+					// If this fetch breaks sequential order (branch/exception),
+					// flush the buffer by emitting the oldest entry as an opcode
+					// with whatever words we have (single-word disasm is correct
+					// for most instructions).
+					bool sequential = (fetch_buf_len > 0) &&
+						(pc == fetch_buf[fetch_buf_len-1].pc + 2);
 
-					// Output to debug console (rolling 100-entry window in AddLog)
-					console.AddLog("[F%d] %08X: %04X  %s  @%06X", cur_frame, pc, opcode, disasm, dataAddr);
+					if (!sequential && fetch_buf_len > 0) {
+						// Emit buffered entries as individual opcode guesses.
+						// For a branch, fetch_buf[0] is a real opcode; anything
+						// after would be extensions of it. Use length to skip.
+						int i = 0;
+						while (i < fetch_buf_len) {
+							FetchEntry &e = fetch_buf[i];
+							unsigned short opwords[5] = {0};
+							int avail = fetch_buf_len - i;
+							for (int k = 0; k < avail && k < 5; k++)
+								opwords[k] = fetch_buf[i+k].word;
+							unsigned int len = 2;
+							const char* disasm = disassemble_68k_ext_len(e.pc, opwords, avail, &len);
+							if (len < 2) len = 2;
+							int words = len / 2;
+							cpu_trace_count++;
+							console.AddLog("[F%d] %08X: %04X  %s  @%06X", e.frame, e.pc, e.word, disasm, e.data_addr);
+							if (cpu_trace_file) {
+								if (e.frame != cpu_trace_last_frame) {
+									fprintf(cpu_trace_file, "--- frame %d ---\n", e.frame);
+									cpu_trace_last_frame = e.frame;
+								}
+								fprintf(cpu_trace_file, "[F%d] %08X: %04X  %s  @%06X\n", e.frame, e.pc, e.word, disasm, e.data_addr);
+							}
+							i += words;
+						}
+						fetch_buf_len = 0;
+					}
 
-					// Also write to trace file if open
-					if (cpu_trace_file) {
-						// Print frame separator when frame changes
-						if (cur_frame != cpu_trace_last_frame) {
-							fprintf(cpu_trace_file, "--- frame %d ---\n", cur_frame);
-							cpu_trace_last_frame = cur_frame;
+					// Append this fetch to the buffer.
+					if (fetch_buf_len < FETCH_BUF_SIZE) {
+						fetch_buf[fetch_buf_len++] = { pc, opcode, cur_frame, dataAddr };
+					} else {
+						// Buffer full — emit oldest then shift.
+						// (Shouldn't happen in practice; longest 68020 instruction is 11 words.)
+						FetchEntry &e = fetch_buf[0];
+						unsigned short opwords[5] = {0};
+						for (int k = 0; k < 5; k++) opwords[k] = fetch_buf[k].word;
+						unsigned int len = 2;
+						const char* disasm = disassemble_68k_ext_len(e.pc, opwords, 5, &len);
+						if (len < 2) len = 2;
+						int words = len / 2;
+						if (words > FETCH_BUF_SIZE) words = FETCH_BUF_SIZE;
+						cpu_trace_count++;
+						console.AddLog("[F%d] %08X: %04X  %s  @%06X", e.frame, e.pc, e.word, disasm, e.data_addr);
+						if (cpu_trace_file) {
+							if (e.frame != cpu_trace_last_frame) {
+								fprintf(cpu_trace_file, "--- frame %d ---\n", e.frame);
+								cpu_trace_last_frame = e.frame;
+							}
+							fprintf(cpu_trace_file, "[F%d] %08X: %04X  %s  @%06X\n", e.frame, e.pc, e.word, disasm, e.data_addr);
 						}
-						fprintf(cpu_trace_file, "[F%d] %08X: %04X  %s  @%06X\n", cur_frame, pc, opcode, disasm, dataAddr);
-						if (cpu_trace_max > 0 && cpu_trace_count >= cpu_trace_max) {
-							fprintf(stderr, "CPU trace limit reached (%d instructions)\n", cpu_trace_count);
-							fclose(cpu_trace_file);
-							cpu_trace_file = nullptr;
-						}
+						// Shift out `words` entries
+						int keep = fetch_buf_len - words;
+						for (int k = 0; k < keep; k++) fetch_buf[k] = fetch_buf[k + words];
+						fetch_buf_len = keep;
+						fetch_buf[fetch_buf_len++] = { pc, opcode, cur_frame, dataAddr };
+					}
+
+					if (cpu_trace_max > 0 && cpu_trace_count >= cpu_trace_max && cpu_trace_file) {
+						fprintf(stderr, "CPU trace limit reached (%d instructions)\n", cpu_trace_count);
+						fclose(cpu_trace_file);
+						cpu_trace_file = nullptr;
 					}
 				}
 			}

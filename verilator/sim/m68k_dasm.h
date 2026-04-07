@@ -53,6 +53,11 @@ const char* disassemble_68k(unsigned int pc, unsigned short opcode_word);
  */
 const char* disassemble_68k_ext(unsigned int pc, const unsigned short* opwords, int num_words);
 
+/* Disassemble and also return instruction length in bytes (2, 4, 6, ...).
+ * out_len receives the Musashi-reported length.
+ */
+const char* disassemble_68k_ext_len(unsigned int pc, const unsigned short* opwords, int num_words, unsigned int* out_len);
+
 #endif /* __cplusplus */
 
 #endif /* M68K_DASM_H */
