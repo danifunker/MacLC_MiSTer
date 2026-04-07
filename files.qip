@@ -21,6 +21,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/ariel_ramdac.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/maclc_v8_video.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/pseudovia.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/asc.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/v8_clocks.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/egret/egret_wrapper.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/egret/m68hc05_alu.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/egret/m68hc05_core.sv

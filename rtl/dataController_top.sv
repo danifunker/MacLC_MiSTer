@@ -3,6 +3,7 @@ module dataController_top(
 	input clk32,					// 32.5 MHz pixel clock
 	input clk8_en_p,
 	input clk8_en_n,
+	input scsi_pclk_en,			// V8 SCSI_PCLK / SCC RTxC enable (~3.672 MHz)
 	input E_rising,
 	input E_falling,
 
@@ -832,6 +833,7 @@ module dataController_top(
 		.clk(clk32),
 		.cep(clk8_en_p),
 		.cen(clk8_en_n),
+		.rtxc_en(scsi_pclk_en),
 		.reset_hw(~_cpuReset),
 		.cs(selectSCC && (_cpuLDS == 1'b0 || _cpuUDS == 1'b0)),
 //		.cs(selectSCC && (_cpuLDS == 1'b0 || _cpuUDS == 1'b0) && cpuBusControl),

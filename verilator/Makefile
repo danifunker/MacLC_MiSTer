@@ -73,6 +73,7 @@ V_SRC = \
 	$(RTL)/via6522.sv \
 	$(RTL)/adb.sv \
 	$(RTL)/asc.sv \
+	$(RTL)/v8_clocks.sv \
 	$(RTL)/ps2_kbd.sv \
 	$(RTL)/ps2_mouse.v \
 	$(RTL)/swim.v \

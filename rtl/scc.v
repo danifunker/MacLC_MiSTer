@@ -20,6 +20,11 @@ module scc
 	input clk,
 	input cep,
 	input cen,
+	// V8 SCSI_PCLK / SCC RTxC enable (~3.672 MHz, 1-cycle pulse on clk).
+	// Currently unused: the existing BRG path is driven by `clk` directly.
+	// Reserved for SDLC/AppleTalk and an RTxC-referenced BRG refactor —
+	// see plan_040526.md Step 5b. Will be consumed under `define SCC_USE_RTXC.
+	input rtxc_en,
 
 	input	reset_hw,
 
@@ -56,6 +61,9 @@ module scc
 	/* Write request */
 	output	wreq
 );
+
+	// Suppress unused warning for rtxc_en until SCC_USE_RTXC path lands.
+	wire _unused_rtxc_en = rtxc_en;
 
 	/* Register access is semi-insane */
 	reg [3:0]	rindex;

@@ -694,6 +694,13 @@ module emu
 	wire clk8, _cpuReset, _cpuReset_o, _cpuUDS, _cpuLDS, _cpuRW, _cpuAS;
 	wire clk8_en_p, clk8_en_n;
 	wire clk16_en_p, clk16_en_n;
+	// V8 SCSI_PCLK / SCC RTxC source — see rtl/v8_clocks.sv and plan_040526.md Step 5.
+	wire scsi_pclk_en;
+	v8_clocks v8_clocks_inst (
+		.clk_sys     (clk_sys),
+		.reset       (~n_reset),
+		.scsi_pclk_en(scsi_pclk_en)
+	);
 	wire _cpuVMA, _cpuVPA, _cpuDTACK;
 	wire E_rising, E_falling;
 	wire [2:0] _cpuIPL;
@@ -1022,6 +1029,7 @@ module emu
 		.clk32(clk_sys),
 		.clk8_en_p(clk8_en_p),
 		.clk8_en_n(clk8_en_n),
+		.scsi_pclk_en(scsi_pclk_en),
 		.E_rising(E_rising),
 		.E_falling(E_falling),
 		._systemReset(n_reset),
