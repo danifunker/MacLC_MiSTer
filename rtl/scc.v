@@ -183,6 +183,28 @@ module scc
 	assign wreg_a  = cs & we & (~rs[1]) &  rs[0] & ~cs_access_done;
 	assign wreg_b  = cs & we & (~rs[1]) & ~rs[0] & ~cs_access_done;
 
+`ifdef SIMULATION
+	// Control register access tracer — logs every control-register write,
+	// distinguishing WR0 pointer-select writes from targeted register writes.
+	// Used during SCC state-machine debugging; see docs/extradebugging.md.
+	always @(posedge clk) begin
+		if (cen && wreg_a) begin
+			if (scc_state_a == 0)
+				$display("SCC_WREG_A_PTR: data=%02x (new_ptr=%0d) @%0t",
+				         wdata, {((wdata[5:3]==3'b001)?1'b1:1'b0), wdata[2:0]}, $time);
+			else
+				$display("SCC_WREG_A: WR%0d data=%02x @%0t", rindex_a, wdata, $time);
+		end
+		if (cen && wreg_b) begin
+			if (scc_state_b == 0)
+				$display("SCC_WREG_B_PTR: data=%02x (new_ptr=%0d) @%0t",
+				         wdata, {((wdata[5:3]==3'b001)?1'b1:1'b0), wdata[2:0]}, $time);
+			else
+				$display("SCC_WREG_B: WR%0d data=%02x @%0t", rindex_b, wdata, $time);
+		end
+	end
+`endif
+
 	// FIX: rindex_latch selects the active channel's pointer combinatorially
 	// This ensures reads and writes see the correct channel's register pointer immediately
 	assign rindex_latch = (cs && !rs[1]) ? (rs[0] ? rindex_a : rindex_b) : 4'h0;
@@ -268,7 +290,11 @@ module scc
 			wr_data_b<=0;
 			rx_first_a<=1;
 			rx_first_b<=1;
-			cs_access_done <= 0;
+			// When reset is triggered by a CPU write to WR9 (hw-reset command),
+			// the CS access IS in progress and must be marked consumed so the
+			// same CS cycle isn't re-processed as a spurious WR0 write. Only
+			// clear cs_access_done on a genuine external hardware reset.
+			cs_access_done <= ~reset_hw;
 		end else begin
 			// Track CS edges - only process one access per CS assertion
 			if (cen) begin
