@@ -50,8 +50,6 @@ module addrController_top(
 	input  v8_hblank,
 	input  v8_vblank,
 
-	output loadSound,
-
 	// misc
 	output memoryOverlayOn,
 	output [23:0] overlay_trigger_addr,  // debug: address that caused overlay disable
@@ -63,40 +61,8 @@ module addrController_top(
 	output dskReadAckExt
 );
 
-	assign loadSound = sndReadAck;
-
-	// ============================================================
-	// Audio address generation (legacy Mac Plus style)
-	// ============================================================
-	localparam SIZE = 20'd135408;
-	localparam STEP = 20'd5920;
-
-	reg [22:0] audioAddr;
-	reg [19:0] snd_div;
-
-	reg sndReadAckD;
-	always @(posedge clk)
-		if (clk8_en_n) sndReadAckD <= sndReadAck;
-
-	reg vblankD, vblankD2;
-	always @(posedge clk) begin
-		if(clk8_en_p && sndReadAckD) begin
-			vblankD <= ~v8_vblank;
-			vblankD2 <= vblankD;
-
-			if(vblankD2 && !vblankD) begin
-				// Sound buffer in motherboard RAM (SDRAM word $000000-$0FFFFF)
-				audioAddr <= 23'h07FE80;
-				snd_div <= 20'd0;
-			end else begin
-				if(snd_div >= SIZE-1) begin
-					snd_div <= snd_div - SIZE + STEP;
-					audioAddr <= audioAddr + 23'd1;
-				end else
-					snd_div <= snd_div + STEP;
-			end
-		end
-	end
+	// Legacy Mac-Plus sound DMA removed in Commit C.
+	// Extra-slot 2 is now idle; ASC owns all audio output.
 
 	// ============================================================
 	// Bus cycle / clock generation
@@ -141,8 +107,7 @@ module addrController_top(
 
 	assign _romOE = ~(cpuBusControl && selectROM && _cpuRW);
 
-	wire extraRamRead = sndReadAck;
-	assign _ramOE = ~((videoBusControl && videoControlActive) || (extraRamRead) ||
+	assign _ramOE = ~((videoBusControl && videoControlActive) ||
 						(cpuBusControl && (selectRAM || selectVRAM) && _cpuRW));
 
 	// RAM Write Enable: Active for RAM or VRAM writes
@@ -210,8 +175,7 @@ module addrController_top(
 	                              23'h0;
 
 	// Main address mux: priority among bus cycle types
-	wire [22:0] addr_mux = sndReadAck      ? audioAddr :
-	                        videoBusControl ? vid_sdram_word :
+	wire [22:0] addr_mux = videoBusControl ? vid_sdram_word :
 	                        cpu_sdram_word;
 
 	// ============================================================
@@ -219,7 +183,7 @@ module addrController_top(
 	// ============================================================
 	assign dskReadAckInt = (extraBusControl == 1'b1) && (extra_slot_count == 0);
 	assign dskReadAckExt = (extraBusControl == 1'b1) && (extra_slot_count == 1);
-	wire sndReadAck    = (extraBusControl == 1'b1) && (extra_slot_count == 2);
+	// extra_slot_count == 2 is now idle (legacy sound DMA removed)
 
 	// Final SDRAM word address output
 	assign memoryAddr =

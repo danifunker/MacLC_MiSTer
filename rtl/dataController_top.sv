@@ -70,9 +70,7 @@ module dataController_top(
 	input _vblank,
 	output vid_alt,
 
-	// audio
-	output [10:0] audioOut,  // 8 bit audio + 3 bit volume
-	input loadSound,
+	// (legacy Mac-Plus audio DMA path removed in Commit C — ASC owns audio now)
 	
 	// misc
 	input [1:0] insertDisk,
@@ -121,31 +119,9 @@ module dataController_top(
 	
 	parameter SCSI_DEVS = 2;
 	
-	// add binary volume levels according to volume setting
-	assign audioOut = 
-		(snd_vol[0]?audio_x1:11'd0) +
-		(snd_vol[1]?audio_x2:11'd0) +
-		(snd_vol[2]?audio_x4:11'd0);
+	// Mac-Plus-style sound DMA removed — ASC handles all audio in the LC core.
 
-	// three binary volume levels *1, *2 and *4, sign expanded
-	wire [10:0] audio_x1 = { {3{audio_latch[7]}}, audio_latch };
-	wire [10:0] audio_x2 = { {2{audio_latch[7]}}, audio_latch, 1'b0 };
-	wire [10:0] audio_x4 = {    audio_latch[7]  , audio_latch, 2'b00};
-	
-	reg loadSoundD;
-	always @(posedge clk32)
-		if (clk8_en_n) loadSoundD <= loadSound;
 
-	// read audio data and convert to signed for further volume adjustment
-	reg [7:0] audio_latch;
-	always @(posedge clk32) begin
-		if(clk8_en_p && loadSoundD) begin
-			if(snd_ena) audio_latch <= 8'h7f;
- // when disabled, drive output high
-			else  	 	audio_latch <= memoryDataIn[15:8] - 8'd128;
-		end
-	end
-	
 	// CPU reset generation
 	// Mac LC boot sequence: Egret controls when 68000 comes out of reset via Port C bit 3
 	// We also need a minimum reset time for the 68000 (100ms = 800,000 clocks of clk8)

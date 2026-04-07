@@ -173,9 +173,9 @@ module emu
 			sim_frame_count <= sim_frame_count + 1;
 	end
 
-	wire [10:0] audio;
-	assign AUDIO_L = {audio[10:0], 5'b00000};
-	assign AUDIO_R = {audio[10:0], 5'b00000};
+	// ASC samples drive AUDIO_L/R directly (Commit C). Legacy DMA gone.
+	assign AUDIO_L = asc_sample_l;
+	assign AUDIO_R = asc_sample_r;
 
 	// Mac LC memory configuration
 	wire [7:0] configRAMSize = 8'h24; // 2MB: no SIMM, 2MB board only
@@ -231,9 +231,6 @@ module emu
 	wire vid_alt;
 	wire memoryOverlayOn, selectSCSI, selectSCC, selectIWM, selectVIA, selectRAM, selectROM, selectUnmapped;
 	wire [15:0] dataControllerDataOut;
-
-	// audio
-	wire loadSound;
 
 	// floppy disk image interface
 	wire dskReadAckInt;
@@ -443,7 +440,6 @@ module emu
 		.memoryOverlayOn(memoryOverlayOn),
 		.overlay_trigger_addr(),  // debug output, unused in sim
 
-		.loadSound(loadSound),
 
 		.dskReadAddrInt(dskReadAddrInt),
 		.dskReadAckInt(dskReadAckInt),
@@ -596,8 +592,6 @@ module emu
 		._vblank(~v8_vblank),
 		.vid_alt(vid_alt),
 
-		.audioOut(audio),
-		.loadSound(loadSound),
 
 		.insertDisk({dsk_ext_ins, dsk_int_ins}),
 		.diskSides({dsk_ext_ds, dsk_int_ds}),

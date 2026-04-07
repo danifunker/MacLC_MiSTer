@@ -646,9 +646,9 @@ module emu
 	assign VGA_F1 = 0;
 	assign VGA_SL = 0;
 
-	wire [10:0] audio;
-	assign AUDIO_L = {audio[10:0], 5'b00000};
-	assign AUDIO_R = {audio[10:0], 5'b00000};
+	// ASC samples drive AUDIO_L/R directly (Commit C). Legacy DMA gone.
+	assign AUDIO_L = asc_sample_l;
+	assign AUDIO_R = asc_sample_r;
 	assign AUDIO_S = 1;
 	assign AUDIO_MIX = 0;
 
@@ -739,9 +739,6 @@ module emu
 	wire        stp_dtack         = _cpuDTACK              /* synthesis keep */;
 	wire        stp_dtack_en      = dtack_en               /* synthesis keep */;
 	wire [15:0] stp_dataOut       = dataControllerDataOut  /* synthesis keep */;
-
-	// audio
-	wire loadSound;
 
 	// floppy disk image interface
 	wire dskReadAckInt;
@@ -884,8 +881,6 @@ module emu
 		.v8_vblank(v8_vblank),
 		.memoryOverlayOn(memoryOverlayOn),
 		.overlay_trigger_addr(overlay_trigger_addr),
-
-		.loadSound(loadSound),
 
 		.dskReadAddrInt(dskReadAddrInt),
 		.dskReadAckInt(dskReadAckInt),
@@ -1077,8 +1072,6 @@ module emu
 		._vblank(~v8_vblank),
 		.vid_alt(vid_alt),
 
-		.audioOut(audio),
-		.loadSound(loadSound),
 
 		// floppy disk interface
 		.insertDisk({dsk_ext_ins, dsk_int_ins}),
