@@ -1,5 +1,100 @@
 # Boot Problems Log
 
+## 2026-04-08 Session — ROM Patch Experiments
+
+Goal: force-disable the LocalTalk/atlk path at the ROM level since
+PRAM SPConfig=0x22 didn't prevent the load.
+
+### Experiment 1 — Rename `.MPP` DRVR resource in ROM
+
+Found four occurrences of the Pascal string `\x04.MPP` in `releases/boot0.rom`
+at file offsets `0x52643`, `0x566cb`, `0x668e8`, `0x66913`. Patched all four
+to `.xPP` so that any `OpenDriver('.MPP')` returns `fnfErr`. Recomputed the
+ROM checksum (16-bit BE sum of all words from offset 4, stored at offset 0):
+`350eacf0` → `350f2e1b`.
+
+**Result: zero effect.** Trace tail at frame 407 was byte-identical to the
+pre-patch hang at `0xA49F00`.
+
+**Lesson:** the LocalTalk self-test that hangs the boot is **ROM-internal
+code in the `0xA49xxx` range**, not a `.MPP` DRVR loaded by name from the
+System file or ROM resource map. It's invoked by direct hard-coded address,
+so renaming the resource doesn't intercept it. The `.MPP` rename would
+still block any later AppleTalk client that opens by name, but the wedge
+happens before that.
+
+**Side note:** the ROM checksum at offset 0 (`350eacf0`) is a valid
+sum-of-16-bit-BE-words from offset 4, so the algorithm is the standard Mac
+ROM checksum. Whether this core actually verifies it on boot is unknown
+(reverted patch booted fine either way), but recompute it on any future
+ROM patch to be safe.
+
+### Experiment 2 — Inner echo loop short-circuit at `0xA49F00`
+
+Patched `A49F00` from `303C` (`move.w #1,D0`) to `4ED6` (`jmp (A6)`) so
+the inner SCC byte-write/echo-poll subroutine returns immediately to its
+caller. (First attempt used `4E75 rts` and crashed the CPU into garbage at
+`0x6DDFFFxx` — that subroutine returns via `jmp (A6)`, not `rts`. A6 holds
+the real return address; the stack does not. Lesson: read the original
+exit instruction before guessing the return convention.)
+
+**Result with `jmp (A6)`:** no crash, but no progress either. The trace
+moved on from `A49F00` entirely, but the boot is now stuck in the **outer**
+LLAP state machine at `A498EC ↔ A49A72`, which is a self-contained
+`bra`-loop polling D7 bits that no longer change (they used to be set as
+side effects of the inner subroutine we just bypassed).
+
+### Why a higher-level patch is hard
+
+Reverse-engineered the entry chain to the state machine:
+
+```
+A45E38: jmp (A6)              ; A6 loaded from A2 — returns to A498DA
+A498DA: moveq #0,D5
+A498DC: lea (6,PC),A6         ; A6 = A498E4
+A498E0: jmp ($586,PC)         ; → A49E68 (init phase 1)
+   ...A49E68..A49E94 → jmp(A5) → A498E4
+A498E4: lea (6,PC),A6         ; A6 = A498EC
+A498E8: jmp ($5ac,PC)         ; → A49E96 (init phase 2)
+   ...A49E96..A49EDA → jmp(A5) → A498EC
+A498EC: <state machine entry — no normal exit>
+```
+
+The original return address from the *outer* caller of this routine was
+consumed by the `jmp (A6)` at `A45E38` (which loaded A6 from A2). After
+that point, the routine doesn't preserve any path back to its outer
+caller — A498DA freshly loads A6 to set up internal continuations and
+never restores it. The state machine at `A498EC` is an **event loop**,
+not a subroutine: it's designed to be exited only via interrupt or via
+some D7 bit being changed by an interrupt handler.
+
+**Implication:** there's no clean 2-byte `rts`-style patch we can drop
+into `A498DC`/`A498E4`/`A498EC` that returns to the outer caller, because
+the outer caller's return address no longer exists in any register or on
+the stack by that point.
+
+### Paths forward (revised priorities)
+
+1. **Hunt further up the call stack from `A45E38`/`A498DA`.** Find the
+   *original* `jsr`/`bsr` (or trap) that started this whole chain — that
+   call site has a real stack-based return address and can be NOPed
+   cleanly. Look for what set A2 to `A498DA` and trace back from there.
+2. **Implement SDLC framing** (`docs/plan_040726.md`). With proper framing,
+   the loopback echo will not deliver bytes for an unframed write, the
+   state machine's RX timeout / error path will fire, and it will exit
+   naturally. Bigger commitment but addresses root cause.
+3. **Re-investigate why PRAM SPConfig=0x22 didn't take effect.** If the
+   PRAM-based skip was supposed to work and didn't, that's a smaller fix
+   than either of the above — verify the PRAM bytes the Egret actually
+   delivers to the ROM at the right boot stage match what we set.
+
+### Files touched and reverted this session
+
+- `releases/boot0.rom` — patched twice, reverted to original both times.
+  Final state: byte-identical to pre-session, checksum `350eacf0`.
+
+---
+
 ## Current Status (2026-04-07)
 
 Boot reaches the atlk/LocalTalk driver self-test and hangs at ROM address

@@ -81,7 +81,6 @@ Exit codes: 0=PASS, 1=FAIL, 2=missing log. Suitable for pre-commit hooks.
 **Video Subsystem:**
 - `maclc_v8_video.sv` - Mac LC Video Engine (V8)
 - `ariel_ramdac.sv` - Video DAC
-- `videoTimer.v`, `videoShifter.v` - Video timing/data
 - `addrController_top.v`, `addrDecoder.v` - Address generation
 - `dataController_top.sv` - Data control
 
