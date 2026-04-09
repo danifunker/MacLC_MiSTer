@@ -418,6 +418,10 @@ module dataController_top(
 	wire [7:0] cuda_pb_o;
 	wire [7:0] cuda_pb_oe;
 
+	// ADB line between Egret PA7 (drive) and PA6 (sample).
+	// Option B staging: direct loopback (no external devices yet).
+	wire       egret_adb_line;
+
 	// VIA Shift Register read/write strobes for CUDA
 	// These pulse when CPU accesses the VIA shift register (register 0xA)
 	localparam VIA_SR_REG = 4'hA;
@@ -651,9 +655,13 @@ module dataController_top(
 		.cuda_portb     (cuda_pb_o),
 		.cuda_portb_oe  (cuda_pb_oe),
 
-		// ADB (not implemented yet)
-		.adb_data_in    (1'b1),
-		.adb_data_out   (),
+		// ADB (Option B staging: loopback so Egret self-test passes).
+		// Wire PA7 (drive) straight back into PA6 (sample). Idle is high;
+		// when Egret pulls the line low it sees its own drive, satisfying
+		// the ADB self-test with "no devices present". See
+		// docs/adb_egret_wiring_mame.md.
+		.adb_data_in    (egret_adb_line),
+		.adb_data_out   (egret_adb_line),
 
 		// System control - Egret controls 68000 reset via Port C bit 3
 		.reset_680x0    (egret_reset_680x0),
@@ -704,9 +712,9 @@ module dataController_top(
 		.cuda_portb     (cuda_pb_o),
 		.cuda_portb_oe  (cuda_pb_oe),
 
-		// ADB (simplified for now)
-		.adb_data_in    (1'b1),
-		.adb_data_out   (),
+		// ADB (Option B staging loopback — see USE_EGRET_CPU branch above)
+		.adb_data_in    (egret_adb_line),
+		.adb_data_out   (egret_adb_line),
 
 		// System control (not used yet)
 		.reset_680x0    (),
