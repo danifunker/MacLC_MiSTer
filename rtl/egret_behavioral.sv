@@ -94,23 +94,38 @@ module egret_behavioral (
     localparam [7:0] PKT_PSEUDO = 8'h01;
     localparam [7:0] PKT_ERROR = 8'h02;
 
-    // Pseudo-command codes (Egret uses same as CUDA)
-    localparam [7:0] CMD_WARM_START    = 8'h00;
-    localparam [7:0] CMD_AUTOPOLL      = 8'h01;
-    localparam [7:0] CMD_GET_TIME      = 8'h03;
-    localparam [7:0] CMD_GET_PRAM      = 8'h07;
-    localparam [7:0] CMD_WR_XPRAM     = 8'h08;  // Write Extended PRAM (block write)
-    localparam [7:0] CMD_SET_TIME      = 8'h09;
-    localparam [7:0] CMD_SET_PRAM      = 8'h0C;
-    localparam [7:0] CMD_SEND_DFAC     = 8'h0E;
-    localparam [7:0] CMD_RESET_SYSTEM  = 8'h11;
-    localparam [7:0] CMD_SET_IPL       = 8'h12;
-    localparam [7:0] CMD_SET_AUTO_RATE = 8'h14;
-    localparam [7:0] CMD_GET_AUTO_RATE = 8'h16;
-    localparam [7:0] CMD_SET_DEV_LIST  = 8'h19;
-    localparam [7:0] CMD_GET_DEV_LIST  = 8'h1A;
-    localparam [7:0] CMD_SET_ONE_SEC   = 8'h1B;
-    localparam [7:0] CMD_GET_SET_IIC   = 8'h22;
+    // Pseudo-command codes — full table from firmware jump table at $132D
+    // 32 entries (0x00-0x1F), indexed by command byte
+    localparam [7:0] CMD_WARM_START       = 8'h00;
+    localparam [7:0] CMD_AUTOPOLL         = 8'h01;
+    localparam [7:0] CMD_GET_6805_ADDR    = 8'h02;
+    localparam [7:0] CMD_GET_TIME         = 8'h03;
+    localparam [7:0] CMD_GET_PRAM         = 8'h04;  // Legacy PRAM read
+    localparam [7:0] CMD_SET_PRAM_LEGACY  = 8'h05;  // Legacy PRAM write
+    localparam [7:0] CMD_SET_ONLINE       = 8'h06;
+    localparam [7:0] CMD_WR_PRAM          = 8'h07;  // Block PRAM write (was CMD_GET_PRAM)
+    localparam [7:0] CMD_WR_XPRAM         = 8'h08;
+    localparam [7:0] CMD_SET_TIME         = 8'h09;
+    localparam [7:0] CMD_POWER_DOWN       = 8'h0A;
+    localparam [7:0] CMD_POWER_CYCLE      = 8'h0B;
+    localparam [7:0] CMD_SET_PRAM         = 8'h0C;
+    localparam [7:0] CMD_SET_AUTOPOWER    = 8'h0D;
+    localparam [7:0] CMD_SEND_DFAC        = 8'h0E;
+    localparam [7:0] CMD_READ_DFAC        = 8'h0F;
+    localparam [7:0] CMD_POWER_OFF        = 8'h10;
+    localparam [7:0] CMD_RESET_SYSTEM     = 8'h11;
+    localparam [7:0] CMD_SET_IPL          = 8'h12;
+    localparam [7:0] CMD_SET_FILE_SERVER  = 8'h13;
+    localparam [7:0] CMD_SET_AUTO_RATE    = 8'h14;
+    localparam [7:0] CMD_RD_XPRAM         = 8'h15;  // Read Extended PRAM block
+    localparam [7:0] CMD_GET_AUTO_RATE    = 8'h16;
+    localparam [7:0] CMD_SET_POLL_RATE    = 8'h17;
+    localparam [7:0] CMD_GET_POLL_RATE    = 8'h18;
+    localparam [7:0] CMD_SET_DEV_LIST     = 8'h19;
+    localparam [7:0] CMD_GET_DEV_LIST     = 8'h1A;
+    localparam [7:0] CMD_SET_ONE_SEC      = 8'h1B;
+    localparam [7:0] CMD_SET_WAKEUP       = 8'h1C;
+    localparam [7:0] CMD_GET_WAKEUP       = 8'h1D;
 
     // =========================================================================
     // State machine
@@ -185,6 +200,34 @@ module egret_behavioral (
     reg [23:0] rtc_tick;
     reg        rtc_init;
 
+    // Autopoll state
+    reg        autopoll_enabled;
+    reg [7:0]  auto_rate;       // ADB auto-poll rate (default 0x0B = 11)
+    reg [7:0]  poll_rate;       // ADB poll rate
+
+    // ADB device state — keyboard at addr 2, mouse at addr 3
+    reg [15:0] adb_reg3 [0:15]; // Register 3 (handler ID) for each ADB address
+    reg [15:0] adb_dev_list;    // Device presence bitmap
+
+    // DFAC (sound chip I2C) register storage
+    reg [7:0]  dfac_regs [0:7];
+    reg [3:0]  dfac_count;      // Number of stored DFAC bytes
+
+    // OneSecond mode
+    reg [1:0]  onesec_mode;     // 0=off, 1=time, 2=OK, 3=PRAM tick
+    reg [23:0] onesec_counter;
+    reg        onesec_pending;  // 1Hz tick has fired, waiting to send
+
+    // Misc state flags
+    reg        online_flag;
+    reg        file_server_flag;
+    reg        wakeup_enabled;
+    reg [31:0] autopower_time;  // Wake-up alarm (Mac seconds)
+
+    // Reset pulse state
+    reg [15:0] reset_pulse_counter;
+    reg        reset_pulsing;
+
     // =========================================================================
     // Output assignments
     // =========================================================================
@@ -227,6 +270,17 @@ module egret_behavioral (
         pram[8'h7D] = 8'h00;
         pram[8'h7E] = 8'h00;
         pram[8'h7F] = 8'h01;
+
+        // ADB device register 3 defaults: keyboard at 2, mouse at 3
+        for (i = 0; i < 16; i = i + 1)
+            adb_reg3[i] = 16'h0000;
+        adb_reg3[2] = 16'h0201;  // Keyboard: addr 2, handler 1
+        adb_reg3[3] = 16'h0301;  // Mouse: addr 3, handler 1
+
+        // DFAC init
+        for (i = 0; i < 8; i = i + 1)
+            dfac_regs[i] = 8'h00;
+        dfac_count = 4'd0;
     end
 
     // =========================================================================
@@ -283,14 +337,27 @@ module egret_behavioral (
             bit_count      <= 4'd0;
             sample_phase   <= 1'b0;
             shift_data     <= 8'd0;
-            recv_count     <= 4'd0;
-            send_count     <= 4'd0;
-            send_length    <= 4'd0;
+            recv_count     <= 5'd0;
+            send_count     <= 6'd0;
+            send_length    <= 6'd0;
             wait_counter   <= 16'd0;
             sr_write_pending <= 1'b0;
             rtc_seconds    <= 32'd0;
             rtc_tick       <= 24'd0;
             rtc_init       <= 1'b0;
+            autopoll_enabled <= 1'b0;
+            auto_rate      <= 8'h0B;
+            poll_rate      <= 8'h00;
+            adb_dev_list   <= 16'h000C; // Devices at addr 2 (keyboard) and 3 (mouse)
+            onesec_mode    <= 2'd0;
+            onesec_counter <= 24'd0;
+            onesec_pending <= 1'b0;
+            online_flag    <= 1'b0;
+            file_server_flag <= 1'b0;
+            wakeup_enabled <= 1'b0;
+            autopower_time <= 32'd0;
+            reset_pulse_counter <= 16'd0;
+            reset_pulsing  <= 1'b0;
 
         end else if (clk8_en) begin
             // Synchronize inputs
@@ -320,6 +387,26 @@ module egret_behavioral (
             // Track SR write from host
             if (via_sr_write && !sr_write_prev)
                 sr_write_pending <= 1'b1;
+
+            // Reset pulse: assert for ~8192 ticks then deassert and re-release 68020
+            if (reset_pulsing) begin
+                reset_pulse_counter <= reset_pulse_counter + 1'd1;
+                if (reset_pulse_counter >= 16'd8192) begin
+                    reset_680x0    <= 1'b0;
+                    reset_pulsing  <= 1'b0;
+                end
+            end
+
+            // 1Hz tick for OneSecondMode async notifications
+            if (onesec_mode != 2'd0) begin
+                if (onesec_counter >= 24'd7_999_999) begin
+                    onesec_counter <= 24'd0;
+                    if (state == ST_IDLE && !onesec_pending)
+                        onesec_pending <= 1'b1;
+                end else begin
+                    onesec_counter <= onesec_counter + 1'd1;
+                end
+            end
 
             // ---- State machine ----
             case (state)
@@ -356,6 +443,32 @@ module egret_behavioral (
                     sr_write_pending <= 1'b0;
 `ifdef SIMULATION
                     $display("EGRET_BEH: sysSes asserted, entering RECV_START");
+`endif
+                end
+                // 1Hz async notification (OneSecondMode)
+                else if (onesec_pending && !tip) begin
+                    onesec_pending <= 1'b0;
+                    send_count  <= 6'd0;
+                    send_buf[0] <= PKT_PSEUDO;
+                    send_buf[1] <= 8'h00;
+                    send_buf[2] <= CMD_GET_TIME;
+                    send_buf[3] <= rtc_seconds[31:24];
+                    send_buf[4] <= rtc_seconds[23:16];
+                    send_buf[5] <= rtc_seconds[15:8];
+                    send_buf[6] <= rtc_seconds[7:0];
+                    send_length <= 6'd7;
+                    treq_reg      <= 1'b1;
+                    state         <= ST_SEND_ATTN;
+                    clk_div       <= 6'd0;
+                    bit_count     <= 4'd0;
+                    sample_phase  <= 1'b0;
+                    shift_data    <= 8'h01;
+                    cuda_cb2      <= 1'b0;
+                    cuda_cb2_oe   <= 1'b1;
+                    cuda_cb1      <= 1'b0;
+                    wait_counter  <= 16'd0;
+`ifdef SIMULATION
+                    $display("EGRET_BEH: 1Hz tick, sending async time notification");
 `endif
                 end
             end
@@ -461,31 +574,38 @@ module egret_behavioral (
                 $display("EGRET_BEH: PROCESS pkt_type=0x%02x cmd=0x%02x recv_count=%0d",
                          recv_buf[0], recv_buf[1], recv_count);
 `endif
-                send_count  <= 4'd0;
-
-                // Response format: [type, flags, cmd_echo, data...]
-                // - type: echo original packet type ($01=pseudo, $00=ADB)
-                //         $02=error only for actual errors
-                // - flags: $00 for success
-                // - cmd_echo: echo of the command byte
-                // - data: optional payload bytes
-                // Attention byte ($01) is sent separately in ST_SEND_ATTN.
-                // Minimum 3 bytes (type + flags + cmd).
+                send_count  <= 6'd0;
 
                 case (recv_buf[0])
                 PKT_PSEUDO: begin
-                    // Common header for all pseudo responses
-                    send_buf[0] <= PKT_PSEUDO;       // type echo
-                    send_buf[1] <= 8'h00;             // flags (success)
-                    send_buf[2] <= recv_buf[1];       // command echo
+                    send_buf[0] <= PKT_PSEUDO;
+                    send_buf[1] <= 8'h00;        // flags (success)
+                    send_buf[2] <= recv_buf[1];  // command echo
 
                     case (recv_buf[1])
                     CMD_WARM_START: begin
-                        send_length <= 4'd3;
+                        // Reset internal state
+                        autopoll_enabled <= 1'b0;
+                        onesec_mode      <= 2'd0;
+                        onesec_pending   <= 1'b0;
+                        send_length <= 6'd3;
                     end
 
                     CMD_AUTOPOLL: begin
-                        send_length <= 4'd3;
+                        // recv_buf[2] = 0x00 to disable, non-zero to enable
+                        autopoll_enabled <= (recv_buf[2] != 8'h00);
+`ifdef SIMULATION
+                        $display("EGRET_BEH: AUTOPOLL %s",
+                                 recv_buf[2] != 8'h00 ? "ENABLED" : "DISABLED");
+`endif
+                        send_length <= 6'd3;
+                    end
+
+                    CMD_GET_6805_ADDR: begin
+                        // Debug command: return 2 zero bytes (no real HC05)
+                        send_buf[3] <= 8'h00;
+                        send_buf[4] <= 8'h00;
+                        send_length <= 6'd5;
                     end
 
                     CMD_GET_TIME: begin
@@ -493,46 +613,65 @@ module egret_behavioral (
                         send_buf[4] <= rtc_seconds[23:16];
                         send_buf[5] <= rtc_seconds[15:8];
                         send_buf[6] <= rtc_seconds[7:0];
-                        send_length <= 4'd7;
-                    end
-
-                    CMD_SET_TIME: begin
-                        rtc_seconds <= {recv_buf[2], recv_buf[3], recv_buf[4], recv_buf[5]};
-                        send_length <= 4'd3;
+                        send_length <= 6'd7;
                     end
 
                     CMD_GET_PRAM: begin
-                        // ROM calls with D1=32 and expects 3 header + 32 data = 35 bytes
-                        // Fill 32 PRAM bytes starting at offset recv_buf[3]
+                        // Legacy PRAM read: recv_buf[2]=offset, recv_buf[3]=count
+                        // Returns count bytes from PRAM starting at offset
                         begin : get_pram_block
+                            integer j;
+                            reg [7:0] pram_offset;
+                            reg [7:0] pram_count;
+                            pram_offset = recv_buf[2];
+                            pram_count  = (recv_buf[3] == 8'h00) ? 8'd32 : recv_buf[3];
+                            for (j = 0; j < 32; j = j + 1) begin
+                                if (j[7:0] < pram_count)
+                                    send_buf[3 + j] <= pram[pram_offset + j[7:0]];
+                            end
+                            send_length <= 6'd3 + {2'd0, pram_count[3:0]};
+                        end
+`ifdef SIMULATION
+                        $display("EGRET_BEH: GET_PRAM offset=0x%02x count=%0d",
+                                 recv_buf[2], recv_buf[3]);
+`endif
+                    end
+
+                    CMD_SET_PRAM_LEGACY: begin
+                        // Legacy PRAM write: recv_buf[2]=offset, recv_buf[3]=data
+                        pram[recv_buf[2]] <= recv_buf[3];
+                        send_length <= 6'd3;
+`ifdef SIMULATION
+                        $display("EGRET_BEH: SET_PRAM_LEGACY[0x%02x] = 0x%02x",
+                                 recv_buf[2], recv_buf[3]);
+`endif
+                    end
+
+                    CMD_SET_ONLINE: begin
+                        online_flag <= (recv_buf[2] != 8'h00);
+                        send_length <= 6'd3;
+                    end
+
+                    CMD_WR_PRAM: begin
+                        // Block PRAM write: recv_buf[2]=flags, recv_buf[3]=offset, data at [4+]
+                        // ROM calls with D1=32, expects 3 header + 32 data = 35 bytes
+                        begin : wr_pram_block
                             integer j;
                             for (j = 0; j < 32; j = j + 1)
                                 send_buf[3 + j] <= pram[recv_buf[3] + j[7:0]];
                         end
                         send_length <= 6'd35;
 `ifdef SIMULATION
-                        $display("EGRET_BEH: GET_PRAM offset=0x%02x, sending 32 bytes",
+                        $display("EGRET_BEH: WR_PRAM (read) offset=0x%02x, sending 32 bytes",
                                  recv_buf[3]);
 `endif
                     end
 
-                    CMD_SET_PRAM: begin
-                        pram[recv_buf[3]] <= recv_buf[4];
-                        send_length <= 4'd3;
-`ifdef SIMULATION
-                        $display("EGRET_BEH: SET_PRAM[0x%02x] = 0x%02x", recv_buf[3], recv_buf[4]);
-`endif
-                    end
-
                     CMD_WR_XPRAM: begin
-                        // Write Extended PRAM: recv_buf = [0x01, 0x08, flags, offset, data...]
-                        // Data bytes start at recv_buf[4], count = recv_count - 4
                         begin : wr_xpram_block
                             integer k;
                             for (k = 0; k < 20; k = k + 1) begin
                                 if (4 + k < recv_count) begin
-                                    // Protect SPConfig (byte 0x13): prevent ROM from
-                                    // overwriting our "AppleTalk inactive" setting
                                     if ((recv_buf[3] + k[7:0]) != 8'h13)
                                         pram[recv_buf[3] + k[7:0]] <= recv_buf[4 + k];
 `ifdef SIMULATION
@@ -543,55 +682,184 @@ module egret_behavioral (
                                 end
                             end
                         end
-                        send_length <= 4'd3;
+                        send_length <= 6'd3;
 `ifdef SIMULATION
                         $display("EGRET_BEH: WR_XPRAM offset=0x%02x count=%0d",
                                  recv_buf[3], recv_count - 5'd4);
 `endif
                     end
 
+                    CMD_SET_TIME: begin
+                        // Packet: [0x01, 0x09, HH, HM, ML, LL]
+                        rtc_seconds <= {recv_buf[2], recv_buf[3], recv_buf[4], recv_buf[5]};
+                        send_length <= 6'd3;
+`ifdef SIMULATION
+                        $display("EGRET_BEH: SET_TIME = 0x%02x%02x%02x%02x",
+                                 recv_buf[2], recv_buf[3], recv_buf[4], recv_buf[5]);
+`endif
+                    end
+
+                    CMD_POWER_DOWN: begin
+                        send_length <= 6'd3;
+                    end
+
+                    CMD_POWER_CYCLE: begin
+                        send_length <= 6'd3;
+                    end
+
+                    CMD_SET_PRAM: begin
+                        // Single-byte PRAM write: [0x01, 0x0C, offset, data]
+                        // Protect SPConfig (0x13)
+                        if (recv_buf[2] != 8'h13)
+                            pram[recv_buf[2]] <= recv_buf[3];
+                        send_length <= 6'd3;
+`ifdef SIMULATION
+                        $display("EGRET_BEH: SET_PRAM[0x%02x] = 0x%02x%s",
+                                 recv_buf[2], recv_buf[3],
+                                 recv_buf[2] == 8'h13 ? " (BLOCKED)" : "");
+`endif
+                    end
+
+                    CMD_SET_AUTOPOWER: begin
+                        // Store 4-byte alarm time
+                        autopower_time <= {recv_buf[2], recv_buf[3], recv_buf[4], recv_buf[5]};
+                        send_length <= 6'd3;
+                    end
+
                     CMD_SEND_DFAC: begin
-                        send_length <= 4'd3;
+                        // Store DFAC data bytes from recv_buf[2..N]
+                        begin : send_dfac_block
+                            integer d;
+                            for (d = 0; d < 8; d = d + 1) begin
+                                if (2 + d < recv_count)
+                                    dfac_regs[d] <= recv_buf[2 + d];
+                            end
+                            if (recv_count > 5'd2)
+                                dfac_count <= recv_count[3:0] - 4'd2;
+                            else
+                                dfac_count <= 4'd0;
+                        end
+                        send_length <= 6'd3;
+`ifdef SIMULATION
+                        $display("EGRET_BEH: SEND_DFAC %0d bytes", recv_count - 5'd2);
+`endif
+                    end
+
+                    CMD_READ_DFAC: begin
+                        // Return stored DFAC data
+                        begin : read_dfac_block
+                            integer d;
+                            for (d = 0; d < 8; d = d + 1)
+                                send_buf[3 + d] <= dfac_regs[d];
+                        end
+                        send_length <= 6'd3 + {2'd0, dfac_count};
+`ifdef SIMULATION
+                        $display("EGRET_BEH: READ_DFAC returning %0d bytes", dfac_count);
+`endif
+                    end
+
+                    CMD_POWER_OFF: begin
+                        send_length <= 6'd3;
                     end
 
                     CMD_RESET_SYSTEM: begin
-                        reset_680x0 <= 1'b1;
-                        send_length <= 4'd3;
+                        // Pulse reset: assert, then deassert after delay
+                        reset_680x0         <= 1'b1;
+                        reset_pulsing       <= 1'b1;
+                        reset_pulse_counter <= 16'd0;
+                        send_length <= 6'd3;
+`ifdef SIMULATION
+                        $display("EGRET_BEH: RESET_SYSTEM — pulsing 68020 reset");
+`endif
                     end
 
                     CMD_SET_IPL: begin
-                        send_length <= 4'd3;
+                        // Store IPL level (not wired to pins in behavioral model)
+                        send_length <= 6'd3;
                     end
 
-                    CMD_GET_DEV_LIST: begin
-                        send_buf[3] <= 8'h00;
-                        send_buf[4] <= 8'h00;
-                        send_length <= 4'd5;
-                    end
-
-                    CMD_SET_DEV_LIST: begin
-                        send_length <= 4'd3;
-                    end
-
-                    CMD_SET_ONE_SEC: begin
-                        send_length <= 4'd3;
+                    CMD_SET_FILE_SERVER: begin
+                        file_server_flag <= (recv_buf[2] != 8'h00);
+                        send_length <= 6'd3;
                     end
 
                     CMD_SET_AUTO_RATE: begin
-                        send_length <= 4'd3;
+                        auto_rate <= recv_buf[2];
+                        send_length <= 6'd3;
+                    end
+
+                    CMD_RD_XPRAM: begin
+                        // Read Extended PRAM: recv_buf[2]=offset, recv_buf[3]=count
+                        // Returns header + count bytes from PRAM
+                        begin : rd_xpram_block
+                            integer j;
+                            reg [7:0] xp_offset;
+                            reg [7:0] xp_count;
+                            xp_offset = recv_buf[2];
+                            xp_count  = recv_buf[3];
+                            if (xp_count == 8'h00) xp_count = 8'd1;
+                            if (xp_count > 8'd32) xp_count = 8'd32;
+                            for (j = 0; j < 32; j = j + 1) begin
+                                if (j[7:0] < xp_count)
+                                    send_buf[3 + j] <= pram[xp_offset + j[7:0]];
+                            end
+                            send_length <= 6'd3 + {1'b0, xp_count[4:0]};
+                        end
+`ifdef SIMULATION
+                        $display("EGRET_BEH: RD_XPRAM offset=0x%02x count=%0d",
+                                 recv_buf[2], recv_buf[3]);
+`endif
                     end
 
                     CMD_GET_AUTO_RATE: begin
-                        send_buf[3] <= 8'h0B;
-                        send_length <= 4'd4;
+                        send_buf[3] <= auto_rate;
+                        send_length <= 6'd4;
                     end
 
-                    CMD_GET_SET_IIC: begin
-                        send_length <= 4'd3;
+                    CMD_SET_POLL_RATE: begin
+                        poll_rate <= recv_buf[2];
+                        send_length <= 6'd3;
+                    end
+
+                    CMD_GET_POLL_RATE: begin
+                        send_buf[3] <= poll_rate;
+                        send_length <= 6'd4;
+                    end
+
+                    CMD_SET_DEV_LIST: begin
+                        adb_dev_list <= {recv_buf[2], recv_buf[3]};
+                        send_length <= 6'd3;
+                    end
+
+                    CMD_GET_DEV_LIST: begin
+                        send_buf[3] <= adb_dev_list[15:8];
+                        send_buf[4] <= adb_dev_list[7:0];
+                        send_length <= 6'd5;
+                    end
+
+                    CMD_SET_ONE_SEC: begin
+                        // recv_buf[2]: 0=off, 1=time, 2=OK, 3=PRAM
+                        onesec_mode    <= recv_buf[2][1:0];
+                        onesec_counter <= 24'd0;
+                        onesec_pending <= 1'b0;
+                        send_length <= 6'd3;
+`ifdef SIMULATION
+                        $display("EGRET_BEH: SET_ONE_SEC mode=%0d", recv_buf[2]);
+`endif
+                    end
+
+                    CMD_SET_WAKEUP: begin
+                        wakeup_enabled <= (recv_buf[2] != 8'h00);
+                        send_length <= 6'd3;
+                    end
+
+                    CMD_GET_WAKEUP: begin
+                        send_buf[3] <= {7'd0, wakeup_enabled};
+                        send_length <= 6'd4;
                     end
 
                     default: begin
-                        send_length <= 4'd3;
+                        send_length <= 6'd3;
 `ifdef SIMULATION
                         $display("EGRET_BEH: Unknown pseudo-cmd 0x%02x, returning OK", recv_buf[1]);
 `endif
@@ -600,17 +868,105 @@ module egret_behavioral (
                 end
 
                 PKT_ADB: begin
-                    send_buf[0] <= PKT_ADB;
-                    send_buf[1] <= 8'h00;       // flags
-                    send_buf[2] <= recv_buf[1];  // cmd echo
-                    send_length <= 4'd3;
+                    // ADB command dispatch
+                    // recv_buf[1] = ADB command byte:
+                    //   [7:4] = device address, [3:0] = command
+                    //   0x0=SendReset, 0x1=Flush, 0x8-0xB=Listen R0-R3, 0xC-0xF=Talk R0-R3
+                    begin : adb_dispatch
+                        reg [3:0] adb_addr;
+                        reg [3:0] adb_cmd;
+                        adb_addr = recv_buf[1][7:4];
+                        adb_cmd  = recv_buf[1][3:0];
+
+                        send_buf[0] <= PKT_ADB;
+                        send_buf[2] <= recv_buf[1];  // cmd echo
+
+                        case (adb_cmd)
+                        4'h0: begin
+                            // SendReset — reset all ADB device registrations
+                            send_buf[1] <= 8'h00;
+                            send_length <= 6'd3;
+`ifdef SIMULATION
+                            $display("EGRET_BEH: ADB SendReset");
+`endif
+                        end
+
+                        4'h1: begin
+                            // Flush — clear pending data for device
+                            send_buf[1] <= 8'h00;
+                            send_length <= 6'd3;
+`ifdef SIMULATION
+                            $display("EGRET_BEH: ADB Flush addr=%0d", adb_addr);
+`endif
+                        end
+
+                        4'hC, 4'hD, 4'hE, 4'hF: begin
+                            // Talk R0-R3
+                            if (adb_addr == 4'd2 || adb_addr == 4'd3) begin
+                                // Device present (keyboard=2, mouse=3)
+                                if (adb_cmd == 4'hF) begin
+                                    // Talk R3 — return handler ID register
+                                    send_buf[1] <= 8'h00;
+                                    send_buf[3] <= adb_reg3[adb_addr][15:8];
+                                    send_buf[4] <= adb_reg3[adb_addr][7:0];
+                                    send_length <= 6'd5;
+`ifdef SIMULATION
+                                    $display("EGRET_BEH: ADB Talk R3 addr=%0d → 0x%04x",
+                                             adb_addr, adb_reg3[adb_addr]);
+`endif
+                                end else begin
+                                    // Talk R0/R1/R2 — no pending data
+                                    // Return with SRQ timeout flag (no data available)
+                                    send_buf[1] <= 8'h02;  // timeout/no data
+                                    send_length <= 6'd3;
+`ifdef SIMULATION
+                                    $display("EGRET_BEH: ADB Talk R%0d addr=%0d → no data",
+                                             adb_cmd - 4'hC, adb_addr);
+`endif
+                                end
+                            end else begin
+                                // No device at this address — SRQ timeout
+                                send_buf[1] <= 8'h02;
+                                send_length <= 6'd3;
+`ifdef SIMULATION
+                                $display("EGRET_BEH: ADB Talk R%0d addr=%0d → no device",
+                                         adb_cmd - 4'hC, adb_addr);
+`endif
+                            end
+                        end
+
+                        4'h8, 4'h9, 4'hA, 4'hB: begin
+                            // Listen R0-R3
+                            if (adb_cmd == 4'hB && (adb_addr == 4'd2 || adb_addr == 4'd3)) begin
+                                // Listen R3 — update handler ID
+                                adb_reg3[adb_addr] <= {recv_buf[2], recv_buf[3]};
+`ifdef SIMULATION
+                                $display("EGRET_BEH: ADB Listen R3 addr=%0d ← 0x%02x%02x",
+                                         adb_addr, recv_buf[2], recv_buf[3]);
+`endif
+                            end
+                            send_buf[1] <= 8'h00;
+                            send_length <= 6'd3;
+                        end
+
+                        default: begin
+                            // Unknown/reserved ADB command
+                            send_buf[1] <= 8'h02;
+                            send_length <= 6'd3;
+`ifdef SIMULATION
+                            $display("EGRET_BEH: ADB unknown cmd 0x%01x addr=%0d",
+                                     adb_cmd, adb_addr);
+`endif
+                        end
+                        endcase
+                    end
                 end
 
                 default: begin
                     send_buf[0] <= PKT_ERROR;
                     send_buf[1] <= 8'h00;
                     send_buf[2] <= recv_buf[1];
-                    send_length <= 4'd3;
+                    send_length <= 6'd3;
                 end
                 endcase
 
