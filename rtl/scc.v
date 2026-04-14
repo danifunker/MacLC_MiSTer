@@ -334,11 +334,16 @@ module scc
 							/* State READY: This write is to WR0 - set register pointer */
 							rindex_a[2:0] <= wdata[2:0];
 							rindex_a[3] <= (wdata[5:3] == 3'b001);  // Point high
-							scc_state_a <= 1;  // Transition to REGISTER state
+							// Only transition to REGISTER state if the new pointer will be non-zero.
+							// If new pointer is 0, stay in READY so subsequent WR0 writes are still
+							// treated as commands (matches real SCC: writes to WR0 are always commands).
+							if (wdata[2:0] != 3'b000 || wdata[5:3] == 3'b001)
+								scc_state_a <= 1;  // Transition to REGISTER state
 `ifdef DEBUG_SCC
-							$display("SCC_WR0_WRITE: ch=A wdata=%02x rindex_new=%x point_high=%b state=READY->REGISTER",
+							$display("SCC_WR0_WRITE: ch=A wdata=%02x rindex_new=%x point_high=%b next_state=%s",
 								wdata, {((wdata[5:3] == 3'b001) ? 1'b1 : 1'b0), wdata[2:0]},
-								(wdata[5:3] == 3'b001));
+								(wdata[5:3] == 3'b001),
+								((wdata[2:0] != 3'b000 || wdata[5:3] == 3'b001) ? "REGISTER" : "READY"));
 `endif
 							/* enable int on next rx char */
 							if (wdata[5:3] == 3'b100)
@@ -357,11 +362,16 @@ module scc
 							/* State READY: This write is to WR0 - set register pointer */
 							rindex_b[2:0] <= wdata[2:0];
 							rindex_b[3] <= (wdata[5:3] == 3'b001);  // Point high
-							scc_state_b <= 1;  // Transition to REGISTER state
+							// Only transition to REGISTER state if the new pointer will be non-zero.
+							// If new pointer is 0, stay in READY so subsequent WR0 writes are still
+							// treated as commands (matches real SCC: writes to WR0 are always commands).
+							if (wdata[2:0] != 3'b000 || wdata[5:3] == 3'b001)
+								scc_state_b <= 1;  // Transition to REGISTER state
 `ifdef DEBUG_SCC
-							$display("SCC_WR0_WRITE: ch=B wdata=%02x rindex_new=%x point_high=%b state=READY->REGISTER",
+							$display("SCC_WR0_WRITE: ch=B wdata=%02x rindex_new=%x point_high=%b next_state=%s",
 								wdata, {((wdata[5:3] == 3'b001) ? 1'b1 : 1'b0), wdata[2:0]},
-								(wdata[5:3] == 3'b001));
+								(wdata[5:3] == 3'b001),
+								((wdata[2:0] != 3'b000 || wdata[5:3] == 3'b001) ? "REGISTER" : "READY"));
 `endif
 							/* enable int on next rx char */
 							if (wdata[5:3] == 3'b100)

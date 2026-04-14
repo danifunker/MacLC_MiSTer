@@ -1,5 +1,90 @@
 # Boot Problems Log
 
+## 2026-04-14 Session — SCC WR0 State-Machine Fix
+
+Goal: continue investigating the `0xA49F0E` hang. Prior session had narrowed
+it down to a question of whether the `beq` was being taken or whether A6 had
+been corrupted.
+
+### Root cause found: SCC WR0 pointer writes clobbered register state
+
+In `rtl/scc.v`, the WR0 dispatch had a bug: whenever state was `READY` and a
+write came in (interpreted as a pointer-set), the state machine
+**unconditionally** transitioned to `REGISTER`, even when the new pointer
+was 0. On a real Z8530, writes to WR0 are *always* commands — the pointer
+"persisting" at 0 is meaningless because WR0 accesses never consume the
+pointer.
+
+The symptom: the ROM's SCC init issues sequences like `$30` (a WR0 command
+with data[2:0]=0) followed by `$01` (select RR1 / WR1). Our state machine
+treated `$30` as "set pointer to 0, enter REGISTER state", then treated the
+subsequent `$01` as a **WR0 data write** instead of another WR0 command.
+The RR1 pointer was never selected, so polling RR1 bit 0 ("All Sent") always
+read `rr0_a` instead of `rr1_a`, and the driver never saw TX completion.
+
+### Fix
+
+Only transition to `REGISTER` state when the newly-written pointer would be
+non-zero (`wdata[2:0] != 0 || wdata[5:3] == 3'b001`). If the pointer stays at
+0, remain in `READY` so the next WR0 access is still interpreted as a
+command. Applied to both channel A (lines ~333-350) and channel B
+(lines ~359-378).
+
+### Boot progress after fix
+
+Previously: CPU stuck at `0xA49F00` from frame 356 with no forward progress.
+
+Now, per `verilator/sim_err.log` over ~340M cycles:
+
+- CPU runs productive code across `A46xxx`, `A470xx`, `A471xx`, `A4A4xx`
+  ROM regions.
+- Loopback self-test **passes**: `SCC_LOOPBACK` ENABLED @131M ns, DISABLED
+  @303M ns (driver accepts the result and moves on).
+- SCC channel A transmits two bytes externally: `SERIAL_RX: 0xE0` then
+  `'*' (0x2A)`. These are real bytes flowing out of the Mac's SCC ch A TX
+  pin — the AppleTalk sync byte `$2A` among them.
+- Cycle 310M onwards: CPU returns to `A49F00`/`A49F0E` (`67F0 = beq -16`).
+
+### The new hang: same PC, different context
+
+The `A49F00` loop is the same ROM code, but this invocation is *after*
+loopback has been turned off. Commit `a89c671` ("Fix pseudovia A0 routing,
+unify IER, re-enable SCC loopback") deliberately suppresses RX after
+loopback-off via `post_loopback_a`, modelling an unplugged LocalTalk bus:
+
+```verilog
+if (rx_wr_a && !post_loopback_a) begin   // rtl/scc.v:241
+...
+post_loopback_a ? 1'b0 : (rx_queue_pos_a > 0)  // RR0 bit 0 — rtl/scc.v:844
+```
+
+So the driver writes `$01` to SCC TX, polls RR0 bit 0 for RX Char Available,
+sees 0 forever, and loops. This is the correct "no cable" behaviour of the
+RTL — the bug is that whatever retry/backoff timer the driver uses in the
+*outer* LLAP state machine isn't advancing within the ~30-frame observation
+window.
+
+### Status: partial progress, commit the fix
+
+The WR0 state-machine fix is strictly an improvement — boot went from
+"stuck at `A49F00` forever" to "completes loopback self-test, transmits
+serial bytes, then stalls waiting for a response that will never come". The
+remaining hang is a higher-level LocalTalk/LLAP issue that two deferred
+plans already cover:
+
+1. **Find the loop's memory-based timeout counter.** Per prior session
+   notes (line 266-268 below), the outer `A498EC`/`A49FCA` state machine
+   likely decrements an A2/A6-relative counter that we haven't identified.
+   Lower blast radius.
+2. **Implement SDLC + DPLL** (`docs/plan_040726.md`). Architecturally
+   correct — with real SDLC framing the driver's higher-level retry logic
+   would fire. Larger commitment; defer until #1 is ruled out.
+
+The SCC fix is committed ahead of both of these so future sessions start
+from a cleaner baseline.
+
+---
+
 ## 2026-04-08 Session — ROM Patch Experiments
 
 Goal: force-disable the LocalTalk/atlk path at the ROM level since
