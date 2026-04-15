@@ -1,5 +1,96 @@
 # Boot Problems Log
 
+## 2026-04-15 Session — Apple STM identified; SCC TX "All Sent" is the real blocker
+
+**Headline:** the outer loop at `A498EC/A49FCA` is **Apple's Self-Test Monitor
+(STM) serial debug console** (Scott Smyers, "STM Version 2.0"), not a
+LocalTalk/LLAP driver as previously thought. It is entered *unconditionally*
+on every boot via `A48D5C: braw 0xa498a0`. The inner hang at `A49F0E` is an
+SCC channel-A "All Sent" (RR1 bit 0) poll that never reads 1 — the same bug
+fires whether we reach STM fast (bit-0 cleared) or slow (via the full POST
+path).
+
+### STM entry map
+
+Three `braw 0xa498a0` entries exist:
+
+| Source | Gate | Notes |
+|--------|------|-------|
+| `A48D04` | `btst #26,d7` at A48CEC — fall-through when bit26 clear | "RAM-test STM" path |
+| `A48D5C` | **unconditional** | Reached via normal boot chain at A48D3C→A49F78→(return)→A48D44 |
+| `A48D92` | `btst #26,d7` at A48D76 — taken when bit26 set | Alternate path |
+
+The "normal-boot-enters-STM" fact (A48D5C) was the surprise: on a real Mac LC,
+STM is always entered briefly during POST. It exits via one of:
+- An explicit `'S'` serial command (handler at `A49A72` clears d7 bits 16/22)
+- The `0xAAAA5555` magic startup vector at `(A0@(4))+0..3` at `A48D1E`
+- Never — STM otherwise polls forever
+
+There is **no timeout counter** to hunt. `A49F9E` (previously suspected as a
+timeout) is actually a VIA1-timer2-driven *prompt rate limiter* keyed off
+`btst #5, a2@(0x1A00)` (IFR bit 5).
+
+### STM command table (decoded from `A49948`)
+
+Entries are `[word1:flags+char][word2:offset]`; handler = `A49948 + slot + 2 + offset`:
+
+| Char | Handler | Likely meaning |
+|------|---------|----------------|
+| 'S' 0x53 | A49A72 | Stop — clears d7[16] and d7[22] |
+| 'L' 0x4C | A49A82 | Load |
+| 'B' 0x42 | A49AA2 | Branch/word load |
+| 'D' 0x44 | A49AC0 | Display/deposit |
+| 'C' 0x43 | A49AE4 | Checksum |
+| 'G' 0x47 | A49B0A | Go (execute) |
+| '0'-'7'  | A49B24+ | Register set (A0, A1, CACR etc) |
+| 'A','H','R','M','E','I','P','T','N','V','Z' | … | Various |
+
+### Why changing VIA1 PA bit 0 doesn't help
+
+`ROM A46452: btst #0, a2@(0x1E00)` reads VIA1 ORA-no-handshake bit 0.
+- Bit 0 = **1** (our `via_pa_i = 0x55`) → branch past `bset #26,d7` → d7[26] stays
+  clear → `A48CEC bnes` falls through → STM entered via `A48D04`.
+- Bit 0 = **0** → `bset #26,d7` runs → d7[26] set → `A48CEC` branches to A48D08
+  (normal POST path) → POST runs → ... → **`A48D5C` unconditionally enters STM
+  anyway**.
+
+Both paths land in STM and hit the same `A49F0E` hang. Bit 0 only changes
+*how quickly* we arrive. We reverted `via_pa_i` to `0x55` to preserve the
+longer POST path.
+
+### The real blocker at A49F0E
+
+```
+a49ef6: moveb #48, a3@(2,d3:l)   ; WR0 = 0x30 (error reset cmd)
+a49efc: moveb d0, a3@(6,d3:l)    ; write byte to SCC ch A data
+a49f00: movew #1, d0
+a49f04: moveb d0, a3@(2,d3:l)    ; WR0 = 0x01 (point to RR1)
+a49f08: btst #0, a3@(2)           ; read RR1 bit 0 = All Sent
+a49f0e: beqs a49f00                ; loop until drain
+a49f10: jmp fp@
+```
+
+The byte *does* transmit (external SERIAL_RX sees it) yet `~tx_busy_a` is
+never observed as 1 by the CPU's poll. Possible causes to investigate next:
+1. `tx_busy_a` actually stays high (txuart bug, clock gating, wrong baud)
+2. `rindex_a` reset races the read so ctl read returns `rr0_a` instead of
+   `rr1_a` (rr0_a bit 0 = rx-available, which stays 0 in async-out mode)
+3. `tx_buffer_full_a` sticks high, causing perpetual re-arm of TX
+
+### Next-session starting points
+
+- Enable `SCC_TX_DEBUG` in `verilator/Makefile` and rerun — the
+  `SCC_TX_BUSY: ch=A 1->0` transitions will show whether `tx_busy_a` is
+  clearing at all.
+- Instrument `rindex_latch` at the `A49F08` ctl read to confirm we return
+  `rr1_a` and not `rr0_a`. The existing `SCC_CTRL_READ` trace line does
+  this but it's not enabled without `DEBUG_SCC`.
+- If `tx_busy_a` does drop to 0, check the time between it dropping and
+  the CPU's next `btst` — the CPU runs ~every ~50ns, TX takes ~1ms at
+  9600 baud, so the CPU should observe at least one 0 reading per byte.
+
+---
+
 ## 2026-04-14 Session — SCC WR0 State-Machine Fix
 
 Goal: continue investigating the `0xA49F0E` hang. Prior session had narrowed
