@@ -88,6 +88,26 @@ are calibrated against current pacing).
 
 ## Entries
 
+### ★★★★★ MISSION CLOSED (2026-08-19 pm): 97.0% of a real Mac LC
+
+**RELEASED `MacLC_20260819.rbf` = md5 `65332d3b736756199d7c4c8351276bde`**
+(seed 4, STA +0.251; commit 7a49327 + user's 9cbf1a5). Mix **3.591** /
+colour **1.179** — user-measured; six of twelve tests beat the physical
+machine. The final defect (the SEVENTH of the mission): the first cache-on
+benchmark showed software-FP tests 4-6% BELOW cache-off — **every hit
+abandoned its already-launched demand transaction and the next access
+stalled behind the phantom**. Fix: `hit_now` (fetch_cache) — a per-access
+snapshot verdict gates the request in both tops, so **a hit never starts
+an SDRAM transaction**. Fingerprint for the future: tight loops up +
+FP/data-heavy down in the same run = an abandoned-transaction stall.
+Full numbers + history: `docs/Speedometer_3-23_Benchmarks.md`.
+Unreproduced one-shot, logged not closed: a single floppy-boot Sad Mac
+($0F/$29) on the first 65332d3b boot — same image then booted the sim 600
+frames clean (cache on) and other disks boot on HW; treat any recurrence
+as new evidence, not confirmation. Residual gap: Sieve 67.6% / Queens
+86.2% — working sets that defeat 1 KB direct-mapped word-granular; a
+lined/larger cache or prefetch overlap is the next-mission shape.
+
 ### 7 — 2026-08-19: I-cache HW hang ROOT-CAUSED offline — abandoned-transaction stale-done in rtl/sdram.v
 
 **The defect (proven, not theorised).** A fetch-cache hit answers the CPU
