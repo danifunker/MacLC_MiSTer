@@ -1,12 +1,14 @@
 // sim_ddr3.v — behavioral stand-in for the DDRAM port that backs the PDS
 // Ethernet mailbox (rtl/pds/pds_enet.sv) in simulation. 136 KB covering the
-// card window at ARM 0x1FF00000 (Avalon word 0x03FE0000): boardram, declROM,
-// control block, CMD ring.
+// card window at ARM 0x1FF00000 (Avalon word 0x03FE0000): XFER bounce buffer,
+// declROM window, control block, CMD ring (v2 layout, "McLCETH2").
 //
-// The "daemon" side is played by whoever stages this memory:
+// The host (Main_MiSTer support/mac) side is played by whoever stages this
+// memory:
 //   +pds_magic            write the MAGIC gate word so the card decodes
-//   +pds_rom=<file.hex>   $readmemh a lane-expanded declROM image into the
-//                         ROM window (64-bit words, 8192 entries)
+//   +pds_rom=<file.hex>   $readmemh the flat declROM window image into the
+//                         ROM window (64-bit words, 8192 entries; generate
+//                         with scripts/gen_enet_declrom.py --hex)
 // or a testbench poking the array hierarchically.
 
 module sim_ddr3 (
@@ -36,7 +38,7 @@ module sim_ddr3 (
 		rvalid = 0;
 		rdata  = 0;
 		if ($test$plusargs("pds_magic"))
-			mem[15'h4000] = 64'h4D634C43_45544831;
+			mem[15'h4000] = 64'h4D634C43_45544832;
 		if ($value$plusargs("pds_rom=%s", romfile))
 			$readmemh(romfile, mem, 15'h2000, 15'h3FFF);
 	end

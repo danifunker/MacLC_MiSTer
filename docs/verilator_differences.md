@@ -12,7 +12,12 @@ CPU-glue or top-level wiring fix must be made in **both** files or sim and FPGA
 silently diverge. (This has bitten us before — e.g. sim once hardwired
 `.berr(1'b0)`, masking the MOVES bus-error fix.)
 
-Last audited: 2026-08-15 (PDS Ethernet card wired into both tops — see below).
+Last audited: 2026-08-20 (PDS Ethernet v2: the card front-end became the Apple
+Ethernet LC TP / SONIC — decode is now $FE00'0000 regs, $FE04/$FE40'0000 MAC
+PROM, $FEFF'8000 declROM — all INTERNAL to rtl/pds/pds_enet.sv; the module's
+port list and both tops' glue are unchanged from 08-15, so the audit below
+still describes the wiring exactly. The selectRAM aliases pds_claim masks are
+now $FE00xxxx→$00'0000 (page zero!) and $FE40xxxx→$40'0000.)
 
 **2026-08-15 — PDS Ethernet (rtl/pds/pds_enet.sv) wired into BOTH tops,
 backing store differs by design:** MacLC.sv backs the card's DDR3 mailbox with

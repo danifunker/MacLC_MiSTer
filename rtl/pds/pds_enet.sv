@@ -1,71 +1,75 @@
 /*
- * pds_enet.sv — Asante MacCON i LC Ethernet card (LC PDS pseudo-slot $E).
+ * pds_enet.sv — Apple Ethernet LC Twisted Pair card (820-0532-B), LC PDS
+ * pseudo-slot $E.
  *
- * Architecture is the Minimig A2065's, adapted (see docs/pds_ethernet_scope.md):
- * the FPGA side is a dumb front-end — slot decode, DP8390 register doorbell +
- * read shadows, and the card's 64K buffer RAM + declaration ROM served from a
- * DDR3 shared-memory window. The DP8390 itself (ring buffers, TX/RX, filters)
- * and the bridge to a real network interface run in the maclc_eth daemon on
- * the HPS, which polls the same DDR3 window via /dev/mem.
+ * v2 of the PDS Ethernet front-end (v1 was the Asante MacCON i LC; see
+ * docs/pds_ethernet_scope.md for the full contract and the v1→v2 history).
+ * The architecture is unchanged from v1: the FPGA side is a dumb front-end —
+ * slot decode, register doorbell + read shadows, MAC PROM, and the declaration
+ * ROM served from a DDR3 shared-memory window. The DP83934 SONIC-T model
+ * (descriptor DMA, CAM, filters, TX/RX) and the bridge to a real network
+ * interface run on the ARM inside the modified Main_MiSTer (support/mac),
+ * which serves the same DDR3 window.
  *
- * Unlike the A2065 (mailbox at DDR3 clock, CDC handshakes everywhere) this
- * module runs entirely in clk_sys and the top drives DDRAM_CLK = clk_sys, so
- * there is no clock crossing anywhere.
+ * Everything runs in clk_sys and the top drives DDRAM_CLK = clk_sys — no CDC.
  *
- * Guest-visible map (MAME nubus_asntmc3b.cpp pdslc_macconilc, ground truth):
- *   $FE0D'0000-$FE0D'FFFF  buffer RAM (64K)          also 24-bit $ED'0000
- *   $FE0E'0000-$FE0E'003F  DP8390 registers          also 24-bit $EE'0000
- *       reg byte on D[15:8] at (base + N*4), register index = ~addr[5:2]
- *       (A5..A2 wired inverted on the real card);
- *       16-bit access (UDS+LDS) anywhere in the window = remote-DMA data port
- *   $FE FF'0000-$FE FF'FFFF declaration ROM window (daemon stages the
- *       byte-lane-expanded image; the 16K ROM with byteLanes=$A5 occupies the
- *       top 32K, ROM bytes on even addresses)
- *   IRQ: active-high INT -> pseudo-VIA slot-IFR reg $02 bit $20 (slot $E).
+ * Guest-visible map (MAME enetlc.cpp `enetlctp` ground truth, 32-bit forms;
+ * the Slot Manager and drivers access slot space in 32-bit mode):
+ *   $FE00'0000-$FE00'01FF  SONIC registers: 64 x 16-bit, one per longword on
+ *       the UPPER data lanes (word at longword+0; register index = A[7:2],
+ *       no inversion; the $100-byte bank mirrors once in the $200 window).
+ *       The +2 half of each longword is unmapped — served $FFFF, no stall.
+ *   $FE04'0000-$FE04'01FF  MAC address PROM  (byte-read; mirrors every 8)
+ *   $FE40'0000-$FE40'01FF  MAC address PROM  (alias — NetBSD reads it here)
+ *       PROM bytes 0-5 = bit-swizzled MAC, 6 = $00, 7 = XOR checksum,
+ *       complemented; cooked by Main into the MACPROM control word. Any
+ *       word-wide read of the PROM window returns the magic $0028 (the
+ *       driver's presence probe — MAME ground truth).
+ *   $FEFF'8000-$FEFF'FFFF  declaration ROM, 32 KiB FLAT (341-0740 has
+ *       byteLanes $0F — all four lanes; no lane expansion anywhere).
+ *   IRQ: SONIC INT (level) -> pseudo-VIA slot-IFR reg $02 bit $20 (slot $E).
  *
- * DDR3 window (ARM phys 0x1FF00000, same reserved area the A2065 uses; only
- * one core is ever loaded so there is no conflict):
- *   +0x00000  64K  boardram        (byte A of guest space = DDR3 byte A)
- *   +0x10000  64K  declROM window  (ARM-staged, lane-expanded, read-only)
+ * The card has NO on-board RAM: the real SONIC bus-masters descriptors and
+ * packets straight out of guest RAM. That path is the Phase-3 DMA-RPC engine
+ * (ARM posts block read/write commands against guest SDRAM through the XFER
+ * bounce window); this front-end deliberately knows nothing about it beyond
+ * reserving the control words.
+ *
+ * DDR3 window v2 (ARM phys 0x1FF00000 — layout is THE contract, mirrored in
+ * docs/pds_ethernet_scope.md and Main's support/mac/mac_eth.h):
+ *   +0x00000  64K  XFER bounce buffer (guest-RAM DMA staging; Phase 3)
+ *   +0x10000  64K  declROM window: window byte i = guest $FEFF'0000+i, so the
+ *                  flat ROM occupies the top half (+0x8000..+0xFFFF)
  *   +0x20000       control block, 64-bit words:
- *       +0x00 MAGIC       (ARM->FPGA) 64'h4D634C43_45544831 "MacLCETH1" gate
- *       +0x08 CMD_WPTR    (FPGA->ARM) doorbell ring write index
- *       +0x10..+0x38 REG SHADOWS (ARM->FPGA) 6 words = 48 bytes, byte k of
- *             word n = 8390 register (n*8+k) in page-major order
- *             (page0 regs 0-15, page1 regs 0-15, page2 regs 0-15)
- *       +0x40 INT         (ARM->FPGA) bit0 = 8390 INT line state
- *       +0x48 RPC         (ARM->FPGA) data-port read response:
- *             bit0 = valid, [15:8] = seq echo, [31:16] = data
- *       +0x50 GEOMETRY    (ARM only, self-documentation)
+ *       w0  +0x00 MAGIC    (ARM->FPGA) 64'h4D634C43_45544832 "McLCETH2"
+ *       w1  +0x08 CMD_WPTR (FPGA->ARM) doorbell ring write index, monotonic
+ *       w2..w17   SHADOWS  (ARM->FPGA) 64 regs x 16-bit: word n = regs
+ *                 4n..4n+3, register 4n+k at bits [16k+15:16k]
+ *       w18 +0x90 INT      (ARM->FPGA) bit0 = SONIC INT line state
+ *       w19 +0x98 MACPROM  (ARM->FPGA) 8 cooked PROM bytes, byte k = PROM k
+ *       w20 +0xA0 GEOMETRY (ARM only) layout version = 2
+ *       w21 +0xA8 RPTR     (ARM->FPGA) daemon ring read index (backpressure)
+ *       w22 +0xB0 DMA_CMD  (ARM->FPGA) Phase-3 guest-RAM DMA command
+ *       w23 +0xB8 DMA_STAT (FPGA->ARM) Phase-3 DMA completion/seq echo
  *   +0x20800  2K   CMD ring, 256 x 64-bit, entry:
- *             bit0 = valid, [3:1] = tag, [7:4] = 8390 reg addr (true, already
- *             un-inverted), [23:8] = data, [31:24] = seq (data-port reads)
- *       tags: 0 = REG_WR (data[7:0])         1 = DATAPORT_WR (data[15:0])
- *             2 = DATAPORT_RD (seq)          3 = READ_NOTIFY (clear-on-read
- *             counter regs CNTR0-2 were read) 4 = RESET (guest warm restart)
+ *       bit0 = valid, [3:1] = tag, [9:4] = SONIC reg index, [31:16] = data,
+ *       [39:32] = seq (reserved, 0)
+ *       tags: 0 = REG_WR    1 = RESET (guest warm restart)
  *
- * Doorbell discipline (the A2065 lesson, kept): register writes stretch DTACK
- * only until the ring entry + write pointer are IN DDR3 — never until the
- * daemon runs, which would deadlock the guest against host scheduling. Reads
- * are answered instantly from the shadows. Only boardram/declROM accesses and
- * data-port reads stretch for a DDR3 round trip, and the data-port read RPC
- * carries a watchdog (the SCSI pseudo-DMA lesson: a stalled cycle must
- * complete eventually, never hang the machine).
+ * Doorbell discipline (the A2065 lesson, kept from v1): register writes
+ * stretch DTACK only until the ring entry + write pointer are IN DDR3 — never
+ * until the ARM runs. Register and PROM reads are answered instantly from the
+ * shadows/PROM word. Only declROM reads stretch for a DDR3 round trip. There
+ * is no path that waits on host software at all in v2 (the SONIC has no CPU
+ * data port), so a dead host can never wedge the guest.
  *
- * Presence: the card decodes only if the daemon's MAGIC was valid at the
- * moment the guest came out of reset (and the OSD option is on). No daemon =
- * pseudo-slot $E stays exactly as today (open-bus $FFFF ack in the tops).
- * MAGIC is sampled once per poll round; a daemon death mid-session leaves the
- * DDR3-backed RAM/ROM serving fine, register writes still complete (they only
- * wait on DDR3), and the data-port watchdog covers the one path that waits on
- * the daemon.
+ * Presence: the card decodes only if MAGIC was valid at the moment the guest
+ * came out of reset (and the OSD option is on). No service = pseudo-slot $E
+ * stays exactly as today (open-bus $FFFF ack in the tops). The v2 MAGIC value
+ * means a v1 daemon and a v2 FPGA (or vice versa) can never half-pair.
  */
 
-module pds_enet #(
-	// data-port read RPC watchdog: 2^DP_WD_BITS clk_sys (~129 ms at 22).
-	// Parameterized so the testbench can exercise the timeout path quickly.
-	parameter DP_WD_BITS = 22
-) (
+module pds_enet (
 	input             clk_sys,
 	input             rst_core,      // hard reset (POR / core load), active high
 	input             rst_guest,     // guest reset (RESET instruction etc.), active high
@@ -97,102 +101,91 @@ module pds_enet #(
 );
 
 	// ── DDR3 window layout (64-bit word addresses) ──────────────────────────
-	localparam [28:0] AV_BASE  = 29'h03FE0000;   // ARM 0x1FF00000
-	localparam [14:0] AV_BRAM  = 15'h0000;       // +0x00000, 8192 words
-	localparam [14:0] AV_ROM   = 15'h2000;       // +0x10000, 8192 words
-	localparam [14:0] AV_MAGIC = 15'h4000;       // control block
-	localparam [14:0] AV_WPTR  = 15'h4001;
-	localparam [14:0] AV_SHAD  = 15'h4002;       // 6 words
-	localparam [14:0] AV_INT   = 15'h4008;
-	localparam [14:0] AV_RPC   = 15'h4009;
-	localparam [14:0] AV_RPTR  = 15'h400B;      // daemon's ring read index
-	localparam [14:0] AV_RING  = 15'h4100;       // 256 words
+	localparam [28:0] AV_BASE    = 29'h03FE0000;   // ARM 0x1FF00000
+	localparam [14:0] AV_XFER    = 15'h0000;       // +0x00000, 8192 words (Phase 3)
+	localparam [14:0] AV_ROM     = 15'h2000;       // +0x10000, 8192 words
+	localparam [14:0] AV_MAGIC   = 15'h4000;       // control block
+	localparam [14:0] AV_WPTR    = 15'h4001;
+	localparam [14:0] AV_SHAD    = 15'h4002;       // 16 words (64 regs)
+	localparam [14:0] AV_INT     = 15'h4012;
+	localparam [14:0] AV_MACPROM = 15'h4013;
+	localparam [14:0] AV_GEO     = 15'h4014;       // ARM-only, not polled
+	localparam [14:0] AV_RPTR    = 15'h4015;
+	localparam [14:0] AV_DMACMD  = 15'h4016;       // Phase 3
+	localparam [14:0] AV_DMASTAT = 15'h4017;       // Phase 3
+	localparam [14:0] AV_RING    = 15'h4100;       // 256 words
 
-	localparam [63:0] MAGIC_V  = 64'h4D634C43_45544831;
+	localparam [63:0] MAGIC_V  = 64'h4D634C43_45544832;   // "McLCETH2"
 
-	localparam [2:0] TAG_REG_WR      = 3'd0;
-	localparam [2:0] TAG_DATAPORT_WR = 3'd1;
-	localparam [2:0] TAG_DATAPORT_RD = 3'd2;
-	localparam [2:0] TAG_READ_NOTIFY = 3'd3;
-	localparam [2:0] TAG_RESET       = 3'd4;
+	localparam [2:0] TAG_REG_WR = 3'd0;
+	localparam [2:0] TAG_RESET  = 3'd1;
 
 	// ── slot decode ─────────────────────────────────────────────────────────
-	// 32-bit standard slot space $FExx'xxxx; 24-bit slot window $00Ex'xxxx.
-	// (The V8 ignores A30-A24, but the Slot Manager and drivers use the
-	// canonical forms; everything else in $F1-$FE keeps the top's open-bus
-	// ack, so decoding only the canonical forms is both safe and sufficient —
-	// matches what MAME installs.)
+	// 32-bit standard slot space $FExx'xxxx only (MAME's LC/LC II card map;
+	// the Slot Manager scans in 32-bit mode — v1 sim proved it). Everything
+	// unclaimed in $F1-$FE keeps the top's hardware-validated open-bus ack.
+	// If the Phase-5 MAME driver trace shows 24-bit forms in use, add them.
 	wire        form32 = (cpuAddr[31:24] == 8'hFE);
-	wire        form24 = (cpuAddr[31:24] == 8'h00) && (cpuAddr[23:20] == 4'hE);
-	wire [23:0] sub    = form32 ? cpuAddr[23:0] : {4'h0, cpuAddr[19:0]};
+	wire [23:0] sub    = cpuAddr[23:0];
 
-	wire sel_ram = (form32 | form24) && (sub[23:16] == 8'h0D);
-	wire sel_reg = (form32 | form24) && (sub[23:6] == 18'h03800); // $0E0000-$0E003F
-	wire sel_rom = form32 && (sub[23:16] == 8'hFF);
+	wire sel_reg = form32 && (sub[23:9] == 15'h0000);   // $000000-$0001FF
+	wire sel_mac = form32 && ((sub[23:9] == 15'h0200)   // $040000-$0401FF
+	                       || (sub[23:9] == 15'h2000)); // $400000-$4001FF
+	wire sel_rom = form32 && (sub[23:15] == 9'h1FF);    // $FF8000-$FFFFFF
 
 	wire ds_any  = ~_cpuUDS | ~_cpuLDS;
 	wire cyc     = !_cpuAS && ds_any;   // strobes valid: direction + data good
 
-	assign card_sel = present && (sel_ram | sel_reg | sel_rom) && !_cpuAS;
+	assign card_sel = present && (sel_reg | sel_mac | sel_rom) && !_cpuAS;
 
-	wire req = present && (sel_ram | sel_reg | sel_rom) && cyc;
+	wire req = present && (sel_reg | sel_mac | sel_rom) && cyc;
 
-	// Register-window access classification (MAME dp_w/dp_r mem_mask rules,
-	// translated to the 16-bit bus): byte on D[15:8] at longword+0 = register;
-	// 16-bit UDS+LDS = remote-DMA data port; anything else is unmodelled on
-	// the real card (MAME fatalerrors) — we serve $FFFF and never stall.
-	wire reg_byte  = sel_reg && (sub[1] == 1'b0) && !_cpuUDS && _cpuLDS;
-	wire reg_word  = sel_reg && !_cpuUDS && !_cpuLDS;
-	// any other reg-window shape (LDS-only byte, odd-word byte) is unmodelled
-	// on the real card — classification falls through to K_STUB ($FFFF, no stall)
+	// Register-window access classification: the SONIC's 16 data lines sit on
+	// the upper lanes of each longword, so the register is the word at
+	// longword+0 (sub[1]==0). Reads there are shadow-served whatever the
+	// strobes (a byte read just takes its half). Writes must be full words —
+	// partial register writes don't exist on the real card; they (and the
+	// dead +2 half) fall through to K_STUB: $FFFF on reads, ignored on
+	// writes, never a stall, never a doorbell.
+	wire word_acc = !_cpuUDS && !_cpuLDS;
+	wire reg_rd   = sel_reg && (sub[1] == 1'b0) && _cpuRW;
+	wire reg_wr   = sel_reg && (sub[1] == 1'b0) && !_cpuRW && word_acc;
 
-	wire [3:0] reg_idx = ~sub[5:2];   // A5..A2 wired inverted on the card
+	wire [5:0] reg_idx = sub[7:2];
 
-	// ── local 8390 CR copy (page resolution for shadow reads) ───────────────
-	// CR itself reads from this copy (page bits must reflect a just-completed
-	// write immediately), except TXP which the daemon owns via the shadow.
-	reg  [7:0] cr_local;
-
-	// ── shadows / INT / RPC / MAGIC (poll results) ──────────────────────────
-	reg [63:0] shad [0:5];
+	// ── shadows / PROM / INT / MAGIC (poll results) ─────────────────────────
+	reg [63:0] shad [0:15];
+	reg [63:0] macprom;
 	reg        int_state;
 	reg        magic_ok;
-	reg        rpc_valid;
-	reg  [7:0] rpc_seq_echo;
-	reg [15:0] rpc_data;
 
 	// presence: latched while the guest is in reset, held stable across the
 	// whole session so the Slot Manager never sees the card flicker.
 	reg        present;
 
-	wire [5:0] shad_idx  = {cr_local[7:6], reg_idx};      // page-major
-	wire [7:0] shad_byte = shad[shad_idx[5:3]][{shad_idx[2:0], 3'b000} +: 8];
-	wire [7:0] txp_bit   = shad[0][7:0];                  // page0 reg0 = CR shadow
-
-	// CR is common to all three pages on the 8390 — always serve the local
-	// copy (page bits must reflect a just-completed write immediately), with
-	// TXP taken from the daemon's shadow since the daemon owns transmit.
-	wire [7:0] reg_rdata = (reg_idx == 4'h0)
-	                       ? {cr_local[7:3], txp_bit[2], cr_local[1:0]}
-	                       : shad_byte;
-
-	// clear-on-read tally counters: page 0, regs $0D/$0E/$0F
-	wire cntr_read = reg_byte && _cpuRW && (cr_local[7:6] == 2'b00) && (reg_idx >= 4'hD);
+	wire [63:0] shad_word   = shad[reg_idx[5:2]];
+	wire [15:0] sonic_rdata = shad_word[{reg_idx[1:0], 4'b0000} +: 16];
 
 	// ── CPU-side request handshake (all clk_sys, no CDC) ────────────────────
 	localparam H_IDLE = 2'd0, H_RUN = 2'd1, H_DONE = 2'd2;
 	reg  [1:0] hstate;
 	reg [15:0] dout_r;
-	reg        req_is_wr;
 	reg [23:0] req_sub;
 	reg  [1:0] req_be;         // {UDS, LDS}
 	reg [15:0] req_wdata;
 	reg  [2:0] req_kind;
-	localparam K_RAM = 3'd0, K_ROM = 3'd1, K_REGRD = 3'd2, K_REGWR = 3'd3,
-	           K_DPWR = 3'd4, K_DPRD = 3'd5, K_STUB = 3'd6;
+	localparam K_ROM = 3'd0, K_REGRD = 3'd1, K_REGWR = 3'd2, K_MACRD = 3'd3,
+	           K_STUB = 3'd4;
 
 	assign card_ack  = (hstate == H_DONE);
 	assign card_dout = dout_r;
+
+	// MAC PROM byte select: addresses are word-aligned on this bus (A0 lives
+	// in the strobes), so the byte index is {A2,A1, odd} with odd = LDS-only.
+	// Mirrors every 8 bytes through the whole $200 window (the LC III maps
+	// are literally 8 bytes long — that is the real decode).
+	wire [2:0] prom_idx  = {req_sub[2:1], req_be[1] ? 1'b0 : 1'b1};
+	wire [7:0] prom_byte = macprom[{prom_idx, 3'b000} +: 8];
 
 	// ── doorbell / mailbox FSM ──────────────────────────────────────────────
 	localparam S_IDLE      = 4'd0;
@@ -200,10 +193,9 @@ module pds_enet #(
 	localparam S_WPTR_W    = 4'd2;   // wptr publish in flight
 	localparam S_MEM_RD_W  = 4'd3;
 	localparam S_MEM_RD_D  = 4'd4;
-	localparam S_MEM_WR_W  = 4'd5;
-	localparam S_POLL_W    = 4'd6;
-	localparam S_POLL_D    = 4'd7;
-	localparam S_WPTR_INIT = 4'd8;
+	localparam S_POLL_W    = 4'd5;
+	localparam S_POLL_D    = 4'd6;
+	localparam S_WPTR_INIT = 4'd7;
 
 	reg  [3:0] state;
 	// 32-bit monotonic doorbell count (ring index = wptr[7:0]); published in
@@ -215,36 +207,26 @@ module pds_enet #(
 	reg        cmd_queued;
 	reg        cmd_for_cpu;    // the stalled CPU cycle completes on publish
 	reg [15:0] poll_div;
-	reg  [3:0] poll_step;      // walks MAGIC, SHAD0-5, INT, RPC
-	reg  [3:0] poll_step_q;
+	reg  [4:0] poll_step;      // walks MAGIC, SHAD0-15, INT, MACPROM, RPTR
+	reg  [4:0] poll_step_q;
 	reg        rst_guest_d;
-	reg  [7:0] dp_seq;
-	reg        dp_wait;        // data-port read outstanding
-	reg [DP_WD_BITS-1:0] dp_wd;   // RPC watchdog (see parameter)
 
 	// ring backpressure: the daemon publishes its read index (AV_RPTR, polled
-	// below); if a doorbell burst gets ~200 entries ahead (possible only if a
-	// driver bulk-transfers through the remote-DMA data port) the publish
-	// stalls — bounded by cmd_wait_ctr (~2 ms) so a dead daemon can never
-	// hang the guest, it just loses entries it wasn't reading anyway.
+	// below); if a doorbell burst gets ~200 entries ahead the publish stalls —
+	// bounded by cmd_wait_ctr (~2 ms) so a dead host can never hang the
+	// guest, it just loses entries it wasn't reading anyway.
 	reg [31:0] rptr_sh;
 	reg [15:0] cmd_wait_ctr;
 	wire       ring_full = (wptr - rptr_sh) >= 32'd200;
 
-	// notify drop: if a doorbell is already queued when a counter read happens,
-	// drop the notify (stats-only impact) rather than stall a read cycle.
-	wire       notify_ok = !cmd_queued && (state == S_IDLE) && !dp_wait;
-
-	// fast RPC polling while a data-port read is outstanding, and while the
-	// doorbell is backpressured (rptr_sh must refresh to release it)
-	wire       poll_due  = (dp_wait || (cmd_queued && ring_full))
-	                                 ? (poll_div[4:0] == 5'h1F)
+	// fast polling while the doorbell is backpressured (rptr_sh must refresh
+	// to release it); Phase 3 adds the DMA-armed condition here.
+	wire       poll_due  = (cmd_queued && ring_full) ? (poll_div[4:0] == 5'h1F)
 	                     : magic_ok ? (poll_div[9:0] == 10'h3FF)
 	                     : (poll_div == 16'hFFFF);
 
-	wire [28:0] bram_word = AV_BASE + {14'b0, AV_BRAM} + {16'b0, req_sub[15:3]};
-	wire [28:0] rom_word  = AV_BASE + {14'b0, AV_ROM } + {16'b0, req_sub[15:3]};
-	wire  [2:0] lane      = req_sub[2:0];   // byte lane of D[15:8] byte
+	wire [28:0] rom_word = AV_BASE + {14'b0, AV_ROM} + {16'b0, req_sub[15:3]};
+	wire  [2:0] lane     = req_sub[2:0];   // byte lane of the D[15:8] byte
 
 	integer i;
 	always @(posedge clk_sys) begin
@@ -267,23 +249,16 @@ module pds_enet #(
 			rst_guest_d <= 0;
 			magic_ok    <= 0;
 			int_state   <= 0;
-			rpc_valid   <= 0;
-			rpc_seq_echo<= 0;
-			rpc_data    <= 0;
 			present     <= 0;
-			cr_local    <= 8'h21;      // 8390 reset state: STP|page0
-			dp_seq      <= 0;
-			dp_wait     <= 0;
-			dp_wd       <= '0;
+			macprom     <= 0;
 			rptr_sh     <= 0;
 			cmd_wait_ctr<= 0;
 			dout_r      <= 16'hFFFF;
-			req_is_wr   <= 0;
 			req_sub     <= 0;
 			req_be      <= 0;
 			req_wdata   <= 0;
 			req_kind    <= K_STUB;
-			for (i = 0; i < 6; i = i + 1) shad[i] <= 64'h0;
+			for (i = 0; i < 16; i = i + 1) shad[i] <= 64'h0;
 		end else begin
 			mem_rd <= 0;
 			mem_we <= 0;
@@ -293,17 +268,16 @@ module pds_enet #(
 			// running it is frozen so the Slot Manager never sees the card
 			// flicker. Sticky-rise on MAGIC within the reset window: rst_core
 			// is hard-reset only, so a warm restart keeps the mailbox state
-			// and just re-evaluates presence (and a daemon death mid-session
-			// deliberately does NOT clear it — DDR3 keeps serving RAM/ROM and
-			// the data-port watchdog covers the one daemon-dependent path).
+			// and just re-evaluates presence (and a host death mid-session
+			// deliberately does NOT clear it — DDR3 keeps serving the ROM and
+			// registers, writes still complete since they only wait on DDR3).
 			rst_guest_d <= rst_guest;
 			if (rst_guest) begin
 				if (!ena_osd)      present <= 1'b0;
 				else if (magic_ok) present <= 1'b1;
-				cr_local <= 8'h21;
-				// tell the daemon to reset its 8390 model (once per reset entry)
+				// tell the host to reset its SONIC model (once per reset entry)
 				if (!rst_guest_d && present && !cmd_queued && magic_ok) begin
-					cmd_entry   <= {32'b0, 24'b0, 4'b0, TAG_RESET, 1'b1};
+					cmd_entry   <= {60'b0, TAG_RESET, 1'b1};
 					cmd_queued  <= 1'b1;
 					cmd_for_cpu <= 1'b0;
 				end
@@ -312,72 +286,40 @@ module pds_enet #(
 			// ── CPU handshake ────────────────────────────────────────────
 			case (hstate)
 			H_IDLE: if (req) begin
-				req_is_wr <= !_cpuRW;
 				req_sub   <= sub;
 				req_be    <= {~_cpuUDS, ~_cpuLDS};
 				req_wdata <= cpuDataIn;
 				dout_r    <= 16'hFFFF;
 				// classify
-				if (sel_ram)            req_kind <= K_RAM;
-				else if (sel_rom)       req_kind <= K_ROM;
-				else if (reg_byte)      req_kind <= _cpuRW ? K_REGRD : K_REGWR;
-				else if (reg_word)      req_kind <= _cpuRW ? K_DPRD  : K_DPWR;
-				else                    req_kind <= K_STUB;
+				if (reg_rd)                  req_kind <= K_REGRD;
+				else if (reg_wr)             req_kind <= K_REGWR;
+				else if (sel_mac && _cpuRW)  req_kind <= K_MACRD;
+				else if (sel_rom && _cpuRW)  req_kind <= K_ROM;
+				else                         req_kind <= K_STUB;
 				hstate <= H_RUN;
 			end
 			H_RUN: begin
 				case (req_kind)
 				K_REGRD: begin
-					dout_r <= {reg_rdata, 8'hFF};
-					if (cntr_read && notify_ok) begin
-						cmd_entry   <= {40'b0, 16'b0, reg_idx, TAG_READ_NOTIFY, 1'b1};
-						cmd_queued  <= 1'b1;
-						cmd_for_cpu <= 1'b0;
-					end
+					dout_r <= sonic_rdata;
 					hstate <= H_DONE;
 				end
 				K_REGWR: begin
 					if (!cmd_queued) begin
-						if (reg_idx == 4'h0) cr_local <= req_wdata[15:8];
-						cmd_entry   <= {40'b0, 8'b0, req_wdata[15:8], reg_idx, TAG_REG_WR, 1'b1};
+						cmd_entry   <= {24'b0, 8'b0, req_wdata, 6'b0, reg_idx, TAG_REG_WR, 1'b1};
 						cmd_queued  <= 1'b1;
 						cmd_for_cpu <= 1'b1;   // H_DONE comes from the publish path
 					end
 				end
-				K_DPWR: begin
-					if (!cmd_queued) begin
-						cmd_entry   <= {40'b0, req_wdata, 4'b0, TAG_DATAPORT_WR, 1'b1};
-						cmd_queued  <= 1'b1;
-						cmd_for_cpu <= 1'b1;
-					end
-				end
-				K_DPRD: begin
-					if (!dp_wait && !cmd_queued) begin
-						cmd_entry   <= {32'b0, dp_seq + 8'd1, 16'b0, 4'b0, TAG_DATAPORT_RD, 1'b1};
-						cmd_queued  <= 1'b1;
-						cmd_for_cpu <= 1'b0;
-						dp_seq      <= dp_seq + 8'd1;
-						dp_wait     <= 1'b1;
-						dp_wd       <= '0;
-					end
-					if (dp_wait) begin
-						dp_wd <= dp_wd + 1'b1;
-						if (rpc_valid && rpc_seq_echo == dp_seq) begin
-							dout_r  <= rpc_data;
-							dp_wait <= 1'b0;
-							hstate  <= H_DONE;
-						end else if (&dp_wd) begin
-							dout_r  <= 16'hFFFF;   // daemon gone — never hang the guest
-							dp_wait <= 1'b0;
-							hstate  <= H_DONE;
-						end
-					end
+				K_MACRD: begin
+					dout_r <= (req_be == 2'b11) ? 16'h0028 : {2{prom_byte}};
+					hstate <= H_DONE;
 				end
 				K_STUB: begin
 					dout_r <= 16'hFFFF;
 					hstate <= H_DONE;
 				end
-				default: ;   // K_RAM / K_ROM complete via the mailbox FSM below
+				default: ;   // K_ROM completes via the mailbox FSM below
 				endcase
 			end
 			H_DONE: begin
@@ -406,30 +348,18 @@ module pds_enet #(
 					mem_be    <= 8'hFF;
 					mem_we    <= 1;
 					state     <= S_CMD_W;
-				end else if (hstate == H_RUN && (req_kind == K_RAM || req_kind == K_ROM)) begin
-					mem_addr <= (req_kind == K_RAM) ? bram_word : rom_word;
-					if (req_is_wr && req_kind == K_RAM) begin
-						// boardram write: byte-enable the targeted lanes.
-						// Guest byte A lives at DDR3 byte lane (A&7): the
-						// D[15:8] byte (even address) at `lane`, the D[7:0]
-						// byte at lane+1 — so replicate the word SWAPPED so
-						// even lanes carry D[15:8].
-						mem_wdata <= {4{req_wdata[7:0], req_wdata[15:8]}};
-						mem_be    <= ({7'b0, req_be[1]} << lane) | ({7'b0, req_be[0]} << (lane + 3'd1));
-						mem_we    <= 1;
-						state     <= S_MEM_WR_W;
-					end else begin
-						mem_rd    <= 1;
-						state     <= S_MEM_RD_W;
-					end
+				end else if (hstate == H_RUN && req_kind == K_ROM) begin
+					mem_addr <= rom_word;
+					mem_rd   <= 1;
+					state    <= S_MEM_RD_W;
 				end else if (poll_due) begin
 					poll_step_q <= poll_step;
 					mem_addr <= AV_BASE + {14'b0,
-					            (poll_step == 4'd0) ? AV_MAGIC :
-					            (poll_step == 4'd7) ? AV_INT   :
-					            (poll_step == 4'd8) ? AV_RPC   :
-					            (poll_step == 4'd9) ? AV_RPTR  :
-					                                  AV_SHAD + {11'b0, poll_step - 4'd1}};
+					            (poll_step == 5'd0)  ? AV_MAGIC   :
+					            (poll_step == 5'd17) ? AV_INT     :
+					            (poll_step == 5'd18) ? AV_MACPROM :
+					            (poll_step == 5'd19) ? AV_RPTR    :
+					                                   AV_SHAD + {10'b0, poll_step - 5'd1}};
 					mem_rd   <= 1;
 					state    <= S_POLL_W;
 				end
@@ -451,7 +381,7 @@ module pds_enet #(
 					cmd_queued <= 0;
 					if (cmd_for_cpu) begin
 						cmd_for_cpu <= 0;
-						hstate      <= H_DONE;   // register/data-port write retires
+						hstate      <= H_DONE;   // register write retires
 					end
 					state <= S_IDLE;
 				end else mem_we <= 1;
@@ -478,13 +408,6 @@ module pds_enet #(
 				end
 			end
 
-			S_MEM_WR_W: begin
-				if (!mem_busy) begin
-					hstate <= H_DONE;
-					state  <= S_IDLE;
-				end else mem_we <= 1;
-			end
-
 			S_POLL_W: begin
 				if (!mem_busy) state <= S_POLL_D;
 				else mem_rd <= 1;
@@ -493,20 +416,16 @@ module pds_enet #(
 			S_POLL_D: begin
 				if (mem_rvalid) begin
 					case (poll_step_q)
-					4'd0: magic_ok <= (mem_rdata == MAGIC_V);
-					4'd7: int_state <= mem_rdata[0];
-					4'd8: begin
-						rpc_valid    <= mem_rdata[0];
-						rpc_seq_echo <= mem_rdata[15:8];
-						rpc_data     <= mem_rdata[31:16];
-					end
-					4'd9: rptr_sh <= mem_rdata[31:0];
-					default: shad[poll_step_q[2:0] - 3'd1] <= mem_rdata;
+					5'd0:  magic_ok  <= (mem_rdata == MAGIC_V);
+					5'd17: int_state <= mem_rdata[0];
+					5'd18: macprom   <= mem_rdata;
+					5'd19: rptr_sh   <= mem_rdata[31:0];
+					default: shad[poll_step_q[3:0] - 4'd1] <= mem_rdata;
 					endcase
 					// walk the full set only when the card is live; otherwise
 					// just keep sampling MAGIC.
-					if (magic_ok || poll_step_q != 4'd0)
-						poll_step <= (poll_step_q == 4'd9) ? 4'd0 : poll_step_q + 4'd1;
+					if (magic_ok || poll_step_q != 5'd0)
+						poll_step <= (poll_step_q == 5'd19) ? 5'd0 : poll_step_q + 5'd1;
 					state <= S_IDLE;
 				end
 			end
