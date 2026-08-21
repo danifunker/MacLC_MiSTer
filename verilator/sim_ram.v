@@ -41,6 +41,17 @@ module sim_ram
 	output reg          cpu_done,
 	output reg [15:0]   cpu_dout,
 
+	// PDS Ethernet guest-RAM DMA port — mirrors rtl/sdram.v's eth port
+	// (level request/ack, private data register, never touches cpu_done).
+	// Latency-matched loosely (2-edge reads) like the CPU path; the sim has
+	// no chip contention so no priority modelling is needed.
+	input               eth_req,
+	input               eth_we,
+	input  [23:0]       eth_addr,
+	input  [15:0]       eth_din,
+	output reg          eth_ack,
+	output reg [15:0]   eth_dout,
+
 	input [31:0]        frame_count // frame counter for debug logging
 );
 
@@ -54,6 +65,7 @@ integer wr_count = 0;
 integer rom_rd_count = 0;
 
 reg        req_d;         // read request seen last edge (models ACTIVE->done)
+reg        eth_req_d;     // same, for the ethernet DMA port
 wire cpu_req  = (oe || we) && !flp_win && !flp_guard;
 
 always @(posedge clk) begin
@@ -81,6 +93,24 @@ always @(posedge clk) begin
 		dl_ack <= 1;
 	end
 	if (!dl_req) dl_ack <= 0;
+
+	// ethernet DMA port — its own request/ack, never touching cpu_done
+	if (eth_req && !eth_ack) begin
+		if (eth_we) begin
+			mem[eth_addr[22:0]] <= eth_din;
+			eth_ack <= 1;
+		end else begin
+			eth_req_d <= 1;
+			if (eth_req_d) begin
+				eth_dout <= mem[eth_addr[22:0]];
+				eth_ack  <= 1;
+			end
+		end
+	end
+	if (!eth_req) begin
+		eth_ack   <= 0;
+		eth_req_d <= 0;
+	end
 
 	// floppy-window read serve (legacy dout path and timing). No oe
 	// qualifier: oe is pure CPU intent now; the window itself IS the
@@ -147,6 +177,9 @@ initial begin
 		mem[init_i] = 16'hFFFF;
 	cpu_dout = 16'h0000;
 	dout     = 16'h0000;
+	eth_ack   = 1'b0;
+	eth_req_d = 1'b0;
+	eth_dout  = 16'h0000;
 end
 /* verilator lint_on UNUSED */
 // verilator tracing_on

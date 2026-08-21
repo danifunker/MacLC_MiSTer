@@ -1082,10 +1082,21 @@ module emu
 	// cycles complete via stretched async DTACK (never VPA), like SCSI DMA.
 	wire        pds_card_sel, pds_card_ack, pds_irq;
 	wire [15:0] pds_dout;
+	// guest-RAM DMA legs into the SDRAM controller's eth port (Phase 3)
+	wire        pds_eth_req, pds_eth_we, pds_eth_ack;
+	wire [23:0] pds_eth_addr;
+	wire [15:0] pds_eth_din, pds_eth_dout;
 	pds_enet pds_enet (
 		.clk_sys   (clk_sys),
 		.rst_core  (~pll_locked_s | RESET),
 		.rst_guest (~_cpuReset | ~_cpuReset_o),
+		.ram_config_phys(configRAMSize),
+		.eth_req   (pds_eth_req),
+		.eth_we    (pds_eth_we),
+		.eth_addr  (pds_eth_addr),
+		.eth_din   (pds_eth_din),
+		.eth_ack   (pds_eth_ack),
+		.eth_dout  (pds_eth_dout),
 		.ena_osd   (~status[19]),
 		.cpuAddr   (cpuAddr),
 		.cpuDataIn (cpuDataOut),
@@ -2704,6 +2715,16 @@ module emu
 		.dl_addr        ( sdram_dladdr_q           ),
 		.dl_din         ( sdram_dldin_q            ),
 		.dl_ack         ( sdram_dl_ack             ),
+
+		// PDS Ethernet guest-RAM DMA port (rtl/pds/pds_enet.sv, Phase 3).
+		// pds_enet's outputs are already clk_sys registers set before the
+		// request rises — the same settled-value shape as the _q bundle.
+		.eth_req        ( pds_eth_req              ),
+		.eth_we         ( pds_eth_we               ),
+		.eth_addr       ( pds_eth_addr             ),
+		.eth_din        ( pds_eth_din              ),
+		.eth_ack        ( pds_eth_ack              ),
+		.eth_dout       ( pds_eth_dout             ),
 
 		.cpu_done       ( sdram_cpu_done           ),
 		.cpu_dout       ( sdram_cpu_dout           )

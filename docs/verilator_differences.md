@@ -12,12 +12,22 @@ CPU-glue or top-level wiring fix must be made in **both** files or sim and FPGA
 silently diverge. (This has bitten us before — e.g. sim once hardwired
 `.berr(1'b0)`, masking the MOVES bus-error fix.)
 
-Last audited: 2026-08-20 (PDS Ethernet v2: the card front-end became the Apple
+Last audited: 2026-08-21 (PDS Ethernet v2 Phase 3: pds_enet grew the
+guest-RAM DMA engine — new cross-top signal bundle `pds_eth_req/we/addr/
+din/ack/dout` plus `.ram_config_phys(configRAMSize)`, wired IDENTICALLY in
+both tops into the memory controller's new `eth_*` port: rtl/sdram.v in
+MacLC.sv, verilator/sim_ram.v in sim.v. sim_ram's eth service is
+latency-matched loosely (2-edge reads) and, like the FPGA port, never
+touches cpu_done. The V8 RAM translation is DUPLICATED inside pds_enet.sv
+— keep it in sync with addrController_top.v; tb_pds_enet.v carries
+known-answer cases for all three regions.)
+
+2026-08-20 (PDS Ethernet v2: the card front-end became the Apple
 Ethernet LC TP / SONIC — decode is now $FE00'0000 regs, $FE04/$FE40'0000 MAC
 PROM, $FEFF'8000 declROM — all INTERNAL to rtl/pds/pds_enet.sv; the module's
-port list and both tops' glue are unchanged from 08-15, so the audit below
-still describes the wiring exactly. The selectRAM aliases pds_claim masks are
-now $FE00xxxx→$00'0000 (page zero!) and $FE40xxxx→$40'0000.)
+CPU-glue port list and both tops' glue are unchanged from 08-15, so the audit
+below still describes that wiring exactly. The selectRAM aliases pds_claim
+masks are now $FE00xxxx→$00'0000 (page zero!) and $FE40xxxx→$40'0000.)
 
 **2026-08-15 — PDS Ethernet (rtl/pds/pds_enet.sv) wired into BOTH tops,
 backing store differs by design:** MacLC.sv backs the card's DDR3 mailbox with

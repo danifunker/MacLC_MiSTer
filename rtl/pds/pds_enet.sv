@@ -30,10 +30,18 @@
  *   IRQ: SONIC INT (level) -> pseudo-VIA slot-IFR reg $02 bit $20 (slot $E).
  *
  * The card has NO on-board RAM: the real SONIC bus-masters descriptors and
- * packets straight out of guest RAM. That path is the Phase-3 DMA-RPC engine
- * (ARM posts block read/write commands against guest SDRAM through the XFER
- * bounce window); this front-end deliberately knows nothing about it beyond
- * reserving the control words.
+ * packets straight out of guest RAM. That is the guest-RAM DMA engine here
+ * (Phase 3): the ARM posts block commands via the DMA_CMD control word
+ * ({seq, dir, even guest byte addr, even byte count}); the engine moves the
+ * block one word at a time between guest SDRAM (through the sdram.v eth
+ * port — lowest-priority requester, idle edges only) and the XFER bounce
+ * window (block byte i = XFER byte i), then echoes the seq into DMA_STAT
+ * (bit 8 = error: odd addr/count or a word outside $000000-$9FFFFF RAM
+ * space). Guest addresses go through a local copy of the V8 RAM translation
+ * (see the KEEP IN SYNC banner below). The ARM sequences its descriptor
+ * walks as chains of these commands, which also gives the driver-visible
+ * write ordering (packet bytes land before the status words that publish
+ * them) for free.
  *
  * DDR3 window v2 (ARM phys 0x1FF00000 — layout is THE contract, mirrored in
  * docs/pds_ethernet_scope.md and Main's support/mac/mac_eth.h):
@@ -87,6 +95,21 @@ module pds_enet (
 	output            card_ack,      // cycle may complete (data valid on reads)
 	output     [15:0] card_dout,
 	output            irq,           // active high -> pds_slot_irq
+
+	// ── guest-RAM DMA (Phase 3): into the SDRAM controller's eth port ──────
+	// The SONIC model on the ARM posts block commands (DMA_CMD control word);
+	// this engine moves the bytes between guest SDRAM and the XFER bounce
+	// window, one word per two-phase eth_req/eth_ack handshake. All outputs
+	// are clk_sys registers set at least one edge before eth_req rises, so
+	// the clk_64 sequencer samples long-settled values (the same shape as the
+	// tops' registered request bundle).
+	input       [7:0] ram_config_phys, // physical SIMM config (configRAMSize) for the V8 translation
+	output reg        eth_req,
+	output reg        eth_we,
+	output reg [23:0] eth_addr,      // SDRAM word address (translated)
+	output reg [15:0] eth_din,
+	input             eth_ack,
+	input      [15:0] eth_dout,
 
 	// DDR3 / DDRAM port (clk_sys — top must drive DDRAM_CLK = clk_sys)
 	output reg [28:0] mem_addr,
@@ -187,6 +210,55 @@ module pds_enet (
 	wire [2:0] prom_idx  = {req_sub[2:1], req_be[1] ? 1'b0 : 1'b1};
 	wire [7:0] prom_byte = macprom[{prom_idx, 3'b000} +: 8];
 
+	// ── guest-RAM DMA engine state ──────────────────────────────────────────
+	// One DMA_CMD = {seq[7:0], dir[8], guest byte addr [39:16], byte count
+	// [55:40]}; addr and count must be even (else err), XFER offset is always
+	// 0 (block byte i of the transfer = XFER window byte i). Executed one
+	// guest WORD at a time through the eth_req handshake, gathering/scattering
+	// u64 XFER words in dma_acc; DMA_STAT = {err[8], seq echo[7:0]} closes it.
+	reg        dma_active;
+	reg        dma_dir;        // 0 = guest->XFER (read), 1 = XFER->guest (write)
+	reg        dma_err;
+	reg  [7:0] dma_seq, dma_done_seq;
+	reg [22:0] dma_gword;      // current guest WORD address (byte addr >> 1)
+	reg [14:0] dma_words;      // words remaining
+	reg [15:0] dma_boff;       // block byte offset of the current word
+	reg  [1:0] dma_phase;
+	reg [63:0] dma_acc;        // XFER-word gather (dir 0) / scatter (dir 1)
+	reg  [7:0] dma_be;         // accumulated byte enables for the XFER write
+	reg [12:0] dma_hot_ctr;    // ~250 us fast-poll window after a completion
+	reg        dma_first;      // first DMA_CMD sighting after reset consumed
+	localparam [1:0] P_SDR = 2'd0, P_XWR = 2'd1, P_XRD = 2'd2, P_STAT = 2'd3;
+
+	wire [14:0] dma_words_after = dma_words - 15'd1;
+	wire [15:0] dma_boff_after  = dma_boff + 16'd2;
+
+	// ── V8 RAM translation — ★ DUPLICATE of rtl/addrController_top.v ───────
+	// (its simm_byte_size / motherboard_high / in_simm / mirror block, lines
+	// around 181-203). KEEP IN SYNC BOTH WAYS: if the RAM map there changes,
+	// this copy must follow — tb_pds_enet.v carries known-answer translation
+	// cases for all three regions to catch drift. Duplicated rather than
+	// extracted so the boot-critical CPU translation cone is not touched by
+	// this feature (blast-radius containment: a defect here can only mis-DMA,
+	// never mis-boot).
+	wire [23:0] x_simm_byte_size = (ram_config_phys[7:6] == 2'b00) ? 24'h000000 :
+	                               (ram_config_phys[7:6] == 2'b01) ? 24'h200000 :
+	                               (ram_config_phys[7:6] == 2'b10) ? 24'h400000 :
+	                                                                 24'h800000;
+	wire [22:0] x_simm_word_size = x_simm_byte_size[23:1];
+	wire [23:0] x_gaddr       = {dma_gword, 1'b0};
+	wire        x_mb_high     = (x_gaddr[23:21] == 3'b100);
+	wire        x_in_simm     = (x_gaddr[22:0] < x_simm_byte_size);
+	wire [21:0] x_word        = x_gaddr[22:1];
+	wire [22:0] x_mirror_raw  = {1'b0, x_word} - x_simm_word_size;
+	wire [22:0] x_ram_word    = x_mb_high ? {3'b000, x_gaddr[20:1]} :
+	                            x_in_simm ? (23'h100000 + {1'b0, x_word}) :
+	                                        {3'b000, x_mirror_raw[19:0]};
+	// guard: only RAM space ($000000-$9FFFFF) is DMA-able; ROM/IO never
+	wire        x_in_ram      = (x_gaddr < 24'hA00000);
+
+	wire [2:0]  dma_lane      = dma_boff[2:0];   // even (count/addr forced even)
+
 	// ── doorbell / mailbox FSM ──────────────────────────────────────────────
 	localparam S_IDLE      = 4'd0;
 	localparam S_CMD_W     = 4'd1;   // ring entry write in flight
@@ -196,6 +268,12 @@ module pds_enet (
 	localparam S_POLL_W    = 4'd5;
 	localparam S_POLL_D    = 4'd6;
 	localparam S_WPTR_INIT = 4'd7;
+	localparam S_DMA_SDR   = 4'd8;   // eth_req up, waiting eth_ack
+	localparam S_DMA_TURN  = 4'd9;   // eth_req dropped, waiting eth_ack fall
+	localparam S_DMA_XW    = 4'd10;  // XFER u64 write in flight (dir 0 flush)
+	localparam S_DMA_XR    = 4'd11;  // XFER u64 read data wait (dir 1 fill)
+	localparam S_DMA_SW    = 4'd12;  // DMA_STAT write in flight
+	localparam S_DMA_XRW   = 4'd13;  // XFER u64 read command wait (busy hold)
 
 	reg  [3:0] state;
 	// 32-bit monotonic doorbell count (ring index = wptr[7:0]); published in
@@ -220,8 +298,12 @@ module pds_enet (
 	wire       ring_full = (wptr - rptr_sh) >= 32'd200;
 
 	// fast polling while the doorbell is backpressured (rptr_sh must refresh
-	// to release it); Phase 3 adds the DMA-armed condition here.
-	wire       poll_due  = (cmd_queued && ring_full) ? (poll_div[4:0] == 5'h1F)
+	// to release it) and through a DMA burst: dma_hot covers the ~250 us
+	// after each completion so a descriptor-walk chain of commands gets
+	// ~32 us pickup instead of a full slow round.
+	wire       dma_hot   = dma_active || (dma_hot_ctr != 0);
+	wire       poll_due  = ((cmd_queued && ring_full) || dma_hot)
+	                                 ? (poll_div[4:0] == 5'h1F)
 	                     : magic_ok ? (poll_div[9:0] == 10'h3FF)
 	                     : (poll_div == 16'hFFFF);
 
@@ -258,11 +340,29 @@ module pds_enet (
 			req_be      <= 0;
 			req_wdata   <= 0;
 			req_kind    <= K_STUB;
+			eth_req     <= 0;
+			eth_we      <= 0;
+			eth_addr    <= 0;
+			eth_din     <= 0;
+			dma_active  <= 0;
+			dma_dir     <= 0;
+			dma_err     <= 0;
+			dma_seq     <= 0;
+			dma_done_seq<= 0;
+			dma_gword   <= 0;
+			dma_words   <= 0;
+			dma_boff    <= 0;
+			dma_phase   <= P_SDR;
+			dma_acc     <= 0;
+			dma_be      <= 0;
+			dma_hot_ctr <= 0;
+			dma_first   <= 0;
 			for (i = 0; i < 16; i = i + 1) shad[i] <= 64'h0;
 		end else begin
 			mem_rd <= 0;
 			mem_we <= 0;
 			poll_div <= poll_div + 1'b1;
+			if (dma_hot_ctr != 0) dma_hot_ctr <= dma_hot_ctr - 1'b1;
 
 			// presence can only change while the guest is held in reset; once
 			// running it is frozen so the Slot Manager never sees the card
@@ -352,6 +452,43 @@ module pds_enet (
 					mem_addr <= rom_word;
 					mem_rd   <= 1;
 					state    <= S_MEM_RD_W;
+				end else if (dma_active) begin
+					// one DMA step per dispatch, so doorbell publishes and
+					// guest declROM reads keep interleaving during a block
+					case (dma_phase)
+					P_SDR: begin
+						if (!x_in_ram) begin
+							dma_err   <= 1'b1;
+							dma_phase <= P_STAT;
+						end else begin
+							eth_addr <= {1'b0, x_ram_word};
+							eth_we   <= dma_dir;
+							eth_din  <= {dma_acc[{dma_lane, 3'b000} +: 8],
+							             dma_acc[{(dma_lane + 3'd1), 3'b000} +: 8]};
+							eth_req  <= 1'b1;
+							state    <= S_DMA_SDR;
+						end
+					end
+					P_XWR: begin
+						mem_addr  <= AV_BASE + {14'b0, AV_XFER} + {16'b0, dma_boff[15:3]};
+						mem_wdata <= dma_acc;
+						mem_be    <= dma_be;
+						mem_we    <= 1;
+						state     <= S_DMA_XW;
+					end
+					P_XRD: begin
+						mem_addr <= AV_BASE + {14'b0, AV_XFER} + {16'b0, dma_boff[15:3]};
+						mem_rd   <= 1;
+						state    <= S_DMA_XRW;
+					end
+					P_STAT: begin
+						mem_addr  <= AV_BASE + {14'b0, AV_DMASTAT};
+						mem_wdata <= {55'b0, dma_err, dma_seq};
+						mem_be    <= 8'hFF;
+						mem_we    <= 1;
+						state     <= S_DMA_SW;
+					end
+					endcase
 				end else if (poll_due) begin
 					poll_step_q <= poll_step;
 					mem_addr <= AV_BASE + {14'b0,
@@ -359,6 +496,7 @@ module pds_enet (
 					            (poll_step == 5'd17) ? AV_INT     :
 					            (poll_step == 5'd18) ? AV_MACPROM :
 					            (poll_step == 5'd19) ? AV_RPTR    :
+					            (poll_step == 5'd20) ? AV_DMACMD  :
 					                                   AV_SHAD + {10'b0, poll_step - 5'd1}};
 					mem_rd   <= 1;
 					state    <= S_POLL_W;
@@ -420,14 +558,114 @@ module pds_enet (
 					5'd17: int_state <= mem_rdata[0];
 					5'd18: macprom   <= mem_rdata;
 					5'd19: rptr_sh   <= mem_rdata[31:0];
+					5'd20: begin
+						// First sight after reset: adopt the staged seq as
+						// already-done. DDR3 survives an FPGA reset, so a
+						// stale command from the previous session must never
+						// replay into freshly booting guest RAM.
+						if (!dma_first) begin
+							dma_first    <= 1'b1;
+							dma_done_seq <= mem_rdata[7:0];
+						end
+						// DMA_CMD pickup: a fresh seq arms the engine
+						else if (!dma_active && mem_rdata[7:0] != dma_done_seq) begin
+							dma_seq    <= mem_rdata[7:0];
+							dma_dir    <= mem_rdata[8];
+							dma_gword  <= mem_rdata[39:17];
+							dma_words  <= mem_rdata[55:41];
+							dma_boff   <= 16'd0;
+							dma_acc    <= 64'd0;
+							dma_be     <= 8'd0;
+							// odd address / odd count / zero length -> report
+							// (zero length is a legal no-op, not an error)
+							dma_err    <= mem_rdata[16] | mem_rdata[40];
+							dma_active <= 1'b1;
+							dma_phase  <= (mem_rdata[16] | mem_rdata[40] |
+							               (mem_rdata[55:41] == 15'd0)) ? P_STAT :
+							              mem_rdata[8] ? P_XRD : P_SDR;
+						end
+					end
 					default: shad[poll_step_q[3:0] - 4'd1] <= mem_rdata;
 					endcase
 					// walk the full set only when the card is live; otherwise
 					// just keep sampling MAGIC.
 					if (magic_ok || poll_step_q != 5'd0)
-						poll_step <= (poll_step_q == 5'd19) ? 5'd0 : poll_step_q + 5'd1;
+						poll_step <= (poll_step_q == 5'd20) ? 5'd0 : poll_step_q + 5'd1;
 					state <= S_IDLE;
 				end
+			end
+
+			S_DMA_SDR: begin
+				if (eth_ack) begin
+					eth_req <= 1'b0;
+					if (!dma_dir) begin
+						// gather the read word into the XFER accumulator:
+						// block byte 2i on the even lane, 2i+1 on the odd —
+						// the "guest byte A = window byte A" convention
+						dma_acc[{dma_lane, 3'b000} +: 8]            <= eth_dout[15:8];
+						dma_acc[{(dma_lane + 3'd1), 3'b000} +: 8]   <= eth_dout[7:0];
+						dma_be <= dma_be | (8'b0000_0011 << dma_lane);
+					end
+					state <= S_DMA_TURN;
+				end
+			end
+
+			S_DMA_TURN: begin
+				// two-phase turnaround: wait for the controller to see the
+				// dropped request and lower its ack before the next step
+				if (!eth_ack) begin
+					if (!dma_dir && (dma_lane == 3'd6 || dma_words == 15'd1)) begin
+						// group (or block) complete: flush the accumulator
+						// BEFORE advancing so dma_boff still indexes it
+						dma_phase <= P_XWR;
+					end else begin
+						dma_gword <= dma_gword + 23'd1;
+						dma_boff  <= dma_boff_after;
+						dma_words <= dma_words_after;
+						if (dma_words_after == 15'd0)
+							dma_phase <= P_STAT;
+						else if (dma_dir && dma_boff_after[2:0] == 3'd0)
+							dma_phase <= P_XRD;   // next XFER word needed
+						else
+							dma_phase <= P_SDR;
+					end
+					state <= S_IDLE;
+				end
+			end
+
+			S_DMA_XW: begin
+				if (!mem_busy) begin
+					mem_be    <= 8'hFF;   // restore the default for other writers
+					dma_acc   <= 64'd0;
+					dma_be    <= 8'd0;
+					dma_gword <= dma_gword + 23'd1;
+					dma_boff  <= dma_boff_after;
+					dma_words <= dma_words_after;
+					dma_phase <= (dma_words_after == 15'd0) ? P_STAT : P_SDR;
+					state     <= S_IDLE;
+				end else mem_we <= 1;
+			end
+
+			S_DMA_XRW: begin
+				if (!mem_busy) state <= S_DMA_XR;
+				else mem_rd <= 1;
+			end
+
+			S_DMA_XR: begin
+				if (mem_rvalid) begin
+					dma_acc   <= mem_rdata;
+					dma_phase <= P_SDR;
+					state     <= S_IDLE;
+				end
+			end
+
+			S_DMA_SW: begin
+				if (!mem_busy) begin
+					dma_active   <= 1'b0;
+					dma_done_seq <= dma_seq;
+					dma_hot_ctr  <= 13'h1FFF;
+					state        <= S_IDLE;
+				end else mem_we <= 1;
 			end
 
 			default: state <= S_IDLE;

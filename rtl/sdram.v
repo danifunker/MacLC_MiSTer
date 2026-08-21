@@ -118,6 +118,23 @@ module sdram
 	                                // instead would drop the ack at the slot edge and
 	                                // hang the download when the two just missed.
 
+	// ── PDS Ethernet guest-RAM DMA port (rtl/pds/pds_enet.sv, Phase 3) ─────
+	// Same discipline as the download port: its own LEVEL request with values
+	// frozen by the requester until ack, its own LEVEL ack, and it NEVER
+	// touches cpu_done/cpu_dout. Ranked LAST — it only starts on edges with
+	// no CPU request level up at all (!(oe||we); the I-cache's hit-silent
+	// bus leaves plenty), and its bandwidth need is tiny (10BASE-T peak =
+	// one word per ~1.6 us = one access per ~104 clk_64), so it cannot
+	// starve and cannot be starved in any way that matters.
+	input               eth_req,    // LEVEL: held by pds_enet until eth_ack seen
+	input               eth_we,
+	input  [23:0]       eth_addr,   // SDRAM word address (pre-translated V8 map)
+	input  [15:0]       eth_din,
+	output reg          eth_ack,    // LEVEL: read = data valid in eth_dout,
+	                                // write = posted at ACTIVE. Falls when
+	                                // eth_req drops (two-phase handshake).
+	output reg [15:0]   eth_dout,   // private read register (never dout/cpu_dout)
+
 	output reg          cpu_done,   // request served: read data will be stable in cpu_dout
 	                                // before a consumer sampling done can latch it 2 ticks
 	                                // later (early-done: set at ACTIVE+3 clk_64, capture at
@@ -225,6 +242,8 @@ reg [2:0]  seq;          // position within a running access (1..7; ACTIVE at st
 reg        seq_busy;
 reg        src_cpu;      // running access belongs to the CPU (vs floppy or download):
                          // gates cpu_done / cpu_dout, which only the CPU may touch
+reg        src_eth;      // running access belongs to the ethernet DMA engine:
+                         // gates eth_ack / eth_dout, which only it may touch
 // Request values frozen at ACTIVE, so an access that starts late — e.g.
 // delayed behind a refresh, or a download word that had to wait out a CPU
 // access — cannot see its inputs change underneath it mid-access.
@@ -274,6 +293,12 @@ wire req_dl    = dl_req && dl_slot && !dl_served;
 // Costs at most one clk_64 of start latency.
 wire req_cpu   = (oe || we) && !flp_win && !flp_guard && t[0]
                  && !cpu_done && (ref_due < REF_FORCE);
+// Ethernet DMA: strictly idle edges only — no CPU request level up at all
+// (not merely "CPU can't start this edge"), outside floppy windows/guards,
+// same t[0] parity as the CPU so eth_dout's capture edge is clk_sys-aligned
+// for its clk_sys consumer.
+wire req_eth   = eth_req && !eth_ack && !(oe || we) && !flp_win && !flp_guard
+                 && t[0] && (ref_due < REF_FORCE);
 
 always @(posedge clk_64) begin
 	sd_cmd <= CMD_INHIBIT;  // default: idle
@@ -289,6 +314,8 @@ always @(posedge clk_64) begin
 		flp_served <= 0;
 		dl_served  <= 0;
 		dl_ack     <= 0;
+		eth_ack    <= 0;
+		src_eth    <= 0;
 		// init ladder, one command slot per chipset cycle (~123ns apart):
 		// 1023..65 = NOP wait, 64 = PRECHARGE ALL, 56/52/../28 = 8x AUTO
 		// REFRESH, 2 = LOAD MODE. tRP/tRFC/tMRD are all satisfied by orders
@@ -316,6 +343,7 @@ always @(posedge clk_64) begin
 		if (!(oe || we)) cpu_done <= 0;    // AS released / request withdrawn
 		if (!flp_win)    flp_served <= 0;
 		if (!dl_req)   begin dl_served <= 0; dl_ack <= 0; end
+		if (!eth_req)    eth_ack <= 0;     // two-phase turnaround
 		if (ref_due != 10'h3FF) ref_due <= ref_due + 10'd1;
 
 		if (seq_busy) begin
@@ -362,6 +390,15 @@ always @(posedge clk_64) begin
 			if (seq == STATE_READ) begin
 				if (src_cpu) begin
 					if (oe_latch) cpu_dout <= sd_data_rd;
+				end else if (src_eth) begin
+					// eth read completes here: data valid the same edge the
+					// ack rises. Born only while the request level is up (the
+					// done-birth law) — pds_enet never abandons, so this is
+					// belt-and-braces, not load-bearing like the CPU's.
+					if (oe_latch && eth_req) begin
+						eth_dout <= sd_data_rd;
+						eth_ack  <= 1;
+					end
 				end else begin
 					dout <= sd_data_rd;   // floppy-window data (legacy consumer path)
 				end
@@ -370,30 +407,42 @@ always @(posedge clk_64) begin
 		end else if (ref_busy) begin
 			ref_cnt <= ref_cnt + 3'd1;
 			if (ref_cnt == 3'd4) ref_busy <= 0;   // 5 clk_64 = 77 ns > tRFC
-		end else if (req_flp || req_dl || req_cpu) begin
+		end else if (req_flp || req_dl || req_cpu || req_eth) begin
+			// start priority: floppy window > download > CPU > ethernet DMA
+			// (req_eth already excludes any live CPU level, so the eth leg of
+			// these muxes can only be reached with the other three false)
 			sd_cmd  <= CMD_ACTIVE;
 			sd_addr <= req_flp ? { 1'b0, flp_addr[19:8] } :
-			           req_dl  ? { 1'b0, dl_addr[19:8]  } : { 1'b0, addr[19:8] };
+			           req_dl  ? { 1'b0, dl_addr[19:8]  } :
+			           req_cpu ? { 1'b0, addr[19:8] }     : { 1'b0, eth_addr[19:8] };
 			sd_ba   <= req_flp ? flp_addr[21:20]          :
-			           req_dl  ? dl_addr[21:20]           : addr[21:20];
-			din_q   <= req_dl ? dl_din : din;
-			ds_q    <= req_dl ? 2'b11  : ds;
+			           req_dl  ? dl_addr[21:20]           :
+			           req_cpu ? addr[21:20]              : eth_addr[21:20];
+			din_q   <= req_dl ? dl_din : req_cpu ? din : eth_din;
+			ds_q    <= req_dl ? 2'b11  : req_cpu ? ds  : 2'b11;
 			col_q   <= req_flp ? { flp_addr[22], flp_addr[7:0] } :
-			           req_dl  ? { dl_addr[22],  dl_addr[7:0]  }
-			                   : { addr[22],     addr[7:0] };
+			           req_dl  ? { dl_addr[22],  dl_addr[7:0]  } :
+			           req_cpu ? { addr[22],     addr[7:0] }
+			                   : { eth_addr[22], eth_addr[7:0] };
 			seq      <= 3'd1;
 			seq_busy <= 1;
-			src_cpu  <= !req_flp && !req_dl;
-			we_latch <= req_flp ? 1'b0 : req_dl ? 1'b1 : we;
-			oe_latch <= req_flp ? 1'b1 : req_dl ? 1'b0 : oe;
+			src_cpu  <= !req_flp && !req_dl && req_cpu;
+			src_eth  <= !req_flp && !req_dl && !req_cpu && req_eth;
+			we_latch <= req_flp ? 1'b0 : req_dl ? 1'b1 : req_cpu ? we : eth_we;
+			oe_latch <= req_flp ? 1'b1 : req_dl ? 1'b0 : req_cpu ? oe : !eth_we;
 			if (req_flp) begin
 				flp_served <= 1;
 			end else if (req_dl) begin
 				dl_served <= 1;
 				dl_ack    <= 1;          // ★ never touches cpu_done
-			end else begin
+			end else if (req_cpu) begin
 				if (we) cpu_done <= 1;   // posted write: ack at ACTIVE; din/ds
 				                         // stay valid (AS held) through CAS
+			end else begin
+				// eth write: posted like the CPU's (din frozen into din_q here;
+				// pds_enet holds the request until it sees this ack). Reads
+				// ack at STATE_READ with the data. ★ never touches cpu_done.
+				if (eth_we) eth_ack <= 1;
 			end
 		end else if (ref_due >= REF_OPP && !flp_guard && !flp_win && !(dl_req && dl_slot)) begin
 			// !flp_guard/!flp_win: a refresh started just before a floppy

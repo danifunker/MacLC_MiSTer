@@ -310,11 +310,22 @@ module emu
 	wire        pds_mem_rd, pds_mem_we;
 	wire [63:0] pds_mem_wdata, pds_mem_rdata;
 	wire        pds_mem_rvalid, pds_mem_busy;
+	// guest-RAM DMA legs into sim_ram's eth port (mirror of MacLC.sv)
+	wire        pds_eth_req, pds_eth_we, pds_eth_ack;
+	wire [23:0] pds_eth_addr;
+	wire [15:0] pds_eth_din, pds_eth_dout;
 	pds_enet pds_enet (
 		.clk_sys   (clk_sys),
 		.rst_core  (~pll_locked | reset),
 		.rst_guest (~_cpuReset | ~_cpuReset_o),
 		.ena_osd   (1'b1),
+		.ram_config_phys(configRAMSize),
+		.eth_req   (pds_eth_req),
+		.eth_we    (pds_eth_we),
+		.eth_addr  (pds_eth_addr),
+		.eth_din   (pds_eth_din),
+		.eth_ack   (pds_eth_ack),
+		.eth_dout  (pds_eth_dout),
 		.cpuAddr   (cpuAddr),
 		.cpuDataIn (cpuDataOut),
 		._cpuAS    (_cpuAS),
@@ -1256,6 +1267,15 @@ module emu
 
 		.cpu_done       ( ram_cpu_done ),
 		.cpu_dout       ( ram_cpu_dout ),
+
+		// PDS Ethernet guest-RAM DMA port (mirror of MacLC.sv's sdram wiring)
+		.eth_req        ( pds_eth_req  ),
+		.eth_we         ( pds_eth_we   ),
+		.eth_addr       ( pds_eth_addr ),
+		.eth_din        ( pds_eth_din  ),
+		.eth_ack        ( pds_eth_ack  ),
+		.eth_dout       ( pds_eth_dout ),
+
 		.frame_count    ( sim_frame_count )
 	);
 

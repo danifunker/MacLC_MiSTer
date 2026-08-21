@@ -25,6 +25,14 @@
  *   5. Warm guest reset posts TAG_RESET; the presence-establishing reset
  *      posts nothing.
  *   6. INT word -> irq output (and clears).
+ *   7. Guest-RAM DMA engine (Phase 3): DMA_CMD/DMA_STAT seq handshake; both
+ *      directions move bytes between a fake SDRAM (served on the eth port)
+ *      and the XFER window with the lane convention intact; the V8 RAM
+ *      translation known-answers (SIMM, motherboard-high, mirror — these
+ *      guard the DUPLICATED translation in pds_enet.sv against drift from
+ *      addrController_top.v); error reporting for out-of-range / odd
+ *      address; zero-length no-op; a guest declROM read still completes
+ *      while a DMA block is in flight.
  *
  * Build + run (Verilator 5.x, from verilator/):
  *   verilator --binary -j 0 -Wno-fatal --timescale 1ns/1ps \
@@ -51,8 +59,18 @@ module tb_pds_enet;
 	wire m_rd, m_we, m_rvalid, m_busy;
 	wire [63:0] m_wdata, m_rdata;
 
+	reg  [7:0] ram_config_phys = 8'hC4;   // default: 8MB SIMM (bits[7:6]=11)
+	wire       eth_req, eth_we;
+	wire [23:0] eth_addr;
+	wire [15:0] eth_din;
+	reg        eth_ack_r = 0;
+	reg [15:0] eth_dout_r = 0;
+
 	pds_enet dut (
 		.clk_sys(clk), .rst_core(rst_core), .rst_guest(rst_guest), .ena_osd(ena_osd),
+		.ram_config_phys(ram_config_phys),
+		.eth_req(eth_req), .eth_we(eth_we), .eth_addr(eth_addr), .eth_din(eth_din),
+		.eth_ack(eth_ack_r), .eth_dout(eth_dout_r),
 		.cpuAddr(cpuAddr), .cpuDataIn(cpuDataIn),
 		._cpuAS(_cpuAS), ._cpuUDS(_cpuUDS), ._cpuLDS(_cpuLDS), ._cpuRW(_cpuRW),
 		.card_sel(card_sel), .card_ack(card_ack), .card_dout(card_dout), .irq(irq),
@@ -60,6 +78,28 @@ module tb_pds_enet;
 		.mem_wdata(m_wdata), .mem_be(m_be), .mem_rdata(m_rdata),
 		.mem_rvalid(m_rvalid), .mem_busy(m_busy)
 	);
+
+	// fake guest SDRAM served on the eth port — 2-edge reads like sim_ram.v
+	reg [15:0] sdr_mem [0:8388607];
+	reg        sdr_d = 0;
+	always @(posedge clk) begin
+		if (eth_req && !eth_ack_r) begin
+			if (eth_we) begin
+				sdr_mem[eth_addr[22:0]] <= eth_din;
+				eth_ack_r <= 1;
+			end else begin
+				sdr_d <= 1;
+				if (sdr_d) begin
+					eth_dout_r <= sdr_mem[eth_addr[22:0]];
+					eth_ack_r  <= 1;
+				end
+			end
+		end
+		if (!eth_req) begin
+			eth_ack_r <= 0;
+			sdr_d     <= 0;
+		end
+	end
 
 	sim_ddr3 dd (
 		.clk(clk), .addr(m_addr), .burst(m_burst), .rd(m_rd), .we(m_we),
@@ -69,7 +109,24 @@ module tb_pds_enet;
 	localparam [63:0] MAGIC_V1 = 64'h4D634C43_45544831;
 	localparam [63:0] MAGIC    = 64'h4D634C43_45544832;
 	localparam W_MAGIC = 15'h4000, W_WPTR = 15'h4001, W_SHAD = 15'h4002,
-	           W_INT = 15'h4012, W_MACPROM = 15'h4013, W_RING = 15'h4100;
+	           W_INT = 15'h4012, W_MACPROM = 15'h4013, W_RING = 15'h4100,
+	           W_XFER = 15'h0000, W_DMACMD = 15'h4016, W_DMASTAT = 15'h4017;
+
+	// post a DMA command and wait for its seq echo in DMA_STAT
+	task dma_run(input [7:0] seq, input dir, input [23:0] gaddr,
+	             input [15:0] count, output [8:0] stat);
+		integer k;
+		begin
+			dd.poke64(W_DMACMD, ({48'b0, count} << 40) | ({40'b0, gaddr} << 16)
+			                    | ({63'b0, dir} << 8) | {56'b0, seq});
+			k = 0;
+			while (k < 300000 && (dd.peek64(W_DMASTAT) & 64'hFF) != {56'b0, seq}) begin
+				@(negedge clk); k = k + 1;
+			end
+			stat = dd.peek64(W_DMASTAT) & 64'h1FF;
+		end
+	endtask
+	reg [8:0] dstat;
 
 	integer fails = 0;
 	task check(input cond, input [511:0] name);
@@ -237,6 +294,65 @@ module tb_pds_enet;
 		dd.poke64(W_INT, 64'h0);
 		i = 0; while (i < 25000 && irq) begin @(negedge clk); i = i + 1; end
 		check(!irq, "INT word clears irq");
+
+		// ── guest-RAM DMA engine ─────────────────────────────────────────
+		for (i = 0; i < 32; i = i + 1) sdr_mem[23'h100800 + i] = 16'h1100 + i[15:0];
+
+		// dir 0 (guest -> XFER), 8MB SIMM config: guest $001000 -> SDRAM
+		// word $100000 + $800 (the SIMM known-answer)
+		dma_run(8'd1, 1'b0, 24'h001000, 16'd16, dstat);
+		check(dstat == 9'h001, "DMA read completes: STAT seq 1, no error");
+		check(dd.peek64(W_XFER)     == 64'h0311_0211_0111_0011,
+		      "XFER word 0: guest bytes in window lanes (SIMM translation)");
+		check(dd.peek64(W_XFER + 1) == 64'h0711_0611_0511_0411,
+		      "XFER word 1: second group gathered");
+
+		// dir 1 (XFER -> guest): 12 bytes = 6 words, partial second group
+		dd.poke64(W_XFER,     64'h44C3_33C2_22C1_11C0);
+		dd.poke64(W_XFER + 1, 64'h0000_0000_66C5_55C4);
+		sdr_mem[23'h101000] = 16'hFFFF;   // guards: beyond-count words
+		sdr_mem[23'h101006] = 16'hFFFF;   //         must stay untouched
+		dma_run(8'd2, 1'b1, 24'h002000, 16'd12, dstat);
+		check(dstat == 9'h002, "DMA write completes: STAT seq 2, no error");
+		check(sdr_mem[23'h101000] == 16'hC011 && sdr_mem[23'h101001] == 16'hC122 &&
+		      sdr_mem[23'h101002] == 16'hC233 && sdr_mem[23'h101003] == 16'hC344 &&
+		      sdr_mem[23'h101004] == 16'hC455 && sdr_mem[23'h101005] == 16'hC566,
+		      "DMA write: 6 words scattered to guest RAM");
+		check(sdr_mem[23'h101006] == 16'hFFFF, "DMA write stops at count");
+
+		// motherboard-high known-answer: guest $800010 -> SDRAM word $000008
+		sdr_mem[23'h000008] = 16'hB007;
+		dma_run(8'd3, 1'b0, 24'h800010, 16'd2, dstat);
+		check(dstat == 9'h003 && (dd.peek64(W_XFER) & 64'hFFFF) == 64'h07B0,
+		      "motherboard-high translation ($800010 -> word $000008)");
+
+		// mirror known-answer: 4MB SIMM config, guest $500000 -> word $080000
+		ram_config_phys = 8'h84;
+		sdr_mem[23'h080000] = 16'h4A11;
+		dma_run(8'd4, 1'b0, 24'h500000, 16'd2, dstat);
+		check(dstat == 9'h004 && (dd.peek64(W_XFER) & 64'hFFFF) == 64'h114A,
+		      "motherboard-mirror translation (4MB SIMM, $500000 -> word $080000)");
+		ram_config_phys = 8'hC4;
+
+		// error paths
+		dma_run(8'd5, 1'b0, 24'hA00000, 16'd2, dstat);
+		check(dstat == 9'h105, "out-of-range DMA ($A00000) reports the error bit");
+		dma_run(8'd6, 1'b0, 24'h001001, 16'd2, dstat);
+		check(dstat == 9'h106, "odd guest address reports the error bit");
+		dma_run(8'd7, 1'b0, 24'h001000, 16'd0, dstat);
+		check(dstat == 9'h007, "zero-length DMA is a clean no-op");
+
+		// a guest declROM read completes while a DMA block is in flight
+		dd.poke64(W_DMACMD, ({48'b0, 16'd128} << 40) | ({40'b0, 24'h001000} << 16)
+		                    | 64'h08);
+		cpu_cycle(32'hFEFFFFFE, 1, 1, 1, 0, 1, rd, cl);
+		check(cl && rd == 16'h000F, "declROM read serves during an active DMA");
+		i = 0;
+		while (i < 300000 && (dd.peek64(W_DMASTAT) & 64'hFF) != 64'h08) begin
+			@(negedge clk); i = i + 1;
+		end
+		check((dd.peek64(W_DMASTAT) & 64'h1FF) == 9'h008,
+		      "the interleaved DMA still completes (seq 8)");
 
 		if (fails == 0) $display("ALL PASS (tb_pds_enet)");
 		else            $display("%0d FAILURES (tb_pds_enet)", fails);
