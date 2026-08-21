@@ -323,6 +323,27 @@ Re-verify boot (the screenshot check above) after ANY SR change.
   (or a third-party CD driver) to mount discs. Serving law for any new
   DataIn command: transfer EXACTLY what the initiator arms (see
   docs/SCSI_CMD_GAPS.md).
+- **Ethernet (Apple Ethernet LC Twisted Pair card, 820-0532, LC PDS slot $E):
+  implemented 2026-08-21 on branch `apple-pds-ethernet` — sim-proven, HW
+  validation pending.** The card is a RAM-less bus-master SONIC (DP83934).
+  FPGA side = `rtl/pds/pds_enet.sv`: register doorbell + read shadows, MAC
+  PROM (word-wide reads return the $0028 probe magic), flat 32K declROM at
+  $FEFF'8000 served from DDR3, and a guest-RAM DMA engine that enters
+  `rtl/sdram.v` as a 4th requester (idle-edges-only, level handshake, NEVER
+  touches cpu_done — the download-port pattern). Host side lives in the
+  Main_MiSTer fork (branch `mac-ethernet`, `support/mac/mac_eth*` +
+  `mac_sonic*` — SONIC model ported from MAME dp83932c flows); **the
+  modified Main is REQUIRED** (the old standalone `hps/maclc_eth` daemon is
+  retired). declROM source of truth = `releases/341-0740_AppleLCTwistedPair
+  .BIN` (sha1 447ce683…); `scripts/gen_enet_declrom.py` generates both the
+  sim hex and Main's embedded header — never hand-edit those. Guest needs
+  Apple's Network Software (no driver in ROM). Regression gates for ANY
+  ethernet/SDRAM edit: `verilator/tb_pds_enet.v` (43 checks, build cmd in
+  header), the Main fork's `support/mac/test/mac_sonic_test.cpp` (36),
+  `verilator/tb_icache_seam.v` normal AND negative control after any
+  sdram.v handshake edit, and the boot gate card-absent AND card-present
+  (`+pds_magic +pds_rom=pds_declrom.hex`; card-present shifts the ?-icon
+  past frame ~500 — the 32K ROM scan delays it, that is normal).
 - **Serial (SCC, modem port): MIDI OUT + MIDI IN + PPP all work, HW-validated**
   (OUT 2026-08-12 cozyMIDI → MidiLink/MT32-pi; PPP 2026-08-13 LCP+IPCP on
   7.5.5 incl. guest FTP; IN 2026-08-14). MIDI IN sources: HPS UART (MidiLink

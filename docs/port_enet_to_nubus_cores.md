@@ -3,112 +3,93 @@
 Paste this whole file as the opening prompt of a session **in the target core's
 repo** (e.g. `..\MacIIvi_MiSTer`). It carries everything that session needs from
 the MacLC work; the reference implementation lives in
-`C:\Temp\mistercore\MacLC_MiSTer` on branch `add-pds-ethernet`.
+`C:\Temp\mistercore\MacLC_MiSTer` on branch `apple-pds-ethernet`, and the host
+half in the user's Main_MiSTer fork (`C:\Temp\mistercore\Main_MiSTer`, branch
+`mac-ethernet`, `support/mac/mac_eth*` + `mac_sonic*`).
+
+(Rewritten 2026-08-21: v1 targeted the Asante MC3NB with a standalone daemon.
+The MacLC feature has since become **Apple's own card** — Ethernet LC Twisted
+Pair, SONIC — with the host half **inside Main_MiSTer**, and that changes this
+port for the better.)
 
 ## Mission
 
-Port the MacLC PDS ethernet feature to this NuBus-based Mac core as an
-**Asante MC3NB** (NuBus, same DP8390 chip as the MacCON i LC). Reuse the DDR3
-mailbox architecture and the `maclc_eth` HPS daemon essentially unchanged;
-replace the LC-specific slot front-end with NuBus slot decode and this card's
-declaration ROM. MiSTer Main is NOT modified — the daemon is standalone.
+Port the Mac Ethernet feature to this NuBus-based Mac core as the **Apple
+Ethernet NB Twisted Pair card** (820-0511-A) — MAME
+`src/devices/bus/nubus/enetnbtp.cpp`. Same SONIC family as the MacLC card,
+which means the entire chip model, mailbox architecture, network bridge, and
+Apple guest-driver stack are already built and validated; and this card is the
+EASY member of the family:
 
-## What already exists (MacLC repo, branch add-pds-ethernet)
+**★ The NB TP card has 128 KiB of ON-CARD RAM and its SONIC masters only into
+that local RAM** (MAME: "SONIC's bus mastering capability appears to be
+unused outside of the on-card RAM"). So the hard part of the LC port — the
+guest-RAM DMA-RPC engine into the SDRAM controller — is NOT needed here. The
+card RAM is simply a DDR3-backed window (the v1 Asante "boardram" pattern,
+still in git history at tag-time `1a73db4`), CPU accesses stretch for a DDR3
+round trip, and the SONIC model's guest-memory accessor gets a trivial
+"local buffer" backend instead of the DMA-RPC one.
 
-| piece | file | notes |
+## What already exists
+
+| piece | where | reuse |
 |---|---|---|
-| FPGA front-end | `rtl/pds/pds_enet.sv` (521 L) | slot decode, DDR3 mailbox client, reg-RPC, stretched ROM/RAM reads, IRQ shadow |
-| top-level glue | `MacLC.sv` + `rtl/addrController_top.v` diffs in commit `1a73db4` | DDRAM wiring, slot carve-out, pseudo-VIA IRQ bit |
-| HPS daemon | `hps/maclc_eth/` (`maclc_eth.c`, `dp8390.c`, `enet_iface.c`, `maclc_eth.h`, Makefile) | DP8390 model, declROM stage + MAC patch + Apple-CRC refix, bridge: eth0 (AF_PACKET) / tap0 / macvlan / eth1 |
-| declROM (LC card) | `releases/maccon.rom` (16 KB) | NOT the ROM for this port — see below |
-| unit TB | `verilator/tb_pds_enet.v` + `verilator/sim_ddr3.v` | 22 checks: mailbox, RPC, stretch, IRQ, watchdog |
-| architecture doc | `docs/pds_ethernet_scope.md` | READ FIRST — mailbox contract, register quirks, design bets |
-
-Architecture in one line: the FPGA side is a dumb slave that maps slot space
-onto a DDR3 window (ARM phys `0x1FF00000`: 64 KB packet buffer + 16 KB declROM
-+ control page) and turns register accesses into doorbell RPCs; the daemon
-mmaps the same window via `/dev/mem`, runs the DP8390 model + network bridge,
-and pre-stages ROM + register shadows so guest READS never wait on the ARM.
-
-**Measured cost on the MacLC (Cyclone V 5CSEBA6):** ~441 ALMs, 732 registers,
-**0 M10K, 0 DSP** (buffer + ROM live in DDR3, staging is MLAB/regs). STA closed
-first try. Budget the same here, plus a DDR3 arbiter if this core already uses
-its DDRAM port (MacLC's was free — check this early; Minimig's
-`rtl/A2065/a2065_ddram_arbiter.v` is the pattern to copy if not).
+| SONIC model (DP83932/34) | Main fork `support/mac/mac_sonic.{h,cpp}` | as-is — the `sonic_host_ops` accessor struct was designed for exactly this split: give it a backend that reads/writes the card-RAM window instead of posting DMA-RPCs |
+| host service pattern | Main fork `support/mac/mac_eth.cpp` | lifecycle, ring drain, shadow/INT publishing, MAC/PROM cooking all carry over; add this core's name to the (EXACT-match) gate and a per-core window/geometry |
+| net bridge | Main fork `support/mac/mac_eth_iface.cpp` | as-is |
+| model unit test | Main fork `support/mac/test/mac_sonic_test.cpp` (36 checks) | extend with a local-buffer backend case |
+| FPGA mailbox core | MacLC `rtl/pds/pds_enet.sv` | doorbell ring / wptr-rptr / presence latch / poll walk / DDR3 FSM are card-agnostic; replace the LC decode layer with NuBus decode + this card's map; DROP the DMA engine + sdram.v eth port (not needed); ADD back a boardram window (v1 pattern) |
+| unit TB | MacLC `verilator/tb_pds_enet.v` + `sim_ddr3.v` | 43 checks; port the addresses, drop the DMA cases, revive v1's boardram cases from git history |
+| declROM tooling | MacLC `scripts/gen_enet_declrom.py` | re-point at the NB TP ROM (verify byteLanes — the LC TP ROM was $0F/flat; if this one differs, the window math changes) |
+| architecture contract | MacLC `docs/pds_ethernet_scope.md` | READ FIRST |
 
 ## Port deltas (the actual work)
 
-1. **Card identity.** Target the Asante **MC3NB** — MAME emulates it in
-   `src/devices/bus/nubus/nubus_asntmc3b.cpp` (MAME ≥ 0.287 recommended; the
-   same file also has Apple Ethernet NB `appleenet` as an alternative if the
-   Apple driver stack is preferred). From that file + its ROM def, extract and
-   verify — do NOT assume the LC card's quirks carry over:
-   - declROM size, load offset, byteLanes pattern, and where in slot space it
-     surfaces (NuBus cards: top of standard slot space `$FsFF_FFFF` downward);
-   - DP8390 register window address + whether the index is inverted like the
-     MacCON's `~addr[5:2]`;
-   - data-port location and width; where the MAC address lives (LC card: ROM
-     offset 0, sRsrc $80 — verify for MC3NB, then keep the daemon's
-     patch-MAC-then-refix-CRC flow; CRC algorithm already in `maclc_eth.c`).
-   Fetch the ROM dump (mdk.cab hosts MAME romsets; verify CRC/SHA1 against the
-   MAME source's ROM_LOAD line) into this repo's `releases/`.
-2. **Slot decode.** Replace the LC pseudo-slot-$E carve-out with a real NuBus
-   slot (pick one this core doesn't populate; $9–$E standard space
-   `$Fs00_0000`, 24-bit alias `$s0_0000`). CRITICAL DIFFERENCE from MacLC: on
-   NuBus machines the Slot Manager expects **bus error on empty slots**, and
-   this core already implements that — the card must claim/ack its slot's
-   space so it stops BERRing, and everything it does NOT decode inside the
-   slot should keep the core's existing empty-space behaviour. (The MacLC's
-   `$FFFF`-ack phantom-slot lore does not apply to NuBus cores.)
-3. **Access timing.** MacLC served slow first-touch reads by stretching the
-   E-clock VPA ack with a watchdog (BERR past ~200 µs is fine — the LC ROM
-   probes behind a BERR handler). On this core, slot space is normal
-   DTACK-paced access: hold DTACK until the mailbox answers, keep a watchdog
-   → BERR fallback so a dead daemon can't wedge the machine (the Slot Manager
-   handles BERR from a sick card gracefully).
-4. **Interrupt.** Card asserts /NMRQ for its slot → this core's existing NuBus
-   slot-IRQ path (VIA2 slot-interrupt register on II-class machines), NOT the
-   MacLC pseudo-VIA bit. Keep the level-held-until-ISR-cleared semantics from
-   `pds_enet.sv` (ISR shadow AND'ed with IMR shadow drives the line).
-5. **Daemon.** Reuse `hps/maclc_eth/` nearly as-is. Required edits:
-   - CORENAME gate is an **exact match** on `MACLC` (commit `0de9974`
-     explains why prefix matching is dangerous — MacLCII). Add this core's
-     name (check `/tmp/CORENAME` on the box for the real string, e.g.
-     `MacIIvi`), ideally as a `-c NAME` flag + per-core ROM path map so ONE
-     binary can serve all Mac cores; keep MacLC in the list.
-   - MAC generation is hostname-hash based — add a per-core byte so an LC and
-     a IIvi on the same box never collide.
-   - declROM staging: adjust size/byte-lane expansion to what step 1 found.
-   Deployment: binary at `/media/fat/linux/maclc_eth`, ROM under
-   `/media/fat/games/<CORE>/`, transient start via ssh, persistence =
-   one line in `/media/fat/linux/user-startup.sh` (user's call — never edit it
-   unasked). Box busybox has no `pgrep`; use `ps | grep`.
-6. **Both tops.** If this core has a separate Verilator top like MacLC's
-   `sim.v`, wire the card + `sim_ddr3.v` mailbox model there too, and port
-   `tb_pds_enet.v` (update addresses/acks for NuBus).
+1. **Card facts from MAME `enetnbtp.cpp`** (do not assume the LC card's map):
+   ROM_LOAD name/size/hashes (fetch + verify the dump), the card's slot map —
+   RAM at card offsets `0x0-0x1FFFF` (with a mirror near `0xC20000`), SONIC
+   regs at `+0xC0000`, RAM also visible in super-slot space — plus MAC PROM
+   location/shape (the LC card's separate 8-byte PROM window with the $0028
+   word-read magic may or may not carry over; MAME is the oracle).
+2. **Slot decode.** Real NuBus slot (pick one this core doesn't populate;
+   standard space `$Fs00_0000`, super slot `$s000_0000`). CRITICAL DIFFERENCE:
+   NuBus Slot Managers expect **bus error on empty slots** — the card must
+   claim its slot fully and everything else keeps the core's BERR behaviour
+   (the MacLC's `$FFFF`-ack phantom-slot lore does NOT apply).
+3. **Access timing.** DTACK-paced slot access: hold DTACK for the DDR3 round
+   trip, watchdog → BERR fallback so a dead host can't wedge the machine.
+4. **Interrupt.** /NMRQ → this core's VIA2 slot-interrupt register (not the
+   LC pseudo-VIA bit). Same level semantics (INT word from the host).
+5. **Window layout.** Give this card its own GEOMETRY version and a fresh
+   MAGIC value (the MacLC v2 lesson: version-gate the pairing so a stale
+   host/FPGA can never half-pair). If both cores may live on one box, the
+   0x1FF00000 window is safe to share — only one core is ever loaded — but
+   the MAGIC value must differ per layout, not per core.
+6. **Main service.** In `mac_eth.cpp`: the core gate is an EXACT name match
+   (prefix matching would collide MacLC/MacLCII — same trap here); add the
+   new core name + a per-card personality (window layout, boardram backend,
+   this card's PROM shape). Derived MACs already hash the hostname; add a
+   per-core byte so two Macs on one box never collide.
+7. **Both tops** if the target core has a Verilator top; port the TB.
 
-## Gates (all must pass before deploy)
+## Gates
 
-- Unit TB green (mailbox RPC, stretch/watchdog, IRQ, staged-read paths).
-- Full-boot sim gate of THIS core, card absent AND card present. Card-present
-  evidence: the trace shows heavy Slot Manager traffic in the card's
-  `$FsFFxxxx` declROM window and boot still reaches the normal desktop.
-  (MacLC's run showed ~230k declROM accesses — same order expected.)
-- Quartus fit: A&E clean, STA met, and this repo's own per-seed video lore.
-- Deploy files-only; NEVER reload a core over a running guest. HW validation
-  (user): Asante EtherTalk installer in the guest (macintoshgarden
-  "asanté-installer-512" covers the whole Asante line incl. MC3NB), Network
-  cpanel → EtherTalk, reboot guest once after the daemon is up (card presence
-  latches at reset).
+- Model unit test green (with the local-buffer backend case added).
+- Unit TB green; full-boot sim of THIS core, card absent AND present
+  (card-present evidence: heavy Slot Manager traffic in `$FsFFxxxx` and a
+  normal desktop; the MacLC's 32K flat ROM logged ~460k window hits).
+- Quartus fit: A&E clean, STA met, this repo's own per-seed video lore.
+- HW: Apple's Network Software in the guest (same driver family as the LC
+  card — one of the reasons the Apple card beats the Asante here), Network
+  cpanel → EtherTalk, reboot once after the service is up (presence latches
+  at guest reset).
 
-## Known bets carried from the MacLC implementation (watch on HW)
+## Bets carried from the MacLC implementation (watch on HW)
 
-- Guest driver is assumed to move packet data via the mapped buffer window;
-  data-port remote-DMA reads work but ride the RPC path (slow-but-safe). If
-  the MC3NB driver turns out to bulk-copy through the data port, add an
-  FPGA-side auto-increment walker.
-- ISR shadow freshness is daemon-poll-bound (~1 ms) — fine for EtherTalk,
-  revisit if a driver spin-polls ISR with interrupts off.
-- 8390 loopback self-test is modeled as FIFO-fill (enough for the LC driver's
-  probe; the Asante NuBus driver may probe differently — MAME comparison is
-  the oracle if it fails).
+- Register-read shadows are host-poll-fresh (~0.7 ms round; hot-window
+  bursts poll at ~32 µs). Fine for interrupt-driven drivers; revisit if a
+  driver spin-polls CR/ISR with interrupts off (the MacLC scope doc's
+  "CR command-bit visibility" watch item).
+- Loopback self-test is a model-side TX→RX short-circuit (mac_sonic) — built
+  because Mac drivers self-test at open; verified in the unit test, not yet
+  against this card's driver.
