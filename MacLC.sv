@@ -1239,7 +1239,10 @@ module emu
 	// no OSD toggle — the CONF_STR entry is removed and status[11] is FREE.
 	// The sim side keeps its +icache plusarg so icache_trace_diff.py can
 	// still run ON/OFF differential traces.
-	.enable     ( 1'b1 ),
+	.enable     ( ~status[11] ),   // FIX 2026-08-22: non-constant '1' (status[11] free/=0)
+	                                 // keeps fetch_cache enable_r un-folded -> hit/DTACK path
+	                                 // no longer races. Zero-cost (immediate hit answer kept).
+	                                 // See docs/pocket_icache_fix_handoff.md.
 		.cpuAddr    ( tg68_a_early[23:0] ),
 		.as_n       ( _cpuAS ),
 		.rw         ( _cpuRW ),
