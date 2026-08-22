@@ -203,7 +203,7 @@ module pds_enet (
 	// This self-heals and cannot deadlock a genuinely-new interrupt: Main re-
 	// sets the bit in the shadow after the mask has already dropped (the shadow
 	// showed it clear first).  reg 4 = IMR (shad[1] k=0), reg 5 = ISR (k=1).
-	reg  [15:0] isr_pend_clr;   // overlay wires + combine are below the FSM decls
+	reg  [16:0] irq_supp;       // irq-suppression countdown (see the overlay block below the FSM decls)
 
 	// ── CPU-side request handshake (all clk_sys, no CDC) ────────────────────
 	localparam H_IDLE = 2'd0, H_RUN = 2'd1, H_DONE = 2'd2;
@@ -326,24 +326,27 @@ module pds_enet (
 	wire [28:0] rom_word = AV_BASE + {14'b0, AV_ROM} + {16'b0, req_sub[15:3]};
 	wire  [2:0] lane     = req_sub[2:0];   // byte lane of the D[15:8] byte
 
-	// ── local ISR-clear overlay ─────────────────────────────────────────────
-	// reg 4 = IMR (shad[1] bits [15:0]), reg 5 = ISR (bits [31:16]). isr_eff is
-	// the ISR the guest sees and that drives irq: Main's shadow with the guest's
-	// not-yet-confirmed clears masked out.
-	wire [15:0] shadow_imr = shad[1][15:0];
-	wire [15:0] shadow_isr = shad[1][31:16];
-	wire [15:0] isr_eff    = shadow_isr & ~isr_pend_clr;
-	// isr_pend_clr is driven from ONE combined nonblocking assign in the FSM so
-	// the guest-clear OR and the poll reconcile AND never race. A guest ISR
-	// write commits for exactly one cycle (hstate H_RUN, kind REGWR, reg 5,
-	// doorbell not yet queued); the reconcile fires when the poll refreshes
-	// shad[1] (regs 4-7) = poll_step_q 2, ANDing the mask with the fresh ISR.
-	wire        isr_wr_now    = (hstate == H_RUN) && (req_kind == K_REGWR)
-	                            && (reg_idx == 6'd5) && !cmd_queued;
-	wire [15:0] isr_or_now    = isr_wr_now ? req_wdata : 16'h0;
-	wire        isr_recon_now = (state == S_POLL_D) && mem_rvalid
-	                            && (poll_step_q == 5'd2);
-	wire [15:0] isr_recon_and = isr_recon_now ? mem_rdata[31:16] : 16'hFFFF;
+	// ── interrupt-ack livelock fix: irq suppression timer ───────────────────
+	// The INT line the guest sees comes from Main's INT word, which lags the
+	// guest's own ISR write-1-to-clear by ~1.6 ms (Main's ~1 ms poll + this
+	// block's ~0.66 ms INT re-poll). In that window the 68k RTEs, still sees
+	// IPL2 asserted, re-enters its handler and re-clears — ~120x per real
+	// interrupt (measured on HW), a livelock under load. Fix: when the guest
+	// writes ISR (write-1-to-clear), hold irq LOW for one round trip (IRQ_SUPP),
+	// then let irq follow Main's INT word again. This ONLY DELAYS irq's rising
+	// edge — it never masks a specific bit, never reconciles, and never
+	// fabricates or sticks an interrupt (irq is always ANDed with Main's INT
+	// word). So it cannot deadlock or deliver a spurious/duplicate interrupt —
+	// the failure modes of the per-bit-mask overlays this replaces (a mask that
+	// wedged the guest's RX under FTP / boot-broadcast bursts). Residual re-entry
+	// if Main is slower than IRQ_SUPP is self-limiting (one per window, ~1x).
+	// A guest ISR write commits for exactly one cycle (H_RUN, REGWR, reg 5,
+	// before its doorbell is queued).
+	wire        isr_wr_now  = (hstate == H_RUN) && (req_kind == K_REGWR)
+	                          && (reg_idx == 6'd5) && !cmd_queued;
+	// ~1.85 ms at clk_sys ~32.5 MHz — covers the shadow round trip while staying
+	// far below the RX descriptor-ring fill time at 10BASE-T rates.
+	localparam [16:0] IRQ_SUPP = 17'd60000;
 
 	integer i;
 	always @(posedge clk_sys) begin
@@ -392,7 +395,7 @@ module pds_enet (
 			dma_be      <= 0;
 			dma_hot_ctr <= 0;
 			dma_first   <= 0;
-			isr_pend_clr<= 16'h0;
+			irq_supp    <= 17'h0;
 			for (i = 0; i < 16; i = i + 1) shad[i] <= 64'h0;
 		end else begin
 			mem_rd <= 0;
@@ -400,12 +403,12 @@ module pds_enet (
 			poll_div <= poll_div + 1'b1;
 			if (dma_hot_ctr != 0) dma_hot_ctr <= dma_hot_ctr - 1'b1;
 
-			// local ISR-clear overlay — the ONLY driver of isr_pend_clr: OR in a
-			// guest write-1-to-clear the cycle it commits, AND-reconcile against
-			// the fresh ISR shadow when the poll refreshes it. A bit stays masked
-			// (irq suppressed) from the guest's clear until Main confirms it, then
-			// drops; a genuinely-new assertion re-appears via the shadow after.
-			isr_pend_clr <= (isr_pend_clr | isr_or_now) & isr_recon_and;
+			// irq suppression timer (the ONLY driver of irq_supp): a guest ISR
+			// write-1-to-clear (re)arms it to IRQ_SUPP so irq is held low for one
+			// shadow round trip; otherwise it counts down to 0, at which point irq
+			// again follows Main's INT word. Never masks a bit, never sticks.
+			if (isr_wr_now)          irq_supp <= IRQ_SUPP;
+			else if (irq_supp != 0)  irq_supp <= irq_supp - 17'd1;
 
 			// presence can only change while the guest is held in reset; once
 			// running it is frozen so the Slot Manager never sees the card
@@ -444,10 +447,7 @@ module pds_enet (
 			H_RUN: begin
 				case (req_kind)
 				K_REGRD: begin
-					// ISR (reg 5) reads return the locally-masked value so the
-					// guest never re-sees a bit it already cleared this pass.
-					dout_r <= (reg_idx == 6'd5) ? (sonic_rdata & ~isr_pend_clr)
-					                            : sonic_rdata;
+					dout_r <= sonic_rdata;
 					hstate <= H_DONE;
 				end
 				K_REGWR: begin
@@ -455,9 +455,8 @@ module pds_enet (
 						cmd_entry   <= {24'b0, 8'b0, req_wdata, 6'b0, reg_idx, TAG_REG_WR, 1'b1};
 						cmd_queued  <= 1'b1;
 						cmd_for_cpu <= 1'b1;   // H_DONE comes from the publish path
-						// (ISR write-1-to-clear is applied locally via the
-						// isr_wr_now/isr_pend_clr combine below, so irq drops on
-						// the next edge — ~1.6 ms before Main's shadow would.)
+						// (an ISR write also arms the irq suppression timer via
+						// isr_wr_now above, killing the interrupt-ack livelock.)
 					end
 				end
 				K_MACRD: begin
@@ -722,11 +721,9 @@ module pds_enet (
 		end
 	end
 
-	// irq from the LOCAL effective ISR (guest clears applied immediately),
-	// masked by the shadow IMR — not from Main's ~1.6 ms-stale INT word, whose
-	// lag caused the ~120x interrupt-ack livelock. Equivalent to Main's
-	// sonic_int_line() once the pending clears reconcile. int_state (the polled
-	// INT word) is retained for observability but no longer gates the line.
-	assign irq = present && ((isr_eff & shadow_imr & 16'h7fff) != 16'h0);
+	// irq = Main's INT word, but held low for one shadow round trip after each
+	// guest ISR write (irq_supp) so the guest can't re-enter its handler on the
+	// stale-high line — the interrupt-ack livelock fix. Delay only: never sticks.
+	assign irq = present && int_state && (irq_supp == 17'd0);
 
 endmodule

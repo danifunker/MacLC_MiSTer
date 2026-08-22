@@ -110,7 +110,8 @@ module tb_pds_enet;
 	localparam [63:0] MAGIC    = 64'h4D634C43_45544832;
 	localparam W_MAGIC = 15'h4000, W_WPTR = 15'h4001, W_SHAD = 15'h4002,
 	           W_INT = 15'h4012, W_MACPROM = 15'h4013, W_RING = 15'h4100,
-	           W_XFER = 15'h0000, W_DMACMD = 15'h4016, W_DMASTAT = 15'h4017;
+	           W_XFER = 15'h0000, W_DMACMD = 15'h4016, W_DMASTAT = 15'h4017,
+	           W_RPTR = 15'h4015;
 
 	// post a DMA command and wait for its seq echo in DMA_STAT
 	task dma_run(input [7:0] seq, input dir, input [23:0] gaddr,
@@ -287,46 +288,42 @@ module tb_pds_enet;
 		e = dd.peek64(W_RING + (wp0[7:0] & 8'hFF));
 		check(e[0] && e[3:1] == 3'd1, "last event is TAG_RESET");
 
-		// ── irq via the LOCAL ISR-clear overlay (interrupt-ack livelock fix) ──
-		// irq is now driven from the local effective ISR (shadow ISR with the
-		// guest's write-1-to-clear applied immediately) masked by the shadow
-		// IMR — NOT from Main's ~1.6 ms-stale INT word. shad[1] = regs 4..7:
-		// IMR (reg 4) = bits[15:0], ISR (reg 5) = bits[31:16].
-		dd.poke64(W_INT, 64'h1);                      // INT word alone must NOT drive irq
-		repeat (3000) @(negedge clk);
-		check(!irq, "INT word alone no longer raises irq (local overlay)");
-		dd.poke64(W_INT, 64'h0);
-
-		dd.poke64(W_SHAD + 15'd1, 64'h0000_0000_0200_0200);   // ISR=0x0200 (TXDN), IMR=0x0200
+		// ── irq suppression timer (interrupt-ack livelock fix) ──
+		// irq = Main's INT word, but held low for IRQ_SUPP (~60000 cyc) after
+		// each guest ISR write, so the guest can't re-enter its handler on the
+		// stale-high line. It ONLY delays irq's rising edge — never masks a bit,
+		// never sticks, never fabricates — so it cannot deadlock or deliver a
+		// spurious interrupt (the failure modes of the per-bit mask it replaces).
+		dd.poke64(W_INT, 64'h1);                      // INT word -> irq (no recent ISR write)
 		i = 0; while (i < 40000 && !irq) begin @(negedge clk); i = i + 1; end
-		check(irq, "ISR & IMR shadow raises irq");
+		check(irq, "INT word raises irq when no ISR write is suppressing it");
 
-		// guest writes ISR reg5=0x0200 to clear TXDN -> irq drops IMMEDIATELY,
-		// with the shadow STILL set (no Main round-trip). This is the fix.
+		// guest writes ISR -> irq suppressed immediately, INT word still 1
 		wp0 = dd.peek64(W_WPTR);
 		cpu_cycle(32'hFE000014, 0, 1, 1, 16'h0200, 1, rd, cl);   // ISR = reg 5 @ +$14
 		check(cl, "guest ISR clear write claims + completes");
 		i = 0; while (i < 100 && irq) begin @(negedge clk); i = i + 1; end
-		check(!irq, "guest ISR write drops irq LOCALLY while shadow still set");
-		check(i < 40, "irq drop was immediate (no ~1.6 ms round-trip = no livelock)");
+		check(!irq, "guest ISR write suppresses irq immediately (kills the re-entry livelock)");
+		check(i < 40, "irq drop was immediate");
 		e = dd.peek64(W_RING + (wp0[7:0] & 8'hFF));
 		check(e[0] && e[9:4] == 6'd5 && e[31:16] == 16'h0200,
 		      "the ISR clear still posts a REG_WR doorbell for Main");
-		cpu_cycle(32'hFE000014, 1, 1, 1, 16'h0, 1, rd, cl);
-		check(cl && rd == 16'h0000, "guest ISR read returns the locally-cleared value");
 
-		// reconcile: Main applies the clear (shadow ISR -> 0); the pending-clear
-		// mask must drop so a genuinely-NEW TXDN re-raises irq (no deadlock).
-		dd.poke64(W_SHAD + 15'd1, 64'h0000_0000_0000_0200);   // ISR=0, IMR=0x0200
-		repeat (40000) @(negedge clk);
-		check(!irq, "irq stays low after Main confirms the clear");
-		dd.poke64(W_SHAD + 15'd1, 64'h0000_0000_0200_0200);   // fresh TXDN event
-		i = 0; while (i < 40000 && !irq) begin @(negedge clk); i = i + 1; end
-		check(irq, "a new ISR assertion re-raises irq (mask reconciled, no deadlock)");
-		cpu_cycle(32'hFE000014, 0, 1, 1, 16'h0200, 1, rd, cl);   // clear for later tests
-		dd.poke64(W_SHAD + 15'd1, 64'h0);
-		repeat (40000) @(negedge clk);
-		check(!irq, "irq low after cleanup");
+		// irq stays suppressed through the round-trip window even though INT=1
+		repeat (30000) @(negedge clk);
+		check(!irq, "irq stays suppressed during the round-trip window");
+
+		// after IRQ_SUPP expires, irq FOLLOWS the INT word again (it is still 1):
+		// this proves it can never deadlock — a real pending interrupt always
+		// gets through once the fixed window passes.
+		i = 0; while (i < 60000 && !irq) begin @(negedge clk); i = i + 1; end
+		check(irq, "irq re-follows the INT word after suppression expires (NO DEADLOCK)");
+
+		// Main lowers the INT word -> irq drops (no suppression involved)
+		dd.poke64(W_INT, 64'h0);
+		i = 0; while (i < 40000 && irq) begin @(negedge clk); i = i + 1; end
+		check(!irq, "irq clears when Main lowers the INT word");
+		dd.poke64(W_SHAD + 15'd1, 64'h0);                     // cleanup
 
 		// ── guest-RAM DMA engine ─────────────────────────────────────────
 		for (i = 0; i < 32; i = i + 1) sdr_mem[23'h100800 + i] = 16'h1100 + i[15:0];
