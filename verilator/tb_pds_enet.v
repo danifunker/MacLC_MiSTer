@@ -287,13 +287,46 @@ module tb_pds_enet;
 		e = dd.peek64(W_RING + (wp0[7:0] & 8'hFF));
 		check(e[0] && e[3:1] == 3'd1, "last event is TAG_RESET");
 
-		// ── INT -> irq ───────────────────────────────────────────────────
-		dd.poke64(W_INT, 64'h1);
-		i = 0; while (i < 25000 && !irq) begin @(negedge clk); i = i + 1; end
-		check(irq, "INT word raises irq");
+		// ── irq via the LOCAL ISR-clear overlay (interrupt-ack livelock fix) ──
+		// irq is now driven from the local effective ISR (shadow ISR with the
+		// guest's write-1-to-clear applied immediately) masked by the shadow
+		// IMR — NOT from Main's ~1.6 ms-stale INT word. shad[1] = regs 4..7:
+		// IMR (reg 4) = bits[15:0], ISR (reg 5) = bits[31:16].
+		dd.poke64(W_INT, 64'h1);                      // INT word alone must NOT drive irq
+		repeat (3000) @(negedge clk);
+		check(!irq, "INT word alone no longer raises irq (local overlay)");
 		dd.poke64(W_INT, 64'h0);
-		i = 0; while (i < 25000 && irq) begin @(negedge clk); i = i + 1; end
-		check(!irq, "INT word clears irq");
+
+		dd.poke64(W_SHAD + 15'd1, 64'h0000_0000_0200_0200);   // ISR=0x0200 (TXDN), IMR=0x0200
+		i = 0; while (i < 40000 && !irq) begin @(negedge clk); i = i + 1; end
+		check(irq, "ISR & IMR shadow raises irq");
+
+		// guest writes ISR reg5=0x0200 to clear TXDN -> irq drops IMMEDIATELY,
+		// with the shadow STILL set (no Main round-trip). This is the fix.
+		wp0 = dd.peek64(W_WPTR);
+		cpu_cycle(32'hFE000014, 0, 1, 1, 16'h0200, 1, rd, cl);   // ISR = reg 5 @ +$14
+		check(cl, "guest ISR clear write claims + completes");
+		i = 0; while (i < 100 && irq) begin @(negedge clk); i = i + 1; end
+		check(!irq, "guest ISR write drops irq LOCALLY while shadow still set");
+		check(i < 40, "irq drop was immediate (no ~1.6 ms round-trip = no livelock)");
+		e = dd.peek64(W_RING + (wp0[7:0] & 8'hFF));
+		check(e[0] && e[9:4] == 6'd5 && e[31:16] == 16'h0200,
+		      "the ISR clear still posts a REG_WR doorbell for Main");
+		cpu_cycle(32'hFE000014, 1, 1, 1, 16'h0, 1, rd, cl);
+		check(cl && rd == 16'h0000, "guest ISR read returns the locally-cleared value");
+
+		// reconcile: Main applies the clear (shadow ISR -> 0); the pending-clear
+		// mask must drop so a genuinely-NEW TXDN re-raises irq (no deadlock).
+		dd.poke64(W_SHAD + 15'd1, 64'h0000_0000_0000_0200);   // ISR=0, IMR=0x0200
+		repeat (40000) @(negedge clk);
+		check(!irq, "irq stays low after Main confirms the clear");
+		dd.poke64(W_SHAD + 15'd1, 64'h0000_0000_0200_0200);   // fresh TXDN event
+		i = 0; while (i < 40000 && !irq) begin @(negedge clk); i = i + 1; end
+		check(irq, "a new ISR assertion re-raises irq (mask reconciled, no deadlock)");
+		cpu_cycle(32'hFE000014, 0, 1, 1, 16'h0200, 1, rd, cl);   // clear for later tests
+		dd.poke64(W_SHAD + 15'd1, 64'h0);
+		repeat (40000) @(negedge clk);
+		check(!irq, "irq low after cleanup");
 
 		// ── guest-RAM DMA engine ─────────────────────────────────────────
 		for (i = 0; i < 32; i = i + 1) sdr_mem[23'h100800 + i] = 16'h1100 + i[15:0];

@@ -200,6 +200,39 @@ declROM, PROM window shape. The RTL refactor keeps
 `rtl/pds/pds_enet.sv`'s mailbox/handshake generic under the card layer with
 that split in mind.
 
+## HW bring-up 2026-08-22 — boot hang RESOLVED
+
+The card-ON "guest hangs at boot, one extension icon" bug was **NOT** the
+declROM/DTACK enumeration theory: the guest driver enumerated and ran its full
+open sequence every time (the mailbox doorbell ring proved it). Three defects,
+all the **same class — the guest-RAM DMA engine only moves 16-bit WORDS at EVEN
+addresses, but the SONIC legitimately uses ODD addresses, and the backend
+REJECTED odd** (`if (ga & 1) return -1`):
+
+1. `mac_sonic.cpp` — after a completed TX, `CTDA` holds an odd end-of-list link
+   (LSB = EOL flag, not an address bit). The next TXP dereferenced the odd
+   descriptor → backend rejected → `transmit_chain` aborted with `CR.TXP` still
+   set → the driver spin-polled TXP forever. Fix: `DA()` word-aligns descriptor
+   addresses (mirrors MAME `read_word`); `TX_ABORT()` guarantees TXP always
+   clears on any host-op failure.
+2. `mac_eth.cpp` — a 101-byte loopback frame leaves the RX buffer pointer ODD
+   (`0xA530+101 = 0xA595`); the odd byte-write failed → `PKTRX` never raised →
+   the driver hung in its open-time loopback self-test. Fix: `rpc_read`/
+   `rpc_write` word-align + read-modify-write (the byte/word impedance match
+   belongs in the backend). Both fixes are host-side; **no RTL change**, and the
+   Mac now boots to the Finder desktop with Ethernet On (HW-confirmed).
+   The offline gate had missed this because `mac_sonic_test`'s fake RAM tolerated
+   odd addresses — now hardened (rejects odd word addrs) + an odd-EOL regression.
+
+3. **Interrupt-ack livelock (Risk #2 below, realised): FIXED in RTL.** Measured
+   ~120x doorbells per real interrupt on HW — the guest re-enters its handler
+   ~120x because the INT line it sees lags its own ISR clear by ~1.6 ms. Fix =
+   the **local ISR-clear overlay** in `pds_enet.sv`: `isr_eff = shadow_isr &
+   ~isr_pend_clr` drives `irq` and the guest's ISR reads; a guest ISR write ORs
+   its clear into `isr_pend_clr` immediately; the poll reconciles by ANDing the
+   mask with the fresh shadow ISR (drops confirmed bits, no deadlock). `irq` no
+   longer comes from Main's stale INT word. `tb_pds_enet` 53/53.
+
 ## Risks / watch items
 
 1. **CR command-bit visibility**: CR reads come from the ~ms-fresh shadow;
