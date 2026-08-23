@@ -228,16 +228,33 @@ wire [7:0] timer_counter = cycle_total[9:2];  // Divide by 4, take lower 8 bits
 // Register $12 bit 4 enables the timer, bit 6 is cleared by ISR
 //
 // Real hardware: 32.768 kHz crystal / 32768 = 1 Hz
-// Our approximation: count cen ticks (4 MHz). Use shorter period for simulation.
+// Our timebase: cen = clk32/8 = 32.5 MHz/8 = 4.0625 MHz exactly (pll outclk_1).
+// The counter spans 0..PERIOD inclusive, so a fire every PERIOD+1 cen ticks:
+// 4,062,499 + 1 = 4,062,500 cen = 1.000 s. (The old 4,000,000 at an assumed
+// 4 MHz ran the guest wall clock ~1.56% fast.)
 `ifdef SIMULATION
-localparam ONESEC_PERIOD = 22'd8192;    // ~2ms at 4 MHz (fast for simulation)
+localparam ONESEC_PERIOD = 22'd8192;    // ~2ms (fast for simulation)
 `else
-localparam ONESEC_PERIOD = 22'd4000000; // ~1 second at 4 MHz
+localparam ONESEC_PERIOD = 22'd4062499; // exactly 1 second at 4.0625 MHz
 `endif
 
 reg [21:0] onesec_counter;
-reg        onesec_irq_flag;  // Sticky flag, generates interrupt edge
+reg        onesec_irq_flag;  // Sticky flag; held until the ISR's $12 bit-6 ack
 wire       onesec_irq_n = ~onesec_irq_flag;
+
+`ifdef SIMULATION
+// One-second liveness witness: FIRE when the flag sets, ACK when the ISR's
+// BCLR 6,$12 clears it. A FIRE with no following ACK = the ISR is dead (the
+// pre-fix edge-drop deadlock signature). ~500 pairs/sim-second (2ms period).
+reg onesec_flag_d;
+always @(posedge clk) begin
+    onesec_flag_d <= onesec_irq_flag;
+    if (onesec_irq_flag && !onesec_flag_d)
+        $display("EGRET_ONESEC_FIRE @%0t", $time);
+    if (!onesec_irq_flag && onesec_flag_d)
+        $display("EGRET_ONESEC_ACK @%0t", $time);
+end
+`endif
 
 always @(posedge clk) begin
     if (reset) begin
@@ -918,7 +935,13 @@ always @(*) begin
             end
             5'h08: cpu_din_r = timer_ctrl;     // Timer control
             5'h09: cpu_din_r = timer_counter;  // Timer counter (8-bit, free-running)
-            5'h12: cpu_din_r = onesec_ctrl;    // One-second timer control
+            // One-second timer control. Reads must include the FIRED flag in
+            // bit 6 (MAME m68hc05e1: seconds_tick does m_onesec |= 0x40, visible
+            // on read until the firmware writes bit6=0). Without it, any RMW bit
+            // op on $12 (e.g. BSET 5,$12 in the set-time path) reads bit6=0 and
+            // writes bit6=0 back — spuriously acking a pending second. The ISR's
+            // BCLR 6,$12 still clears the flag through the same write path.
+            5'h12: cpu_din_r = onesec_ctrl | (onesec_irq_flag ? 8'h40 : 8'h00);
             default: cpu_din_r = 8'h00;  // Unmapped ports return 0 (makes bit tests fail safely)
         endcase
     end else if (ram_cs) begin
