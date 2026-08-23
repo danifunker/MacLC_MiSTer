@@ -1,5 +1,14 @@
 # LC PDS Ethernet v2 — Apple Ethernet LC Twisted Pair, 820-0532 (2026-08-20)
 
+> **STATUS 2026-08-23 — COMPLETE, shipped and HW-validated.**
+> `releases/MacLC_20260822.rbf` + `releases/MiSTer` (the REQUIRED host —
+> two of the three card-ON-hang fixes are host-side, so an old Main hangs
+> even with a current core). Everything below is the as-built contract,
+> except the phase plan at the end which is kept as the build record.
+> `hps/maclc_eth/` is long gone (7a607a2): where the text below says it
+> *will be* removed, it already was. Landed since: OSD-selected interface
+> and MAC suffix (core 187f9fe + Main 9f53b8b) — see CLAUDE.md.
+
 Goal: replace the v1 **Asante MacCON i LC** card (2026-08-15, commits 2b76225 /
 1a73db4 / 51e5012) with **Apple's own Ethernet LC Twisted Pair card**
 (board 820-0532-B, DP83934 SONIC-T), and move the host half out of the
@@ -10,7 +19,7 @@ PR #1255 pattern). User rulings 2026-08-20:
 - Twisted-Pair variant **only** (the AAUI card 820-0443 is out of scope).
 - declROM served from **DDR3, zero M10K** (M10K bake rejected; the ROM bytes
   are compiled into the modified Main instead — no SD-card ROM file).
-- `hps/maclc_eth/` is **removed entirely** once the Main port lands; the
+- `hps/maclc_eth/` was **removed entirely** when the Main port landed; the
   feature requires the modified Main.
 - Guest driver = Apple's Network Software (user handles guest-side install;
   the ROM carries no driver — verified below).
@@ -178,13 +187,14 @@ arm/teardown/poll all hang off the existing unconditional `mac_poll()` hook.
   (`guest_read(addr,len,buf)` / `guest_write` function pointers → DMA-RPC
   backend here; a boardram backend later serves the NuBus card).
 - `mac_eth_iface.cpp` — port of `hps/maclc_eth/enet_iface.c` (tap0 default,
-  AF_PACKET+promisc for macvlan/eth); a2065's four-mode set with
-  availability probing is a later parity step, not v1.
+  AF_PACKET+promisc for macvlan/eth). The a2065 four-mode set landed
+  2026-08-23 as an OSD option (`o45`); availability probing did not —
+  an interface this box cannot open reports itself once and stays down.
 - **Core gate: exact match.** Main's `is_core_named()` is a strncasecmp
   *prefix* test — `"maclc"` would fire on MacLCII. Re-apply the daemon's
   0de9974 lesson (exact `strcasecmp` on the core name) inside `mac_eth`.
-- `hps/maclc_eth/` is deleted from this repo in the same mission phase that
-  lands the Main port (its logic moves there; git history keeps the rest).
+- `hps/maclc_eth/` was deleted in the mission phase that landed the Main
+  port (its logic moved there; git history keeps the rest).
 
 ## Sharing with the NuBus port (docs/port_enet_to_nubus_cores.md refresh)
 
