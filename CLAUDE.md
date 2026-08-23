@@ -324,8 +324,25 @@ Re-verify boot (the screenshot check above) after ANY SR change.
   DataIn command: transfer EXACTLY what the initiator arms (see
   docs/SCSI_CMD_GAPS.md).
 - **Ethernet (Apple Ethernet LC Twisted Pair card, 820-0532, LC PDS slot $E):
-  implemented 2026-08-21 on branch `apple-pds-ethernet` — sim-proven, HW
-  validation pending.** The card is a RAM-less bus-master SONIC (DP83934).
+  HW-VALIDATED + RELEASED 2026-08-22 — `releases/MacLC_20260822.rbf`
+  (md5 4f31e0dd) + `releases/MiSTer` (md5 932ed605, the REQUIRED ethernet
+  host).** The guest boots to the Finder desktop with the card On and FTP
+  works (connect, login, transfer). Three defects fixed on the way (all the
+  same class — the guest-RAM DMA engine moves 16-bit WORDS at EVEN addresses
+  but the SONIC uses ODD ones): (1) odd end-of-list descriptor addr aborted
+  transmit_chain leaving CR.TXP set → fixed host-side (mac_sonic.cpp DA()
+  word-align + TX_ABORT); (2) odd RX-buffer pointer failed the packet store →
+  PKTRX never set → fixed host-side (mac_eth.cpp rpc_read/write word-align +
+  RMW); (3) a ~120x interrupt-ack livelock → fixed in RTL with an irq
+  SUPPRESSION TIMER (pds_enet.sv: after a guest ISR write, hold irq low for
+  IRQ_SUPP ~1.85ms then follow Main's INT word — only DELAYS irq, never masks
+  a bit, so it can't deadlock; the earlier per-bit mask overlay DID deadlock/
+  wedge and was replaced). KNOWN LIMITATION: folder navigation in Fetch 2.1.2
+  is slow/glitchy — that is Fetch's per-folder active-mode connection + render
+  saturating the CPU (TCP retransmits), NOT the ethernet path; downloads and
+  loss-tolerant AppleTalk/UDP (LAN gaming) should be smoother. For latency-
+  sensitive gaming, IRQ_SUPP is the lever to tune DOWN (untested). The card is
+  a RAM-less bus-master SONIC (DP83934).
   FPGA side = `rtl/pds/pds_enet.sv`: register doorbell + read shadows, MAC
   PROM (word-wide reads return the $0028 probe magic), flat 32K declROM at
   $FEFF'8000 served from DDR3, and a guest-RAM DMA engine that enters
