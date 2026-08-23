@@ -17,6 +17,8 @@
 # Two dumps + cmp = "is anything executing" (a spinning CPU keeps writing
 # somewhere; a parked/halted one leaves RAM bit-identical).
 OUT=$1
+MEMDUMP=/media/fat/linux/memdump
+[ -x "$MEMDUMP" ] || MEMDUMP=/tmp/memdump
 : > "$OUT"
 b=0
 while [ $b -lt 320 ]; do
@@ -31,7 +33,7 @@ while [ $b -lt 320 ]; do
     n=$((n+1)); [ $n -gt 500 ] && { echo "TIMEOUT block $b (stat $st)"; exit 1; }
   done
   [ $(( st & 256 )) -ne 0 ] && echo "ERRBIT block $b"
-  /tmp/memdump 0x1FF00000 8000 >> "$OUT"
+  "$MEMDUMP" 0x1FF00000 8000 >> "$OUT"
   b=$((b+1))
 done
 echo "DONE $(ls -l $OUT)"
