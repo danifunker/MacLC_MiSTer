@@ -354,7 +354,28 @@ Re-verify boot (the screenshot check above) after ANY SR change.
   retired). declROM source of truth = `releases/341-0740_AppleLCTwistedPair
   .BIN` (sha1 447ce683…); `scripts/gen_enet_declrom.py` generates both the
   sim hex and Main's embedded header — never hand-edit those. Guest needs
-  Apple's Network Software (no driver in ROM). Regression gates for ANY
+  Apple's Network Software (no driver in ROM).
+  **Settings are OSD options, NOT MiSTer.ini** (MiSTer.ini is parsed by Main
+  for itself and cannot even choose which binary launches — `/etc/inittab`
+  hardcodes `/media/fat/MiSTer`): `OJ` Ethernet On/Off is a real core bit,
+  while `o45` Net interface and `o03` MAC suffix live in the EXTENDED status
+  range (32+) that this core's `wire [31:0] status` cannot read — the right
+  home for host-only settings, and it keeps the low bits free (note 15:17 =
+  video mode and bit 11 = the I-cache enable trick are USED but declare no
+  CONF_STR entry, so grep `status[` before claiming a bit is free).
+  Guest MAC = `08:00:07:4D:4C:0N` — fixed base + the OSD nibble, byte 4
+  identifying the core. Do NOT "improve" this by deriving it from the box:
+  the DE10-Nano has no MAC EEPROM, so u-boot gives every MiSTer
+  `02:03:04:05:06:07` unless the owner wrote `linux/u-boot.txt`, and every
+  hostname is `MiSTer` — both "unique" sources are identical across stock
+  boxes. `/media/fat/games/MacLC/eth.cfg` (`iface=`, `mac=`) still overrides
+  both, read at card start only.
+  ★ **A card-ON boot hang means an OLD MAIN, not an old core.** Two of the
+  three fixes were host-side (`f2679bf`), so the first published ethernet
+  Main (`34b8994`) pairs happily and then hangs; the RBF alone cannot fix it.
+  `md5sum /media/fat/MiSTer` must match `releases/MiSTer`. A MISSING or stock
+  Main cannot hang anything — presence latches at guest reset, so no MAGIC
+  means slot $E stays open-bus and the machine boots as with no card. Regression gates for ANY
   ethernet/SDRAM edit: `verilator/tb_pds_enet.v` (43 checks, build cmd in
   header), the Main fork's `support/mac/test/mac_sonic_test.cpp` (36),
   `verilator/tb_icache_seam.v` normal AND negative control after any
