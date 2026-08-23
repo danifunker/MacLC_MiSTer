@@ -208,6 +208,25 @@ module pds_enet (
 	// ── CPU-side request handshake (all clk_sys, no CDC) ────────────────────
 	localparam H_IDLE = 2'd0, H_RUN = 2'd1, H_DONE = 2'd2;
 	reg  [1:0] hstate;
+
+	// ── host-access watchdog ──────────────────────────────────────
+	// card_ack IS the guest's DTACK. Every wait in H_RUN is bounded in theory
+	// (a ring slot via cmd_wait_ctr ~2 ms; a DDR3 round trip in well under a
+	// microsecond) - but on 2026-08-23 a guest froze mid-bus-cycle with this
+	// FSM parked in H_RUN, and a 68020 that never sees DTACK never comes back.
+	// Retire the cycle with open-bus data instead: a dropped register write
+	// can confuse a driver, a frozen Mac cannot recover at all. Sized ~2x the
+	// longest legitimate wait so it only fires on a genuine stall.
+	localparam [17:0] H_WD_LIMIT = 18'd130000;   // ~4 ms at clk_sys ~32.5 MHz
+	reg  [17:0] h_wd;
+	reg         h_wd_fired;      // sticky witness for the TB
+	reg         h_abort;         // this cycle was abandoned by the watchdog:
+	                             // a late DDR3 answer must not retire the NEXT one
+
+	// A guest bus cycle is parked on this FSM: never start a NEW DMA step in
+	// front of it. Dispatch already prefers command publishes and ROM reads,
+	// but the CPU is the only requester here with a hard deadline (DTACK).
+	wire        cpu_waiting = (hstate == H_RUN);
 	reg [15:0] dout_r;
 	reg [23:0] req_sub;
 	reg  [1:0] req_be;         // {UDS, LDS}
@@ -353,6 +372,9 @@ module pds_enet (
 		if (rst_core) begin
 			state       <= S_IDLE;
 			hstate      <= H_IDLE;
+			h_wd        <= 0;
+			h_wd_fired  <= 1'b0;
+			h_abort     <= 1'b0;
 			mem_rd      <= 0;
 			mem_we      <= 0;
 			mem_burst   <= 8'd1;
@@ -442,7 +464,8 @@ module pds_enet (
 				else if (sel_mac && _cpuRW)  req_kind <= K_MACRD;
 				else if (sel_rom && _cpuRW)  req_kind <= K_ROM;
 				else                         req_kind <= K_STUB;
-				hstate <= H_RUN;
+				h_abort <= 1'b0;
+			hstate  <= H_RUN;
 			end
 			H_RUN: begin
 				case (req_kind)
@@ -500,7 +523,7 @@ module pds_enet (
 					mem_addr <= rom_word;
 					mem_rd   <= 1;
 					state    <= S_MEM_RD_W;
-				end else if (dma_active) begin
+				end else if (dma_active && !cpu_waiting) begin
 					// one DMA step per dispatch, so doorbell publishes and
 					// guest declROM reads keep interleaving during a block
 					case (dma_phase)
@@ -587,10 +610,15 @@ module pds_enet (
 
 			S_MEM_RD_D: begin
 				if (mem_rvalid) begin
-					dout_r[15:8] <= mem_rdata[{lane,          3'b000} +: 8];
-					dout_r[7:0]  <= mem_rdata[{lane + 3'd1,   3'b000} +: 8];
-					hstate <= H_DONE;
-					state  <= S_IDLE;
+					// A watchdog-abandoned read still lands here later. Consume and
+					// drop it: retiring here would ack the NEXT access early, with
+					// this read's stale data.
+					if (!h_abort) begin
+						dout_r[15:8] <= mem_rdata[{lane,          3'b000} +: 8];
+						dout_r[7:0]  <= mem_rdata[{lane + 3'd1,   3'b000} +: 8];
+						hstate <= H_DONE;
+					end
+					state <= S_IDLE;
 				end
 			end
 
@@ -718,6 +746,19 @@ module pds_enet (
 
 			default: state <= S_IDLE;
 			endcase
+
+			// ── host-access watchdog ─────────────────────────────
+			// Last assignment in the block, so it wins over either FSM above.
+			if (hstate == H_RUN) begin
+				if (h_wd == H_WD_LIMIT) begin
+					hstate      <= H_DONE;   // retire the cycle: open bus
+					dout_r      <= 16'hFFFF;
+					cmd_for_cpu <= 1'b0;     // must not retire a LATER access
+					h_wd_fired  <= 1'b1;
+					h_abort     <= 1'b1;
+					h_wd        <= 0;
+				end else h_wd <= h_wd + 1'b1;
+			end else h_wd <= 0;
 		end
 	end
 

@@ -24,7 +24,10 @@ module sim_ddr3 (
 	output            busy
 );
 
-	assign busy = 1'b0;
+	// TB hook: hold the model busy to stall the mailbox FSM (hierarchical
+	// poke, so no port change and sim.v stays untouched).
+	reg stall = 1'b0;
+	assign busy = stall;
 
 	// 0x4400 x 64-bit words = 136 KB (layout tops out at word 0x41FF)
 	reg [63:0] mem [0:17407];

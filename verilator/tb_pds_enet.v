@@ -166,6 +166,24 @@ module tb_pds_enet;
 		end
 	endtask
 
+	// cpu_cycle gives up after 3000 cycles; the watchdog fires at 130000.
+	task cpu_cycle_slow(input [31:0] addr, input integer maxn,
+	                    output [15:0] rdata, output claimed);
+		integer n;
+		begin
+			@(negedge clk);
+			cpuAddr = addr; _cpuRW = 1; cpuDataIn = 0;
+			_cpuAS = 0; _cpuUDS = 0; _cpuLDS = 0;
+			claimed = 0; rdata = 16'hFFFF; n = 0;
+			while (n < maxn && !(card_sel && card_ack)) begin
+				@(negedge clk); n = n + 1;
+			end
+			if (card_sel && card_ack) begin claimed = 1; rdata = card_dout; end
+			_cpuAS = 1; _cpuUDS = 1; _cpuLDS = 1; _cpuRW = 1;
+			@(negedge clk); @(negedge clk);
+		end
+	endtask
+
 	reg [15:0] rd; reg cl;
 	reg [63:0] e;
 	integer i;
@@ -383,6 +401,27 @@ module tb_pds_enet;
 		end
 		check((dd.peek64(W_DMASTAT) & 64'h1FF) == 9'h008,
 		      "the interleaved DMA still completes (seq 8)");
+
+		// ── 8. host-access watchdog ──────────────────────────────────────
+		// Nothing above may have tripped it: a spurious fire drops guest
+		// register writes during healthy traffic.
+		check(dut.h_wd_fired === 1'b0, "watchdog silent through normal traffic");
+
+		// Stall DDR3 so a declROM read can never complete. Without the
+		// watchdog this is the hardware freeze of 2026-08-23 exactly:
+		// card_ack never asserts and the 68020 waits forever mid-cycle.
+		dd.stall = 1'b1;
+		cpu_cycle_slow(32'hFEFFFFFE, 200000, rd, cl);
+		check(cl,                       "stalled cycle still retires (DTACK asserted)");
+		check(rd == 16'hFFFF,           "watchdog retires with open-bus $FFFF");
+		check(dut.h_wd_fired === 1'b1, "watchdog fired");
+		dd.stall = 1'b0;
+
+		// the abandoned read's DDR3 answer arrives now: it must NOT retire
+		// the next access early with its stale data.
+		repeat (200) @(negedge clk);
+		cpu_cycle(32'hFEFFFFFE, 1, 1, 1, 0, 1, rd, cl);
+		check(cl && rd == 16'h000F, "card still serves correctly after a watchdog fire");
 
 		if (fails == 0) $display("ALL PASS (tb_pds_enet)");
 		else            $display("%0d FAILURES (tb_pds_enet)", fails);
