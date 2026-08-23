@@ -28,7 +28,7 @@ module emu
 	// unused user-port pins are held at '1 inside sys/mt32pi.sv.
 
 	// DDR3 port: wholly owned by the PDS Ethernet card's shared-memory mailbox
-	// (rtl/pds/pds_enet.sv — the maclc_eth daemon serves the other side).
+	// (rtl/pds/pds_enet.sv — Main's mac_eth service serves the other side).
 	// Single clock domain: the mailbox runs in clk_sys.
 	assign DDRAM_CLK      = clk_sys;
 	assign DDRAM_BURSTCNT = pds_mem_burst;
@@ -1075,9 +1075,9 @@ module emu
 		end
 	end
 
-	// ── PDS Ethernet card (Asante MacCON i LC, pseudo-slot $E) ─────────────────
+	// ── PDS Ethernet card (Apple Ethernet LC Twisted Pair, pseudo-slot $E) ─────
 	// Claims $FE0Dxxxx/$FE0Exxxx/$FEFFxxxx (and the 24-bit $EDxxxx/$EExxxx
-	// windows) ONLY when the maclc_eth daemon's MAGIC is present — otherwise
+	// windows) ONLY when Main's mac_eth service has published MAGIC — otherwise
 	// slot space keeps the hardware-validated open-bus $FFFF ack below. Card
 	// cycles complete via stretched async DTACK (never VPA), like SCSI DMA.
 	wire        pds_card_sel, pds_card_ack, pds_irq;
