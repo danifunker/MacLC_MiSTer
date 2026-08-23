@@ -217,7 +217,10 @@ module pds_enet (
 	// Retire the cycle with open-bus data instead: a dropped register write
 	// can confuse a driver, a frozen Mac cannot recover at all. Sized ~2x the
 	// longest legitimate wait so it only fires on a genuine stall.
-	localparam [17:0] H_WD_LIMIT = 18'd130000;   // ~4 ms at clk_sys ~32.5 MHz
+	// Fire on a power-of-two rollover so the test is ONE BIT, not an 18-bit
+	// equality comparator: this cone feeds the clk_sys->clk_mem crossing and
+	// a wide compare here cost hold slack (build 2026-08-23, -0.573 ns).
+	localparam H_WD_BIT = 17;   // 2^17 = 131072 cyc ~ 4.0 ms at clk_sys ~32.5 MHz
 	reg  [17:0] h_wd;
 	reg         h_wd_fired;      // sticky witness for the TB
 	reg         h_abort;         // this cycle was abandoned by the watchdog:
@@ -226,7 +229,11 @@ module pds_enet (
 	// A guest bus cycle is parked on this FSM: never start a NEW DMA step in
 	// front of it. Dispatch already prefers command publishes and ROM reads,
 	// but the CPU is the only requester here with a hard deadline (DTACK).
-	wire        cpu_waiting = (hstate == H_RUN);
+	// REGISTERED, not combinational: this term gates the DMA dispatch that
+	// drives eth_req across to clk_mem, and adding depth there is what broke
+	// hold. One cycle of lag only means one more DMA step may already be in
+	// flight, which the watchdog covers anyway.
+	reg         cpu_waiting;
 	reg [15:0] dout_r;
 	reg [23:0] req_sub;
 	reg  [1:0] req_be;         // {UDS, LDS}
@@ -372,6 +379,7 @@ module pds_enet (
 		if (rst_core) begin
 			state       <= S_IDLE;
 			hstate      <= H_IDLE;
+			cpu_waiting <= 1'b0;
 			h_wd        <= 0;
 			h_wd_fired  <= 1'b0;
 			h_abort     <= 1'b0;
@@ -750,7 +758,7 @@ module pds_enet (
 			// ── host-access watchdog ─────────────────────────────
 			// Last assignment in the block, so it wins over either FSM above.
 			if (hstate == H_RUN) begin
-				if (h_wd == H_WD_LIMIT) begin
+				if (h_wd[H_WD_BIT]) begin
 					hstate      <= H_DONE;   // retire the cycle: open bus
 					dout_r      <= 16'hFFFF;
 					cmd_for_cpu <= 1'b0;     // must not retire a LATER access
@@ -759,6 +767,7 @@ module pds_enet (
 					h_wd        <= 0;
 				end else h_wd <= h_wd + 1'b1;
 			end else h_wd <= 0;
+			cpu_waiting <= (hstate == H_RUN);
 		end
 	end
 
