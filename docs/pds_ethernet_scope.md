@@ -118,6 +118,22 @@ descriptor group / packet buffer, sequenced by the model — which also gives
 the ordering the driver depends on for free (packet bytes land before the
 status word that publishes them).
 
+**★ ORDERING LAW (2026-08-23, learned from a guest hard-freeze).** The two
+directions are NOT symmetric:
+- *driver→model* is safe for free: guest RAM writes land in ~µs while the
+  register doorbell that announces them arrives ~ms later — RAM always
+  beats the register.
+- *model→driver* RAM sequences are the dangerous direction. Each host op is
+  a ~100 µs DMA-RPC, and the Apple driver's ISR consumes a descriptor the
+  instant its status word goes nonzero — then RECYCLES it, rewriting its
+  link. So **the publish word must be the LAST access of the sequence, and
+  nothing may read or write the structure after it.** The RX writeback once
+  published status first and read the link last; the driver rewrote the link
+  under the pending read, CRDA left the ring, and the guest hard-froze in a
+  link=0 self-orbit (root-caused from a frozen-guest RAM dump via
+  `tools/guestdump/`; fix + 7-check publish-order gate in Main `b3b0ed1`).
+  Audit any new model-side descriptor writeback against this law.
+
 Bandwidth/latency: 10BASE-T needs ≤ 1 word / 1.6 µs sustained; a full-size
 frame occupies the wire ~1.2 ms and costs ~4-8 RPCs. With the v1 adaptive
 poll (fast cadence while a command is armed or recently completed), pickup
