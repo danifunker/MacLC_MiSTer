@@ -766,6 +766,8 @@ end
 reg        pram_copy_busy = 1'b0;
 reg [8:0]  pram_copy_idx;             // 0-255 = PRAM bytes, 256-259 = RTC seed
 wire [7:0] pram_copy_rdata = pram[pram_copy_idx[7:0]];
+// Unix epoch (1970) -> Mac epoch (1904): see the seed comment below.
+wire [31:0] mac_seconds = timestamp[31:0] + 32'd2082844800;
 always @(posedge clk) begin
     if (reset) begin
         pram_loaded    <= 1'b0;
@@ -791,11 +793,18 @@ always @(posedge clk) begin
             // Copy PRAM to internal RAM: PRAM[0-255] -> CPU 0x100-0x1FF
             // (offset 0x70 = 0x100 - 0x90), then seed RTC seconds
             // (CPU 0xAB-0xAE -> intram[0x1B-0x1E]) from the host timestamp.
+            // ★ mac_seconds: the host gives a UNIX epoch (1970); the Mac RTC
+            // counts seconds since 1904-01-01. Without the 2,082,844,800 s
+            // offset the guest ran with correct wall time but year 1960 (the
+            // 66-year offset is exactly 24,107 days, and 1904->1970 and
+            // 1960->2026 contain the same number of leap days, so the error
+            // hid in the menu-bar clock and only showed in dates). Wraps in
+            // 2040, when the 32-bit Mac epoch ends anyway.
             case (pram_copy_idx)
-                9'd256:  intram[16'hAB - 16'h90] <= timestamp[31:24];
-                9'd257:  intram[16'hAC - 16'h90] <= timestamp[23:16];
-                9'd258:  intram[16'hAD - 16'h90] <= timestamp[15:8];
-                9'd259:  intram[16'hAE - 16'h90] <= timestamp[7:0];
+                9'd256:  intram[16'hAB - 16'h90] <= mac_seconds[31:24];
+                9'd257:  intram[16'hAC - 16'h90] <= mac_seconds[23:16];
+                9'd258:  intram[16'hAD - 16'h90] <= mac_seconds[15:8];
+                9'd259:  intram[16'hAE - 16'h90] <= mac_seconds[7:0];
                 default: intram[pram_copy_idx + 9'h070] <= pram_copy_rdata;
             endcase
             if (pram_copy_idx == 9'd259) begin
