@@ -1164,6 +1164,24 @@ module emu
 	wire        cpu_en_p      = clk16_en_p;
 	wire        cpu_en_n      = clk16_en_n;
 	assign      _cpuReset_o   = tg68_reset_n;
+
+	// RESET-instruction soft peripheral reset (2026-08-08 warm-restart fix).
+	// Both guest restart flavors (Special ▸ Restart AND the shutdown screen's
+	// Restart button) execute RESET + jump — NO Egret reset, HUD row-12
+	// witnessed on HW: rsti_edges 1→2, rst_edges 0. On a real LC that
+	// instruction resets the VIA and the V8 interrupt state; here it reset
+	// NOTHING, so the warm ROM inherited the OS's live pseudovia slot_ier —
+	// vblank re-asserted the slot summary every frame and the boot wedged
+	// forever probing $F1xxxx with video blanked (cfg $40): the black screen.
+	// Stretch tg68_reset_n (asserted only while the RESET micro-op runs)
+	// into a clean 16-clk pulse for via6522 + pseudovia interrupt state.
+	// Keep in sync with verilator/sim.v.
+	reg [3:0] softrst_cnt = 4'd0;
+	always @(posedge clk_sys) begin
+		if (!_cpuReset_o)           softrst_cnt <= 4'hF;
+		else if (softrst_cnt != 0)  softrst_cnt <= softrst_cnt - 1'd1;
+	end
+	wire soft_periph_rst = (softrst_cnt != 0);
 	// The 68k RESET instruction resets chip-level peripherals (NCR5380+SCSI
 	// targets, SCC — see dataController._resetInstr_n) and the pseudo-VIA,
 	// but NOT the CPU/system (reset-source NOTE above: feeding it into
@@ -1478,6 +1496,7 @@ module emu
 	pseudovia pvia(
 		.clk_sys(clk_sys),
 		.reset(~n_reset),
+		.soft_rst(soft_periph_rst),
 		.addr({cpuAddr[12:1], tg68_a[0]}),
 		.data_in(cpuDataOut[7:0]),
 		.data_out(pseudovia_dout),
@@ -2018,7 +2037,15 @@ module emu
 	// V8 schematic SND[0:2]/DFAC_CLK/CULTDAC0: see rtl/asc.sv / rtl/ariel_ramdac.sv
 	asc asc_inst(
 		.clk(clk_sys),
-		.reset(~n_reset),
+		// soft_periph_rst: the RESET instruction resets the ASC on a real LC
+		// (it sits on the system reset line). Row-13 witness 2026-08-08: the
+		// warm boot's Egret handshake COMPLETES (treq/tip/pvia_wr counters
+		// freeze at 7/14/41, lines idle) and the ROM then spins quietly in
+		// $A0xxxx before the march/video-config — the chime-phase wait on a
+		// STALE OS-era ASC (FIFO/mode/IRQ state) is the prime suspect; a
+		// freshly-reset ASC behaves exactly as the ROM's chime code expects
+		// on every cold boot.
+		.reset(~n_reset || soft_periph_rst),
 		.cs(selectASC),
 		// cpuAddr[0] is forced 0 in this core, so the ASC register A0 (which
 		// selects MODE/FIFOMODE/CLOCK — the odd-numbered regs) gets dropped and
@@ -2143,6 +2170,7 @@ module emu
 		.E_rising(E_rising),
 		.E_falling(E_falling),
 		._systemReset(n_reset),
+		.softRst(soft_periph_rst),
 		.pseudovia_irq(pseudovia_irq),
 		._cpuReset(_cpuReset),
 		._cpuIPL(_cpuIPL_dc),
