@@ -1201,14 +1201,12 @@ module emu
 	wire [15:0] ram_do_raw;
 	wire        ram_cpu_done;
 	wire [15:0] ram_cpu_dout;
-	// --- Force cold-boot path (warm-reset hang workaround) — keep in sync with MacLC.sv.
-	// Patch the boot ROM's warm-vs-cold `bne.w` at ROM byte $4655E (SDRAM word
-	// $52322F) to UNCONDITIONAL (0x6600 -> 0x6000) as it is fetched, so every boot
-	// runs the full cold RAM march. No-op on a cold boot (branch already taken);
-	// guarded on the address AND opcode so other ROMs are untouched.
-	// Phase C: the patch applies to the CPU's private read register (cpu_dout).
-	wire [15:0] cpu_dout_patched =
-		(!_romOE && memoryAddr == 23'h52322F && ram_cpu_dout == 16'h6600) ? 16'h6000 : ram_cpu_dout;
+	// --- Warm-boot path RESTORED (force-cold ROM patch removed 2026-08-24) ---
+	// Keep in sync with MacLC.sv: with the RESET-instruction peripheral soft
+	// reset in (fc73a58), the warm path's stale-peripheral wedge is gone and
+	// the $52322F bne->bra live patch is removed (full rationale + the
+	// one-line reinstatement recipe at the matching block in MacLC.sv).
+	wire [15:0] cpu_dout_patched = ram_cpu_dout;
 	// ★ Floppy leg removed from this mux — keep in sync with MacLC.sv (it is
 	// the memory leg of cpuDataOut; a window landing inside a demand access
 	// used to hand the CPU floppy bytes).

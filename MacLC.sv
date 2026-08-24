@@ -2608,23 +2608,22 @@ module emu
 							 {sdram_out[7:0],sdram_out[7:0]}:{sdram_out[15:8],sdram_out[15:8]};
 	wire [15:0] sdram_out;
 
-	// --- Force cold-boot path (warm-reset hang workaround) -----------------------
-	// The boot ROM chooses warm-vs-cold start with a `bne.w` at ROM byte $4655E
-	// (SDRAM word $52322F): d3 != 'WLSC' takes the FULL RAM march (cold path). On a
-	// warm reset RAM stays refreshed, so d3 == 'WLSC' and the core hangs on the warm
-	// path (only a full reconfig, which decays RAM, recovers). Force that one branch
-	// UNCONDITIONAL as it is fetched (`bne.w` 0x6600 -> `bra.w` 0x6000) so EVERY boot
-	// runs the cold march. No-op on a cold boot (the branch is taken anyway, d3 !=
-	// 'WLSC'). Guarded on the address AND the live opcode, so a different ROM is left
-	// untouched; catches both overlay and direct-ROM fetches (both selectROM->$52322F).
-	// Replaces the reverted sdram.init warm-reset hacks (d88c098 / 50d0c32), which
-	// broke cold boot. Keep in sync with verilator/sim.v.
-	// Phase C: the patch applies to the CPU's private read register (cpu_dout);
-	// memoryAddr is still the live CPU translation while AS is held low.
+	// --- Warm-boot path RESTORED (force-cold ROM patch removed 2026-08-24) ------
+	// History: the ROM chooses warm-vs-cold start with a `bne.w` at ROM byte
+	// $4655E (SDRAM word $52322F): d3 == 'WLSC' takes the warm shortcut, which
+	// used to hang because the RESET+jump restart inherited stale peripheral
+	// state (no Egret reset). A live ROM patch here forced that branch
+	// unconditional (0x6600 -> 0x6000) so EVERY boot ran the cold RAM march.
+	// With the RESET-instruction peripheral soft reset ported (fc73a58: VIA +
+	// TIP + pseudovia IRQ state + ASC + SWIM), the warm path's wedge cause is
+	// gone, so the patch is removed to get real-Mac fast warm restarts. If a
+	// warm-path hang ever returns, the one-line patch to reinstate is:
+	//   (!_romOE && memoryAddr == 23'h52322F && sdram_cpu_dout == 16'h6600)
+	//     ? 16'h6000 : sdram_cpu_dout
+	// (see git history of this block; keep in sync with verilator/sim.v).
 	wire [15:0] sdram_cpu_dout;
 	wire        sdram_cpu_done;
-	wire [15:0] cpu_dout_patched =
-		(!_romOE && memoryAddr == 23'h52322F && sdram_cpu_dout == 16'h6600) ? 16'h6000 : sdram_cpu_dout;
+	wire [15:0] cpu_dout_patched = sdram_cpu_dout;
 
 	// ── Phase C fix (2026-08-18): pipeline the SDRAM request in clk_sys ──────
 	// STA on the post-fit netlist (scratch/sta_sdram_summary.txt) measured the
