@@ -93,7 +93,12 @@ module emu
 		// on a stock Main a 2048-byte-sector .bin also works mounted directly.
 		"SC4,ISOTO*CUEBINCHD,Mount CD-ROM;",
 		"OI,CD-ROM Drive,Enabled,Disabled;",
-		"OJ,Ethernet,On,Off;",
+		// Default OFF for distribution (2026-08-24): the ethernet card needs
+		// the paired Main (releases/MiSTer) — with an older ethernet Main a
+		// card-ON boot hangs, so users opt in via the OSD after installing
+		// the Main. Bit clear (0) = first entry = Off; ena_osd below is the
+		// matching un-inverted status[19].
+		"OJ,Ethernet,Off,On;",
 		"o45,Net interface,eth0,tap0,macvlan,eth1;",
 		"o03,MAC suffix,0,1,2,3,4,5,6,7,8,9,A,B,C,D,E,F;",
 		"-;",
@@ -1099,7 +1104,7 @@ module emu
 		.eth_din   (pds_eth_din),
 		.eth_ack   (pds_eth_ack),
 		.eth_dout  (pds_eth_dout),
-		.ena_osd   (~status[19]),
+		.ena_osd   (status[19]),   // OJ list is Off,On -> bit SET = On (default Off)
 		.cpuAddr   (cpuAddr),
 		.cpuDataIn (cpuDataOut),
 		._cpuAS    (_cpuAS),
