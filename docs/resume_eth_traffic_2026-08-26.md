@@ -1,4 +1,5 @@
 # CLOSED 2026-08-26 (same day): eth TX + throughput mission — see memory
+# ★ NEXT MISSION (uploads) = docs/resume_eth_uploads_2026-08-27.md
 
 This resume doc's mission is COMPLETE except one precisely-fingerprinted
 open item. Full record: memory `eth-tx-and-throughput-fixed` +
