@@ -1088,6 +1088,9 @@ module emu
 	// slot space keeps the hardware-validated open-bus $FFFF ack below. Card
 	// cycles complete via stretched async DTACK (never VPA), like SCSI DMA.
 	wire        pds_card_sel, pds_card_ack, pds_irq;
+	wire        pds_dbg_present, pds_dbg_cmdq, pds_dbg_wd;
+	wire  [3:0] pds_dbg_kind;
+	wire [15:0] pds_dbg_rdata;
 	wire [15:0] pds_dout;
 	// guest-RAM DMA legs into the SDRAM controller's eth port (Phase 3)
 	wire        pds_eth_req, pds_eth_we, pds_eth_ack;
@@ -1115,6 +1118,11 @@ module emu
 		.card_ack  (pds_card_ack),
 		.card_dout (pds_dout),
 		.irq       (pds_irq),
+		.dbg_present    (pds_dbg_present),
+		.dbg_cmd_queued (pds_dbg_cmdq),
+		.dbg_wd_fired   (pds_dbg_wd),
+		.dbg_last_kind  (pds_dbg_kind),
+		.dbg_rdata      (pds_dbg_rdata),
 		.mem_addr  (pds_mem_addr),
 		.mem_burst (pds_mem_burst),
 		.mem_rd    (pds_mem_rd),
@@ -1755,7 +1763,21 @@ module emu
 	reg hud_de_d = 1'b0, hud_vbl_d = 1'b0;
 	reg [31:0] hud_w1 = 32'd0, hud_w2 = 32'd0, hud_w3 = 32'd0, hud_w4 = 32'd0,
 	           hud_w5 = 32'd0, hud_w6 = 32'd0, hud_w7 = 32'd0, hud_w8 = 32'd0,
-	           hud_w9 = 32'd0, hud_w10 = 32'd0, hud_w11 = 32'd0;
+	           hud_w9 = 32'd0, hud_w10 = 32'd0, hud_w11 = 32'd0,
+	           hud_w12 = 32'd0, hud_w13 = 32'd0, hud_w14 = 32'd0;
+	// ── Rows 12/13: last two DISTINCT bus addresses + live IPL (2026-08-25
+	// card-ON "?"-wedge hunt; same instrument as release-branch f4f0de4).
+	// Three grabs of a wedged screen = six 24-bit samples = the loop's exact
+	// footprint (PCs in $A0xxxx, data addresses name the device/table).
+	reg        hud_as_d2 = 1'b1;
+	reg [23:0] hud_lastaddr = 24'd0, hud_prevaddr = 24'd0;
+	always @(posedge clk_sys) begin
+		hud_as_d2 <= _cpuAS;
+		if (hud_as_d2 && !_cpuAS && (cpuAddr[23:0] != hud_lastaddr)) begin
+			hud_prevaddr <= hud_lastaddr;
+			hud_lastaddr <= cpuAddr[23:0];
+		end
+	end
 	// ── Geometry (2026-08-05 pm): 4x4 cells at the BOTTOM-LEFT ─────────────
 	// Was 8x8 cells at the top-left, which covered the Mac MENU BAR — that
 	// cost real bench time (the Special-menu shutdown choreography walked
@@ -1767,13 +1789,16 @@ module emu
 	// any other v8 mode all place the deck against the true last line
 	// without a hard-coded height.
 	localparam [9:0] HUD_W  = 10'd128;   // 32 cells x 4 px
-	localparam [9:0] HUD_HT = 10'd48;    // 12 rows  x 4 lines
+	localparam [9:0] HUD_HT = 10'd60;    // 15 rows  x 4 lines
 	reg  [9:0] hud_h = 10'd480;          // measured active lines (prev frame)
 	wire [9:0] hud_ytop  = (hud_h > HUD_HT) ? (hud_h - HUD_HT) : 10'd0;
 	wire       hud_vband = (hud_y >= hud_ytop) && (hud_y < hud_h);
 	wire [9:0] hud_yrel  = hud_y - hud_ytop;
 	wire [3:0] hud_rowsel = hud_yrel[5:2];
 	wire [31:0] hud_wmux =
+		(hud_rowsel == 4'd14) ? hud_w14 :
+		(hud_rowsel == 4'd13) ? hud_w13 :
+		(hud_rowsel == 4'd12) ? hud_w12 :
 		(hud_rowsel == 4'd11) ? hud_w11 :
 		(hud_rowsel == 4'd10) ? hud_w10 :
 		(hud_rowsel == 4'd9) ? hud_w9 :
@@ -1812,6 +1837,13 @@ module emu
 			hud_w10 <= hud_e142_pos;
 			hud_w11 <= {dbg_flp_status, 6'b0, dsk_int_ins, dsk_ext_ins,
 			             dbg_flp_disk_data, dbg_flp_raw};
+			hud_w12 <= {5'b0, _cpuIPL_dc, hud_lastaddr};
+			hud_w13 <= {8'h00, hud_prevaddr};
+			// Row 14 (2026-08-26): card write-vanish witnesses.
+			// [31:16]=last completed card-cycle data, [7:4]=sticky
+			// {saw_stub,saw_regwr,0,0}, [2]=wd_fired [1]=cmd_queued [0]=present
+			hud_w14 <= {pds_dbg_rdata, 8'b0, pds_dbg_kind,
+			            1'b0, pds_dbg_wd, pds_dbg_cmdq, pds_dbg_present};
 		end
 		hud_on_q    <= hud_vband && (hud_x < HUD_W) && v8_de;
 		hud_white_q <= hud_wmux[5'd31 - hud_x[6:2]];

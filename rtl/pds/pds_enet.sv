@@ -95,6 +95,12 @@ module pds_enet (
 	output            card_ack,      // cycle may complete (data valid on reads)
 	output     [15:0] card_dout,
 	output            irq,           // active high -> pds_slot_irq
+	// debug witnesses (2026-08-26 reg-write-vanish hunt; HUD row 14)
+	output            dbg_present,
+	output            dbg_cmd_queued,
+	output            dbg_wd_fired,
+	output      [3:0] dbg_last_kind, // sticky {saw_stub, saw_regwr, 0, 0}
+	output     [15:0] dbg_rdata,     // data of the last completed card cycle
 
 	// ── guest-RAM DMA (Phase 3): into the SDRAM controller's eth port ──────
 	// The SONIC model on the ARM posts block commands (DMA_CMD control word);
@@ -149,11 +155,26 @@ module pds_enet (
 	// unclaimed in $F1-$FE keeps the top's hardware-validated open-bus ack.
 	// If the Phase-5 MAME driver trace shows 24-bit forms in use, add them.
 	wire        form32 = (cpuAddr[31:24] == 8'hFE);
-	wire [23:0] sub    = cpuAddr[23:0];
+	// ── 24-bit minor-slot form (2026-08-26 tester-wedge root cause) ────────
+	// A FRESH System 7.5 runs 24-BIT addressing (32-bit is a Memory-CP
+	// opt-in persisted in PRAM), and its SONIC driver reaches the card
+	// through the 24-bit minor slot window $E0'0000-$EF'FFFF (= 32-bit
+	// $FE00'0000 + 20-bit offset). The card decoded ONLY the 32-bit form,
+	// so on every fresh System the driver read phantom $FFFF forever and
+	// its writes were swallowed (the boot-time Slot Manager scans in 32-bit,
+	// so the card still LOOKED present in the guest). Root-caused on the
+	// .94 box via HUD rows 12-14 + guest-RAM disasm of the CR poll loop at
+	// $BE58C; our bench masked it for weeks because its PRAM had 32-bit
+	// addressing switched ON since the icache sessions. Registers + MAC
+	// PROM window 1 fit inside the 1MB minor slot; the declROM and PROM
+	// window 2 stay 32-bit-only (only the ROM's 32-bit scan reads them).
+	wire        form24 = (cpuAddr[31:20] == 12'h00E);
+	wire        formok = form32 | form24;
+	wire [23:0] sub    = form24 ? {4'h0, cpuAddr[19:0]} : cpuAddr[23:0];
 
-	wire sel_reg = form32 && (sub[23:9] == 15'h0000);   // $000000-$0001FF
-	wire sel_mac = form32 && ((sub[23:9] == 15'h0200)   // $040000-$0401FF
-	                       || (sub[23:9] == 15'h2000)); // $400000-$4001FF
+	wire sel_reg = formok && (sub[23:9] == 15'h0000);   // $000000-$0001FF
+	wire sel_mac = formok && ((sub[23:9] == 15'h0200)   // $040000-$0401FF
+	                       || (sub[23:9] == 15'h2000)); // $400000-$4001FF (32-bit only by construction)
 	wire sel_rom = form32 && (sub[23:15] == 9'h1FF);    // $FF8000-$FFFFFF
 
 	wire ds_any  = ~_cpuUDS | ~_cpuLDS;
@@ -243,6 +264,24 @@ module pds_enet (
 	           K_STUB = 3'd4;
 
 	assign card_ack  = (hstate == H_DONE);
+
+	// ── debug witnesses (2026-08-26 reg-write-vanish hunt; temporary) ──────
+	reg  [1:0] dbg_hstate_d = 2'd0;
+	reg        dbg_saw_regwr = 1'b0, dbg_saw_stub = 1'b0;
+	reg [15:0] dbg_rdata_r = 16'h0;
+	always @(posedge clk_sys) begin
+		dbg_hstate_d <= hstate;
+		if (hstate == H_RUN && dbg_hstate_d == H_IDLE) begin
+			if (req_kind == K_REGWR) dbg_saw_regwr <= 1'b1;
+			if (req_kind == K_STUB)  dbg_saw_stub  <= 1'b1;
+		end
+		if (hstate == H_DONE) dbg_rdata_r <= dout_r;
+	end
+	assign dbg_present    = present;
+	assign dbg_cmd_queued = cmd_queued;
+	assign dbg_wd_fired   = h_wd_fired;
+	assign dbg_last_kind  = {dbg_saw_stub, dbg_saw_regwr, 2'b00};
+	assign dbg_rdata      = dbg_rdata_r;
 	assign card_dout = dout_r;
 
 	// MAC PROM byte select: addresses are word-aligned on this bus (A0 lives

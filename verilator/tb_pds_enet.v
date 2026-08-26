@@ -240,6 +240,21 @@ module tb_pds_enet;
 		cpu_cycle(32'hFE000014, 1, 0, 1, 0, 1, rd, cl);
 		check(cl && rd[7:0] == 8'h41, "LDS byte read serves reg[7:0]");
 
+		// ── 24-bit minor-slot form (2026-08-26 tester-wedge regression) ──
+		// A FRESH (24-bit) System 7.5 reaches the card at $00E0'0000+off —
+		// the decode must serve it exactly like the 32-bit form. This was
+		// the "testers can't use ethernet" wedge: 32-bit-only decode made
+		// every fresh-System driver poll phantom $FFFF forever.
+		cpu_cycle(32'h00E00014, 1, 1, 1, 0, 1, rd, cl);
+		check(cl && rd == 16'h8C41, "24-bit ISR read serves shadow ($00E0'0014)");
+		wp0 = dd.peek64(W_WPTR);
+		cpu_cycle(32'h00E00004, 0, 1, 1, 16'h1234, 1, rd, cl);
+		check(cl, "24-bit reg word write claims + completes");
+		e = dd.peek64(W_RING + (wp0[7:0] & 8'hFF));
+		check(e[0] && e[9:4] == 6'd1 && e[31:16] == 16'h1234,
+		      "24-bit write posts REG_WR ring entry (reg 1, data $1234)");
+		check(dd.peek64(W_WPTR) == wp0 + 64'd1, "24-bit write advances WPTR");
+
 		// +2 half of the longword: stub, no doorbell
 		wp0 = dd.peek64(W_WPTR);
 		cpu_cycle(32'hFE000016, 1, 1, 1, 0, 1, rd, cl);
