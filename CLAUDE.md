@@ -337,12 +337,42 @@ Re-verify boot (the screenshot check above) after ANY SR change.
   SUPPRESSION TIMER (pds_enet.sv: after a guest ISR write, hold irq low for
   IRQ_SUPP ~1.85ms then follow Main's INT word — only DELAYS irq, never masks
   a bit, so it can't deadlock; the earlier per-bit mask overlay DID deadlock/
-  wedge and was replaced). KNOWN LIMITATION: folder navigation in Fetch 2.1.2
-  is slow/glitchy — that is Fetch's per-folder active-mode connection + render
-  saturating the CPU (TCP retransmits), NOT the ethernet path; downloads and
-  loss-tolerant AppleTalk/UDP (LAN gaming) should be smoother. For latency-
-  sensitive gaming, IRQ_SUPP is the lever to tune DOWN (untested). The card is
-  a RAM-less bus-master SONIC (DP83934).
+  wedge and was replaced). For latency-sensitive gaming, IRQ_SUPP is the lever
+  to tune DOWN (untested). The card is a RAM-less bus-master SONIC (DP83934).
+  **2026-08-26 — TX-dead-on-24-bit + the 2 KB/s FTP class FIXED; the old
+  "Fetch saturates the CPU" slowness theory is REFUTED.** Three fixes, all
+  Main-side (RTL untouched), fork branch `mac-ethernet`
+  `4f7717f`+`492a48b`+`fc87d1b`:
+  (1) **24-bit-mode DMA pointers**: a fresh System 7 runs 24-bit addressing
+  and stores Memory-Manager flags in pointer top bytes (bit31=locked — and
+  DMA buffers ARE locked); the LC PDS has only 24 address lines so the real
+  card never sees that byte. The model now masks EA() to [23:0] (registers /
+  published pointers keep full width like real silicon) and dma_rpc()
+  enforces the mailbox's 24-bit addr field (a dirty top byte overlapped the
+  COUNT field, bits 47:40 — a 64-byte read became a ~33KB grind → 50ms RPC
+  timeout → silent TX_ABORT: the "arp tx 33, ip tx 0" fingerprint, ARP
+  passing because driver NewPtr buffers have clean top bytes). `ea_strip` in
+  /tmp/mac_eth_stats witnesses it live. (2) **RX elasticity queue**: frames
+  the model refuses BEFORE touching guest state (RDE/RBE latched, no free
+  descriptor — sonic_rx_frame now returns -1 busy/0 dropped/1 delivered) are
+  held in order (64-deep, 2s age cap, guest-unicast only) and redelivered
+  when the ring frees: a burst tail costs ms, not a TCP RTO. `rx_held`/
+  `max_depth` witness. (3) **THE throughput killer: kernel GRO** coalesced
+  back-to-back TCP segments into >1518-byte super-frames before the
+  AF_PACKET tap; the model refuses jumbos, so every data burst toward the
+  guest silently vanished while solitary retransmits/ACKs/ARP/ping passed —
+  ping RTT was 3.7ms DURING the 796 B/s crawl, the measurement that finally
+  separated the layers. Linux TCP answered the burst loss with RTO backoff
+  (measured rto 111s, backoff 9, cwnd 2, 55% bytes retransmitted).
+  iface_gro_off() now runs at raw-socket open (named iface + /sys
+  `lower_*` parents — macvlan children ride the parent's RX path where GRO
+  actually runs); `rx_jumbo` + a one-time log line witness any recurrence.
+  HW result: the same Fetch download went 796 B/s → **58 KB/s end-to-end
+  average (3MB complete), 70-80 KB/s sustained mid-transfer** —
+  era-appropriate for a real LC. Diagnosis tool kept for the next TCP
+  mystery: `Main_MiSTer/support/mac/test/tcpsnoop.c` (static AF_PACKET TCP
+  tracer, build cmd in header) — run on BOTH endpoints and compare.
+  mac_sonic_test now 70 checks (24-bit dirty pointers, rx return contract).
   FPGA side = `rtl/pds/pds_enet.sv`: register doorbell + read shadows, MAC
   PROM (word-wide reads return the $0028 probe magic), flat 32K declROM at
   $FEFF'8000 served from DDR3, and a guest-RAM DMA engine that enters
