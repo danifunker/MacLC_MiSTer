@@ -30,6 +30,24 @@ failures**. Silent TX swallow. Meanwhile `rpc_us_max=50ms` and `ring_max=227`
 (≥200 = backpressure engaged) show the pump straining under LAN broadcast
 flood being DMA'd into the guest.
 
+## ★ The sharpest evidence (captured last, read FIRST): .94 after a Fetch
+## attempt ("Error: The connection opened halfway and then failed")
+
+```
+txp_cmds 36   tx_bytes 2112   tx_fail 0
+arp tx 33     ip tx 0         (33 × ~64B = the 2112 bytes)
+```
+
+**ARP transmits WORK. IP transmits are ZERO.** ARP = tiny single-fragment
+frames; IP/TCP = the SONIC driver's classic multi-fragment descriptors
+(header fragment + payload fragment). So the defect is specifically the
+MULTI-FRAGMENT path of `transmit_chain` — fragment pointer/count parsing —
+with single-fragment frames passing clean. "Opened halfway" = ARP resolved,
+then the SYN (first multi-fragment frame) vanished. This refines the lead
+hypothesis below: look at the SECOND-fragment pointer/size fields (odd
+addresses and/or 24-bit high-byte garbage) in the TDA parse, not just the
+chain links.
+
 ## Lead hypothesis (check FIRST)
 
 **The 24-bit theme, DMA edition.** The decode fix (`d112b2e`) made registers
