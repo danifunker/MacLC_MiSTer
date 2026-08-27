@@ -438,6 +438,42 @@ module tb_pds_enet;
 		cpu_cycle(32'hFEFFFFFE, 1, 1, 1, 0, 1, rd, cl);
 		check(cl && rd == 16'h000F, "card still serves correctly after a watchdog fire");
 
+		// ── timed ISR clear-mask ─────────────────────────────────────────
+		// The .ENET dispatch loop re-reads ISR after each ack and spins until
+		// the acked bits read back clear; the shadow only changes after the
+		// doorbell round-trips through Main (~ms). The mask makes an ack
+		// stick on the very next read, per bit, and expires on a timer.
+		dd.poke64(W_SHAD + 1, {16'h0000, 16'h0000, 16'h0280, 16'h66F1});
+		repeat (60000) @(negedge clk);   // let any prior isr_mask expire
+		cpu_cycle(32'hFE000014, 1, 1, 1, 0, 1, rd, cl);
+		check(cl && rd == 16'h0280, "ISR read serves the raw shadow before any ack");
+		cpu_cycle(32'hFE000014, 0, 1, 1, 16'h0200, 1, rd, cl);   // ack TXDN
+		cpu_cycle(32'hFE000014, 1, 1, 1, 0, 1, rd, cl);
+		check(cl && rd == 16'h0080, "acked bit reads back clear at once (shadow untouched)");
+		cpu_cycle(32'hFE000010, 1, 1, 1, 0, 1, rd, cl);
+		check(cl && rd == 16'h66F1, "non-ISR register reads stay unmasked");
+		cpu_cycle(32'hFE000014, 0, 1, 1, 16'h0080, 1, rd, cl);   // ack TC too
+		cpu_cycle(32'hFE000014, 1, 1, 1, 0, 1, rd, cl);
+		check(cl && rd == 16'h0000, "second ack accumulates into the mask");
+		// a NEW event on an unmasked bit stays visible through the mask
+		// (each poke needs one shadow poll pass ~0.66 ms to reach the DUT;
+		// 25000 cycles waits that out while keeping the mask armed)
+		dd.poke64(W_SHAD + 1, {16'h0000, 16'h0000, 16'h0680, 16'h66F1});
+		repeat (25000) @(negedge clk);
+		cpu_cycle(32'hFE000014, 1, 1, 1, 0, 1, rd, cl);
+		check(cl && rd == 16'h0400, "new PKTRX visible while TXDN/TC stay masked (per-bit)");
+		// Main applies the acks and pushes the truthful shadow: agreement
+		dd.poke64(W_SHAD + 1, {16'h0000, 16'h0000, 16'h0400, 16'h66F1});
+		repeat (25000) @(negedge clk);
+		cpu_cycle(32'hFE000014, 1, 1, 1, 0, 1, rd, cl);
+		check(cl && rd == 16'h0400, "mask agrees once Main's shadow catches up");
+		// expiry: one IRQ_SUPP after the LAST ack the mask drops, so a bit
+		// the shadow still shows set becomes visible again (never a loss)
+		dd.poke64(W_SHAD + 1, {16'h0000, 16'h0000, 16'h0280, 16'h66F1});
+		repeat (61000) @(negedge clk);
+		cpu_cycle(32'hFE000014, 1, 1, 1, 0, 1, rd, cl);
+		check(cl && rd == 16'h0280, "mask expires after its window (shadow truth returns)");
+
 		if (fails == 0) $display("ALL PASS (tb_pds_enet)");
 		else            $display("%0d FAILURES (tb_pds_enet)", fails);
 		$finish;

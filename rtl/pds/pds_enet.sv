@@ -208,23 +208,36 @@ module pds_enet (
 	reg        present;
 
 	wire [63:0] shad_word   = shad[reg_idx[5:2]];
-	wire [15:0] sonic_rdata = shad_word[{reg_idx[1:0], 4'b0000} +: 16];
+	wire [15:0] shad_rdata  = shad_word[{reg_idx[1:0], 4'b0000} +: 16];
 
-	// ── local ISR-clear overlay (kills the interrupt-ack livelock) ──────────
-	// The INT line the guest sees is driven from Main's pushed shadow, which
-	// lags the guest's own ISR write-1-to-clear by ~1.6 ms (Main's ~1 ms poll
-	// plus this block's ~0.66 ms INT re-poll). In that window the 68k RTEs,
-	// still sees IPL2 asserted, re-enters its handler and re-clears the same
-	// bit — ~120x per real interrupt (measured on HW), which hard-livelocks
-	// under network load. Fix: apply the guest's ISR clear to a LOCAL mask the
-	// instant its doorbell is queued, drive irq from the masked (effective) ISR,
-	// and let the guest READ the masked value — so a cleared cause drops IPL on
-	// the very next edge. Reconcile: on each ISR-shadow refresh, drop from the
-	// mask any bit Main has confirmed cleared (AND with the fresh shadow ISR).
-	// This self-heals and cannot deadlock a genuinely-new interrupt: Main re-
-	// sets the bit in the shadow after the mask has already dropped (the shadow
-	// showed it clear first).  reg 4 = IMR (shad[1] k=0), reg 5 = ISR (k=1).
-	reg  [16:0] irq_supp;       // irq-suppression countdown (see the overlay block below the FSM decls)
+	// ── timed ISR clear-mask: acks must read back clear IMMEDIATELY ─────────
+	// The .ENET driver's dispatch loop re-reads ISR after acking each bit and
+	// spins until the acked bits read back clear — written for silicon where a
+	// register write takes effect in its own bus cycle. Here the ack round-
+	// trips through the doorbell to Main's model before the pushed shadow
+	// changes (~1-2 ms), and in that window the loop re-acks at full 68020
+	// speed: watched live 2026-08-26 at 80,000 doorbell writes/s (TXDN and TC
+	// variants), flooding the ring (writes lost to overwrite), starving Main,
+	// and re-kicking TXP into duplicate transmits — the bulk-upload crawl.
+	// Fix: OR the bits of every guest ISR write into isr_mask and serve ISR
+	// READS as shadow & ~mask, so an ack sticks on the very next read. The
+	// mask expires on a TIMER (one IRQ_SUPP round trip after the last ack) —
+	// long enough for Main to apply the ack into the model it pushes, after
+	// which the shadow itself is truthful. Time-based expiry is the load-
+	// bearing difference from the 2026-08-22 per-bit overlay this ISN'T: that
+	// one reconciled by VALUE (drop mask bits the shadow shows clear), which
+	// cannot tell "my ack not applied yet" from "a new event re-set it" — a
+	// busy bit (PKTRX under load) kept its mask alive forever and wedged RX.
+	// A timed mask cannot deadlock: worst case a NEW event on a just-acked
+	// bit reads as clear for one window (~1.85 ms) — a short interrupt DELAY
+	// in the same class as irq_supp below, never a loss (Main's INT word and
+	// the refreshed shadow re-expose it as soon as the window lapses).
+	// Only ISR (reg 5) reads are masked; every other register serves raw.
+	reg  [15:0] isr_mask;       // guest-acked ISR bits still awaiting Main's apply
+	reg  [16:0] isr_mask_tmr;   // mask lifetime countdown
+	wire [15:0] sonic_rdata = (reg_idx == 6'd5) ? (shad_rdata & ~isr_mask)
+	                                            : shad_rdata;
+	reg  [16:0] irq_supp;       // irq-suppression countdown (see the FSM decls)
 
 	// ── CPU-side request handshake (all clk_sys, no CDC) ────────────────────
 	localparam H_IDLE = 2'd0, H_RUN = 2'd1, H_DONE = 2'd2;
@@ -465,6 +478,8 @@ module pds_enet (
 			dma_hot_ctr <= 0;
 			dma_first   <= 0;
 			irq_supp    <= 17'h0;
+			isr_mask    <= 16'h0;
+			isr_mask_tmr<= 17'h0;
 			for (i = 0; i < 16; i = i + 1) shad[i] <= 64'h0;
 		end else begin
 			mem_rd <= 0;
@@ -478,6 +493,16 @@ module pds_enet (
 			// again follows Main's INT word. Never masks a bit, never sticks.
 			if (isr_wr_now)          irq_supp <= IRQ_SUPP;
 			else if (irq_supp != 0)  irq_supp <= irq_supp - 17'd1;
+
+			// timed ISR clear-mask (see the decl block): the acked bits read
+			// back clear at once; the mask lives one IRQ_SUPP round trip past
+			// the LAST ack, by which time Main has applied it into the shadow.
+			if (isr_wr_now) begin
+				isr_mask     <= isr_mask | req_wdata;
+				isr_mask_tmr <= IRQ_SUPP;
+			end
+			else if (isr_mask_tmr != 0) isr_mask_tmr <= isr_mask_tmr - 17'd1;
+			else                        isr_mask     <= 16'h0;
 
 			// presence can only change while the guest is held in reset; once
 			// running it is frozen so the Slot Manager never sees the card
