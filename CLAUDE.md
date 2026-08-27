@@ -400,6 +400,41 @@ Re-verify boot (the screenshot check above) after ANY SR change.
   hostname is `MiSTer` — both "unique" sources are identical across stock
   boxes. `/media/fat/games/MacLC/eth.cfg` (`iface=`, `mac=`) still overrides
   both, read at card start only.
+  **2026-08-27 — BULK GUEST UPLOADS FIXED (the last open eth item): 3 MB
+  Fetch PUT completes in ~34 s (~90-106 KB/s) on BOTH boxes; downloads
+  re-gated 58-71 KB/s.** Four stacked defects, found by DISASSEMBLING THE
+  ACTUAL GUEST DRIVER (the declROM has NO driver — content ends at 0x138;
+  the live one is 'enet' 43 "Sonic 32 Ethernet Driver v1.1.1" in the guest
+  System file, extracted with scratchpad hfs_extract.py + capstone) and by
+  per-exit TX witnesses in /tmp/mac_eth_stats (`sonic_tx` line):
+  (1) Main `fb3a191` — the CRDA reload never released the parked RX
+  descriptor (in_use=0); the driver defers frees with in_use!=0 to a list
+  drained only on PKTRX, so upload cadence starved the ring permanently.
+  Rev>3 silicon releases it itself — the driver's TC chip-reset workaround
+  is gated `SR<=3` and we report SR 6 (same gate in both driver versions).
+  (2) Main `6bfd50d` — drain_ring was unbounded and shadows pushed only at
+  poll end: a stale-shadow ISR dispatch loop flooded the doorbell at 80 kHz
+  (watched via devmem), starving ALL of Main — both earlier "video capture
+  died" wedges were this. Now DRAIN_BUDGET 256 + push_state per applied
+  entry (+ drain_full witness). (3) RTL `7e7ff1a` — timed per-bit ISR
+  clear-mask in pds_enet.sv: an ack reads back clear IMMEDIATELY (dispatch
+  loops assume real-silicon write visibility); expires one IRQ_SUPP after
+  the last ack — time-based, unlike the removed 08-22 value-reconcile
+  overlay that wedged RX. tb_pds_enet 50 checks. (4) Main `b308dbf` — TX
+  ring-walk discipline: ack clamp (only PUSHED ISR bits clearable — a
+  TXDN set between the guest's read and its ack's apply must survive),
+  ring-lap guard (one kick never revisits a descriptor), and the status
+  gate + TX_PARK (descriptor status==0 <=> queued-and-unsent is the
+  driver's own convention; nonzero parks like EOL, and EVERY abnormal
+  exit now parks on the descriptor start instead of leaving CTDA
+  mid-descriptor — the old abort-advance was the permanent post-stall
+  death). `busy=` parks fire ~1,300/transfer and all recover.
+  mac_sonic_test = 104 checks. Release: `releases/MacLC_20260827.rbf`
+  (= e4e22e7b, SEED 4, STA +0.151 — the ISR-mask netlist re-rolled seeds;
+  seed 8 was a corrupted-fetch fit: clean boot, video garbage under load)
+  + `releases/MiSTer` (= 508786f0). ★ WT deadman lore: the driver arms
+  0x02FAF080 = 50M counts = 5.0 s at 10 counts/us (20 MHz crystal); its
+  TC handler is stats-only on SR 6.
   ★ **A card-ON boot hang means an OLD MAIN, not an old core.** Two of the
   three fixes were host-side (`f2679bf`), so the first published ethernet
   Main (`34b8994`) pairs happily and then hangs; the RBF alone cannot fix it.
